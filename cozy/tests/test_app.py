@@ -478,3 +478,12 @@ def test_flush_removes_staged_wormhole_files(tmp_path, monkeypatch):
     _login(c)
     assert c.post("/cozy/api/flush").status_code == 200
     assert not (c._in_dir / "wormhole").exists()
+
+
+def test_index_has_prompt_library_ui(client, monkeypatch):
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    _login(client)
+    page = client.get("/cozy/").data
+    for el_id in (b'id="pdb"', b'id="pdb-browse"', b'id="pdb-select"',
+                  b'id="modal-backdrop"', b'id="modal-host"'):
+        assert el_id in page
