@@ -1,8 +1,12 @@
 import argparse
+import hashlib
+import io
 import json
+import mimetypes
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 
@@ -52,6 +56,10 @@ _OUTPUT_SUFFIX = " [output]"
 # separators, so a name can never escape the database directory.
 _PROMPT_EXT = ".txt"
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]*$")
+
+# Guard against accidentally selecting a huge remote file: previews and edit
+# staging are synchronous transfers, fine on a LAN but not unbounded.
+_MAX_REMOTE_IMAGE_BYTES = 50 * 1024 * 1024
 
 
 def _list_dir_images(directory):
@@ -178,7 +186,18 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
             return flask.jsonify({"error": "unknown workflow"}), 400
         prompt = data.get("prompt", "")
         image = data.get("image", "") or ""
+        remote = data.get("remote_image") or None
         if workflow_kinds.get(wf) == "edit":
+            if remote:
+                rhost = (remote.get("host") or "").strip()
+                rpath = remote.get("path") or ""
+                if not rpath.lower().endswith(_IMAGE_EXTS):
+                    return flask.jsonify({"error": "valid input image required"}), 400
+                try:
+                    image = _stage_remote_image(rhost, rpath)
+                except (wormhole.WormholeError, OSError) as e:
+                    return flask.jsonify({"error": str(e)}), 502
+                store.set_image_src(rhost, os.path.dirname(rpath))
             if not _resolve_image_ref(input_dir, output_dir, image):
                 return flask.jsonify({"error": "valid input image required"}), 400
         try:
@@ -226,6 +245,21 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
             return flask.jsonify({"error": "not found"}), 404
         return flask.send_file(full)
 
+    def _stage_remote_image(host, rpath):
+        """Fetch a remote image into the input dir; return the input-relative
+        path handed to ComfyUI's LoadImage. The sha1 prefix keeps files from
+        different remote dirs with the same basename from colliding."""
+        data = wormhole.read_file(host, rpath,
+                                  max_bytes=_MAX_REMOTE_IMAGE_BYTES)
+        digest = hashlib.sha1(rpath.encode("utf-8")).hexdigest()[:8]
+        rel = os.path.join("wormhole", host or "local",
+                           digest + "-" + os.path.basename(rpath))
+        dest = os.path.join(input_dir, rel)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "wb") as f:
+            f.write(data)
+        return rel
+
     def _current_pdb():
         """(host, path) of the selected prompt database, falling back to the
         configured local default when none has been selected yet."""
@@ -234,6 +268,21 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
 
     def _pdb_error(e):
         return flask.jsonify({"error": str(e)}), 502
+
+    @bp.route("/api/remote-image", methods=["GET"])
+    @flask_login.login_required
+    def remote_image():
+        host = (flask.request.args.get("host") or "").strip()
+        path = flask.request.args.get("path") or ""
+        if not path.lower().endswith(_IMAGE_EXTS):
+            return flask.jsonify({"error": "not an image"}), 404
+        try:
+            data = wormhole.read_file(host, path,
+                                      max_bytes=_MAX_REMOTE_IMAGE_BYTES)
+        except wormhole.WormholeError as e:
+            return flask.jsonify({"error": str(e)}), 502
+        mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        return flask.send_file(io.BytesIO(data), mimetype=mime)
 
     @bp.route("/api/browse", methods=["GET"])
     @flask_login.login_required
@@ -346,6 +395,10 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
     @bp.route("/api/flush", methods=["POST"])
     @flask_login.login_required
     def flush():
+        # Staged remote images are cozy's own artifacts; remove them here
+        # rather than assuming the admin flush.sh scripts recurse into
+        # subdirectories.
+        shutil.rmtree(os.path.join(input_dir, "wormhole"), ignore_errors=True)
         # Run a flush.sh (if present) in the input and output dirs. The scripts
         # are placed there out-of-band by the admin; a missing one is a no-op, so
         # the button is always available and simply flushes whatever is wired up.

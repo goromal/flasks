@@ -406,3 +406,75 @@ def test_pdb_rejects_bad_names(pdb_client):
 def test_pdb_endpoints_require_login(pdb_client):
     for url in ("/cozy/api/browse", "/cozy/api/pdb/prompts"):
         assert pdb_client.get(url, follow_redirects=False).status_code in (301, 302, 401)
+
+
+@pytest.fixture
+def remote_edit_client(tmp_path, monkeypatch):
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    fake = FakeWormhole()
+    monkeypatch.setattr(cozy, "wormhole", fake)
+    store = FakeStore()
+    in_dir = tmp_path / "input"
+    in_dir.mkdir()
+    (tmp_path / "imgedit.api.json").write_text("{}")
+    app = cozy.create_app(store=store, workflows=["imgedit"],
+                          workflow_dir=str(tmp_path), subdomain="/cozy",
+                          input_dir=str(in_dir),
+                          output_dir=str(tmp_path / "output"),
+                          workflow_kinds={"imgedit": "edit"})
+    app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
+    c = app.test_client()
+    c._store, c._wh, c._in_dir = store, fake, in_dir
+    return c
+
+
+def test_remote_image_preview(remote_edit_client):
+    _login(remote_edit_client)
+    remote_edit_client._wh.files[("box", "/pics/cat.png")] = b"\x89PNGdata"
+    r = remote_edit_client.get(
+        "/cozy/api/remote-image?host=box&path=/pics/cat.png")
+    assert r.status_code == 200
+    assert r.data == b"\x89PNGdata" and r.mimetype == "image/png"
+    assert remote_edit_client.get(
+        "/cozy/api/remote-image?host=box&path=/pics/notes.txt").status_code == 404
+    assert remote_edit_client.get(
+        "/cozy/api/remote-image?host=box&path=/pics/gone.png").status_code == 502
+
+
+def test_generate_stages_remote_image(remote_edit_client):
+    _login(remote_edit_client)
+    remote_edit_client._wh.files[("box", "/pics/cat.png")] = b"\x89PNGdata"
+    r = remote_edit_client.post("/cozy/api/generate", json={
+        "workflow": "imgedit", "prompt": "make it cozy",
+        "remote_image": {"host": "box", "path": "/pics/cat.png"}})
+    assert r.status_code == 200
+    started_image = remote_edit_client._store.started[4]
+    assert started_image.startswith("wormhole/box/")
+    assert started_image.endswith("-cat.png")
+    staged = remote_edit_client._in_dir / started_image
+    assert staged.read_bytes() == b"\x89PNGdata"
+    assert remote_edit_client._store.image_src == ("box", "/pics")
+
+
+def test_generate_remote_image_failures(remote_edit_client):
+    _login(remote_edit_client)
+    r = remote_edit_client.post("/cozy/api/generate", json={
+        "workflow": "imgedit", "prompt": "p",
+        "remote_image": {"host": "box", "path": "/pics/gone.png"}})
+    assert r.status_code == 502
+    assert remote_edit_client._store.started is None
+    r = remote_edit_client.post("/cozy/api/generate", json={
+        "workflow": "imgedit", "prompt": "p",
+        "remote_image": {"host": "box", "path": "/pics/notes.txt"}})
+    assert r.status_code == 400
+
+
+def test_flush_removes_staged_wormhole_files(tmp_path, monkeypatch):
+    c = _flush_client(tmp_path, monkeypatch)
+    staged = c._in_dir / "wormhole" / "box"
+    staged.mkdir(parents=True)
+    (staged / "aa11bb22-cat.png").write_bytes(b"x")
+    _login(c)
+    assert c.post("/cozy/api/flush").status_code == 200
+    assert not (c._in_dir / "wormhole").exists()
