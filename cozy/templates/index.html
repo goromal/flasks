@@ -90,6 +90,10 @@
             <div id="image-picker" style="display:none;">
                 <label for="image-select">Input image</label>
                 <select id="image-select"></select>
+                <div class="prompt-actions">
+                    <button type="button" class="secondary" id="remote-image-btn">Remote&hellip;</button>
+                </div>
+                <div class="pdb-path" id="remote-image-label" style="display:none;"></div>
                 <div id="preview-wrap" style="margin-top:12px; display:none;">
                     <img id="preview" alt="input preview" style="max-width:100%; border-radius:8px;" />
                 </div>
@@ -172,6 +176,7 @@
         const WORKFLOW_KINDS = {{ workflow_kinds | tojson }};
         const initialImage = {{ state.image | tojson }};
         const KNOWN_HOSTS = {{ state.known_hosts | tojson }};
+        const IMAGE_SRC = {{ state.image_src | tojson }};
         const workflowSel = document.getElementById("workflow");
         const imagePicker = document.getElementById("image-picker");
         const imageSelect = document.getElementById("image-select");
@@ -229,7 +234,10 @@
         }
 
         workflowSel.addEventListener("change", applyKind);
-        imageSelect.addEventListener("change", updatePreview);
+        imageSelect.addEventListener("change", () => {
+            if (imageSelect.value) { clearRemoteImage(); }
+            updatePreview();
+        });
         const bar = document.getElementById("bar");
         const progress = document.getElementById("progress");
         const errorBox = document.getElementById("error");
@@ -294,7 +302,10 @@
                 width: parseInt(document.getElementById("width").value, 10),
                 height: parseInt(document.getElementById("height").value, 10),
             };
-            if (currentKind() === "edit") payload.image = imageSelect.value;
+            if (currentKind() === "edit") {
+                if (remoteImage) payload.remote_image = remoteImage;
+                else payload.image = imageSelect.value;
+            }
             const r = await fetch(root + "api/generate", {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload),
@@ -306,7 +317,7 @@
         document.getElementById("clear").addEventListener("click", async () => {
             await fetch(root + "api/clear", { method: "POST" });
             document.getElementById("prompt").value = "";
-            imageSelect.value = ""; updatePreview();
+            imageSelect.value = ""; clearRemoteImage(); updatePreview();
             output.innerHTML = ""; showError(""); showDuration(null); bar.style.width = "0%";
         });
 
@@ -594,6 +605,34 @@
             refreshPdb();
         });
         pdbFilter.addEventListener("input", renderPdbPrompts);
+
+        // --- Remote input image (edit workflows) ---
+        let remoteImage = null; // {host, path} or null
+        const remoteImageBtn = document.getElementById("remote-image-btn");
+        const remoteImageLabel = document.getElementById("remote-image-label");
+
+        function clearRemoteImage() {
+            remoteImage = null;
+            remoteImageLabel.textContent = "";
+            remoteImageLabel.style.display = "none";
+        }
+
+        function setRemoteImage(host, path) {
+            if (!path) { clearRemoteImage(); updatePreview(); return; }
+            remoteImage = { host: host, path: path };
+            remoteImageLabel.textContent = (host ? host + ":" : "") + path;
+            remoteImageLabel.style.display = "block";
+            imageSelect.value = "";
+            preview.src = root + "api/remote-image?host=" + encodeURIComponent(host) +
+                "&path=" + encodeURIComponent(path) + "&t=" + Date.now();
+            previewWrap.style.display = "block";
+        }
+
+        remoteImageBtn.addEventListener("click", () => {
+            openBrowser((IMAGE_SRC && IMAGE_SRC.host) || "", "img",
+                        (IMAGE_SRC && IMAGE_SRC.path) || "",
+                        (h, p) => setRemoteImage(h, p));
+        });
 
         // Restore state on load: show image if present, resume polling if running.
         (function init() {

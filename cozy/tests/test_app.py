@@ -487,3 +487,10 @@ def test_index_has_prompt_library_ui(client, monkeypatch):
     for el_id in (b'id="pdb"', b'id="pdb-browse"', b'id="pdb-select"',
                   b'id="modal-backdrop"', b'id="modal-host"'):
         assert el_id in page
+
+
+def test_index_has_remote_image_ui(edit_client):
+    _login(edit_client)
+    page = edit_client.get("/cozy/").data
+    assert b'id="remote-image-btn"' in page
+    assert b'id="remote-image-label"' in page
