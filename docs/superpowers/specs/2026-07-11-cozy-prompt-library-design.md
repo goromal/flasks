@@ -108,8 +108,12 @@ has none.
   avoids basename collisions across remote dirs). The resulting relative
   path is then used as the LoadImage value and persisted as `state.image`,
   exactly like a local pick. Staged files show up in later listings under
-  the existing Input group (they are ordinary input-dir files) and are
-  cleaned up by the existing Flush mechanism.
+  the existing Input group (they are ordinary input-dir files).
+- **Staged-file cleanup is owned by cozy, not the flush.sh scripts.** The
+  admin-provided flush.sh scripts live out-of-band and can't be assumed to
+  recurse into subdirectories, so `/api/flush` additionally deletes
+  `<input_dir>/wormhole/` recursively (before running the scripts). Cozy
+  created those files; cozy removes them.
 - The last-used remote image dir is persisted as `image_src: {host, path}`
   in `state.json`; `known_hosts` is shared with the prompt library.
 
