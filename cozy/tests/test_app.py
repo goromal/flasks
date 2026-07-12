@@ -3,6 +3,7 @@ import os
 import pytest
 
 import cozy
+import wormhole as wormhole_mod
 
 
 class FakeStore:
@@ -11,10 +12,13 @@ class FakeStore:
         self.cleared = False
         self.started = None
         self.image_path = "/nonexistent/output.png"
+        self.prompt_db = None
+        self.image_src = None
 
     def read_state(self):
         return {"workflow": "imggen", "prompt": "p", "width": 400, "height": 800,
                 "image": "",
+                "prompt_db": None, "known_hosts": [], "image_src": None,
                 "job": {"status": "running" if self._running else "idle",
                         "progress": 42, "error": None,
                         "started_at": "2026-06-23T10:00:00-06:00",
@@ -23,6 +27,12 @@ class FakeStore:
 
     def set_inputs(self, **kw):
         pass
+
+    def set_prompt_db(self, host, path):
+        self.prompt_db = (host, path)
+
+    def set_image_src(self, host, path):
+        self.image_src = (host, path)
 
     def start(self, name, path, prompt, w, h, image=""):
         if self._running:
@@ -264,3 +274,135 @@ def test_flush_reports_script_failure(tmp_path, monkeypatch):
     r = c.post("/cozy/api/flush")
     assert r.status_code == 500
     assert r.get_json()["error"] == "disk full"
+
+
+class FakeWormhole:
+    """In-memory stand-in for the wormhole module: dirs maps (host, path) ->
+    entry lists, files maps (host, path) -> bytes. Unknown keys raise
+    WormholeError like an unreachable host/missing file would."""
+    WormholeError = wormhole_mod.WormholeError
+
+    def __init__(self):
+        self.dirs = {}
+        self.files = {}
+        self.deleted = []
+
+    def home(self, host):
+        return "/home/andrew"
+
+    def list_dir(self, host, path):
+        try:
+            return self.dirs[(host, path)]
+        except KeyError:
+            raise self.WormholeError("cannot list " + path)
+
+    def list_files(self, host, path, suffixes=None):
+        names = [e["name"] for e in self.list_dir(host, path) if not e["is_dir"]]
+        if suffixes:
+            names = [n for n in names if n.lower().endswith(tuple(suffixes))]
+        return sorted(names)
+
+    def read_file(self, host, path, max_bytes=None):
+        try:
+            data = self.files[(host, path)]
+        except KeyError:
+            raise self.WormholeError("cannot read " + path)
+        if max_bytes is not None and len(data) > max_bytes:
+            raise self.WormholeError("too big")
+        return data
+
+    def write_file(self, host, path, data):
+        self.files[(host, path)] = data
+
+    def delete_file(self, host, path):
+        if (host, path) not in self.files:
+            raise self.WormholeError("cannot delete " + path)
+        del self.files[(host, path)]
+        self.deleted.append((host, path))
+
+
+@pytest.fixture
+def pdb_client(tmp_path, monkeypatch):
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    fake = FakeWormhole()
+    monkeypatch.setattr(cozy, "wormhole", fake)
+    store = FakeStore()
+    app = cozy.create_app(store=store, workflows=["imggen"],
+                          workflow_dir=str(tmp_path), subdomain="/cozy",
+                          prompt_db_dir="/default/prompts")
+    app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
+    c = app.test_client()
+    c._store, c._wh = store, fake
+    return c
+
+
+def test_browse_defaults_to_home_and_lists(pdb_client):
+    _login(pdb_client)
+    pdb_client._wh.dirs[("box", "/home/andrew")] = [
+        {"name": "prompts", "is_dir": True},
+        {"name": "pic.png", "is_dir": False},
+        {"name": "notes.txt", "is_dir": False},
+    ]
+    r = pdb_client.get("/cozy/api/browse?host=box")
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["path"] == "/home/andrew" and body["dirs"] == ["prompts"]
+    assert "files" not in body
+    r = pdb_client.get("/cozy/api/browse?host=box&files=img")
+    assert r.get_json()["files"] == ["pic.png"]
+
+
+def test_browse_unreachable_host_502(pdb_client):
+    _login(pdb_client)
+    r = pdb_client.get("/cozy/api/browse?host=nope&path=/x")
+    assert r.status_code == 502
+    assert "cannot list" in r.get_json()["error"]
+
+
+def test_pdb_select_validates_and_persists(pdb_client):
+    _login(pdb_client)
+    r = pdb_client.post("/cozy/api/pdb/select", json={"host": "box", "path": "/missing"})
+    assert r.status_code == 502
+    pdb_client._wh.dirs[("box", "/p")] = []
+    r = pdb_client.post("/cozy/api/pdb/select", json={"host": "box", "path": "/p"})
+    assert r.status_code == 200
+    assert pdb_client._store.prompt_db == ("box", "/p")
+    assert pdb_client.post("/cozy/api/pdb/select", json={"host": "box"}).status_code == 400
+
+
+def test_pdb_prompt_crud_roundtrip(pdb_client):
+    _login(pdb_client)
+    # No DB selected: falls back to the --prompt-db-dir default (local host).
+    pdb_client._wh.dirs[("", "/default/prompts")] = [
+        {"name": "castle.txt", "is_dir": False},
+        {"name": "readme.md", "is_dir": False},
+    ]
+    body = pdb_client.get("/cozy/api/pdb/prompts").get_json()
+    assert body["prompts"] == ["castle"]
+    assert body["db"] == {"host": "", "path": "/default/prompts"}
+
+    pdb_client._wh.files[("", "/default/prompts/castle.txt")] = b"a castle"
+    assert pdb_client.get("/cozy/api/pdb/prompt?name=castle").get_json()["text"] == "a castle"
+
+    r = pdb_client.post("/cozy/api/pdb/prompt", json={"name": "new one", "text": "hi"})
+    assert r.status_code == 200
+    assert pdb_client._wh.files[("", "/default/prompts/new one.txt")] == b"hi"
+
+    assert pdb_client.post("/cozy/api/pdb/delete", json={"name": "castle"}).status_code == 200
+    assert ("", "/default/prompts/castle.txt") in pdb_client._wh.deleted
+
+
+def test_pdb_rejects_bad_names(pdb_client):
+    _login(pdb_client)
+    for bad in ("../etc/passwd", ".hidden", "a/b", ""):
+        assert pdb_client.get("/cozy/api/pdb/prompt?name=" + bad).status_code == 400
+        assert pdb_client.post("/cozy/api/pdb/prompt",
+                               json={"name": bad, "text": "x"}).status_code == 400
+        assert pdb_client.post("/cozy/api/pdb/delete",
+                               json={"name": bad}).status_code == 400
+
+
+def test_pdb_endpoints_require_login(pdb_client):
+    for url in ("/cozy/api/browse", "/cozy/api/pdb/prompts"):
+        assert pdb_client.get(url, follow_redirects=False).status_code in (301, 302, 401)
