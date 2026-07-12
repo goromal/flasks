@@ -201,3 +201,13 @@ def test_prompt_db_and_known_hosts_persist(tmp_path):
 
     store.set_image_src("otherbox", "/imgs")
     assert store.read_state()["known_hosts"] == ["box", "otherbox"]
+
+
+def test_clear_resets_remote_selections_keeps_hosts(tmp_path):
+    store = job_store.JobStore(str(tmp_path), FakeClient([]))
+    store.set_prompt_db("box", "/data/prompts")
+    store.set_image_src("otherbox", "/imgs")
+    store.clear()
+    st = store.read_state()
+    assert st["prompt_db"] is None and st["image_src"] is None
+    assert st["known_hosts"] == ["box", "otherbox"]

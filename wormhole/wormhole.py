@@ -53,20 +53,20 @@ def home(host):
 
 
 def list_dir(host, path):
-    """Non-hidden entries directly under path as [{'name', 'is_dir'}],
-    directories first, each group sorted case-insensitively."""
+    """Entries directly under path — hidden files included, '.'/'..'
+    excluded — as [{'name', 'is_dir'}], directories first, each group
+    sorted case-insensitively."""
     if _local(host):
         try:
             with os.scandir(path) as it:
-                entries = [{"name": e.name, "is_dir": e.is_dir()}
-                           for e in it if not e.name.startswith(".")]
+                entries = [{"name": e.name, "is_dir": e.is_dir()} for e in it]
         except OSError as e:
             raise WormholeError(str(e))
     else:
-        out = _ssh(host, "ls -1p -- " + shlex.quote(path))
+        out = _ssh(host, "ls -1pa -- " + shlex.quote(path))
         entries = []
         for line in out.decode("utf-8", errors="replace").splitlines():
-            if not line or line.startswith("."):
+            if not line or line in ("./", "../"):
                 continue
             entries.append({"name": line.rstrip("/"),
                             "is_dir": line.endswith("/")})
@@ -74,8 +74,8 @@ def list_dir(host, path):
 
 
 def list_files(host, path, suffixes=None):
-    """Sorted non-hidden file names under path, optionally filtered by
-    case-insensitive suffixes (an iterable of extensions)."""
+    """Sorted file names under path (hidden included), optionally filtered
+    by case-insensitive suffixes (an iterable of extensions)."""
     names = [e["name"] for e in list_dir(host, path) if not e["is_dir"]]
     if suffixes:
         sfx = tuple(s.lower() for s in suffixes)

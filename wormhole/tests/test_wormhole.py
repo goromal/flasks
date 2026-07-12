@@ -24,9 +24,10 @@ class LocalOps(unittest.TestCase):
         with open(os.path.join(self.d, ".hidden"), "w") as f:
             f.write("H")
 
-    def test_list_dir_sorted_dirs_first_hidden_skipped(self):
+    def test_list_dir_sorted_dirs_first_hidden_shown(self):
         self.assertEqual(wormhole.list_dir("", self.d), [
             {"name": "sub", "is_dir": True},
+            {"name": ".hidden", "is_dir": False},
             {"name": "a.txt", "is_dir": False},
             {"name": "b.TXT", "is_dir": False},
             {"name": "c.png", "is_dir": False},
@@ -36,7 +37,7 @@ class LocalOps(unittest.TestCase):
         self.assertEqual(wormhole.list_files(None, self.d, (".txt",)),
                          ["a.txt", "b.TXT"])
         self.assertEqual(wormhole.list_files(None, self.d),
-                         ["a.txt", "b.TXT", "c.png"])
+                         [".hidden", "a.txt", "b.TXT", "c.png"])
 
     def test_read_write_delete_roundtrip_creates_parents(self):
         p = os.path.join(self.d, "new", "deep", "f.bin")
@@ -69,11 +70,12 @@ class RemoteOps(unittest.TestCase):
 
     def test_list_dir_argv_and_parse(self):
         with mock.patch.object(wormhole, "_run",
-                               return_value=b"sub/\nz.txt\n.hidden\na b.png\n") as run:
+                               return_value=b"./\n../\nsub/\nz.txt\n.hidden\na b.png\n") as run:
             entries = wormhole.list_dir("box", "/data/my dir")
-        run.assert_called_once_with(SSH_PREFIX + ["ls -1p -- '/data/my dir'"], None)
+        run.assert_called_once_with(SSH_PREFIX + ["ls -1pa -- '/data/my dir'"], None)
         self.assertEqual(entries, [
             {"name": "sub", "is_dir": True},
+            {"name": ".hidden", "is_dir": False},
             {"name": "a b.png", "is_dir": False},
             {"name": "z.txt", "is_dir": False},
         ])

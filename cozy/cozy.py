@@ -326,8 +326,11 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
             names = wormhole.list_files(host, path, (_PROMPT_EXT,))
         except wormhole.WormholeError as e:
             return _pdb_error(e)
+        # Hidden/oddly-named files can now appear in listings (ls -a); only
+        # offer names the load/save/delete endpoints would accept.
+        prompts = [n[:-len(_PROMPT_EXT)] for n in names]
         return flask.jsonify({"db": {"host": host, "path": path},
-                              "prompts": [n[:-len(_PROMPT_EXT)] for n in names]})
+                              "prompts": [p for p in prompts if _NAME_RE.match(p)]})
 
     @bp.route("/api/pdb/prompt", methods=["GET"])
     @flask_login.login_required

@@ -103,6 +103,7 @@
             <div class="prompt-actions">
                 <button type="button" class="secondary" id="copy-btn" aria-label="Copy prompt to clipboard">&#128203; Copy</button>
                 <button type="button" class="secondary" id="paste-btn" aria-label="Paste clipboard text into prompt">&#128203; Paste</button>
+                <button type="button" class="secondary" id="clear-text-btn" aria-label="Clear prompt text">&#10006; Clear text</button>
             </div>
             <details id="pdb">
                 <summary>Prompt library</summary>
@@ -319,6 +320,9 @@
             document.getElementById("prompt").value = "";
             imageSelect.value = ""; clearRemoteImage(); updatePreview();
             output.innerHTML = ""; showError(""); showDuration(null); bar.style.width = "0%";
+            // The server reset the prompt-DB selection too; re-sync the
+            // library panel if it has been opened.
+            if (pdbLoaded) { pdbHost = ""; refreshPdb(); }
         });
 
         const restartBtn = document.getElementById("restart");
@@ -412,6 +416,11 @@
             } else {
                 showError("Copy not supported here — long-press the prompt text and choose Copy.");
             }
+        });
+
+        document.getElementById("clear-text-btn").addEventListener("click", () => {
+            promptTA.value = "";
+            promptTA.focus();
         });
 
         // Paste replaces the entire textarea value with clipboard content.

@@ -374,8 +374,11 @@ def test_pdb_select_validates_and_persists(pdb_client):
 def test_pdb_prompt_crud_roundtrip(pdb_client):
     _login(pdb_client)
     # No DB selected: falls back to the --prompt-db-dir default (local host).
+    # Hidden files are listed by wormhole (ls -a) but filtered from prompts
+    # because their names would be rejected by the load/save endpoints.
     pdb_client._wh.dirs[("", "/default/prompts")] = [
         {"name": "castle.txt", "is_dir": False},
+        {"name": ".secret.txt", "is_dir": False},
         {"name": "readme.md", "is_dir": False},
     ]
     body = pdb_client.get("/cozy/api/pdb/prompts").get_json()
@@ -485,7 +488,8 @@ def test_index_has_prompt_library_ui(client, monkeypatch):
     _login(client)
     page = client.get("/cozy/").data
     for el_id in (b'id="pdb"', b'id="pdb-browse"', b'id="pdb-select"',
-                  b'id="modal-backdrop"', b'id="modal-host"'):
+                  b'id="modal-backdrop"', b'id="modal-host"',
+                  b'id="clear-text-btn"'):
         assert el_id in page
 
 

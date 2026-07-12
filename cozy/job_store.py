@@ -266,6 +266,11 @@ class JobStore:
             state = self._read_raw()
             state["prompt"] = ""
             state["image"] = ""
+            # Clear resets the remote selections too (prompt DB and image
+            # source) but keeps known_hosts: retyping hostnames is the pain
+            # the history exists to avoid.
+            state["prompt_db"] = None
+            state["image_src"] = None
             state["job"] = _idle_job()
             state["output"] = False
             self._write_state(state)
