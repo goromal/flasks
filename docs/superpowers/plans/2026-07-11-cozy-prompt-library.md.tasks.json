@@ -69,8 +69,8 @@
         7
       ],
       "description": "**Goal:** cozy runs deployed with a provisioned prompt DB dir; prompt save/load and a remote-image edit generation are demonstrated working cross-machine.\n\n**USER-ORDERED GATE - NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it \"verified inline\", or by substituting a cheaper check. Close only after every item in acceptanceCriteria has been re-validated independently, with output captured.\n\n**Plan:** Task 8 in plan doc. Deploy via the anixpkgs-deploy skill.\n\n**Files:**\n- Modify: anixpkgs/pkgs/nixos/modules/comfyui/module.nix\n\n**Acceptance Criteria:**\n- promptDbDir option + tmpfiles + ExecStart flag\n- deployed cozy responds 200/302 to curl\n- smoke-test.txt save/load roundtrip with cat evidence\n- cross-machine browse + prompt load from second machine\n- remote-image edit generation with staged file evidence\n- flush removes wormhole tree\n\n**Verify:** curl -s -o /dev/null -w '%{http_code}' http://$(hostname).local/cozy/ -> 200 or 302, plus manual UI walkthrough with captured output per criterion\n\n```json:metadata\n{\"files\": [\"pkgs/nixos/modules/comfyui/module.nix\"], \"verifyCommand\": \"curl -s -o /dev/null -w '%{http_code}' http://$(hostname).local/cozy/\", \"acceptanceCriteria\": [\"module option + tmpfiles + flag\", \"deployed cozy responds 200/302\", \"smoke-test.txt save/load roundtrip with cat evidence\", \"cross-machine browse + prompt load\", \"remote-image edit generation with staged file evidence\", \"flush removes wormhole tree\"], \"userGate\": true, \"tags\": [\"user-gate\"], \"requiresUserSpecification\": false}\n```",
-      "status": "pending"
+      "status": "completed"
     }
   ],
-  "lastUpdated": "2026-07-12T11:32:14"
+  "lastUpdated": "2026-07-13T06:47:43"
 }
