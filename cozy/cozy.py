@@ -1,7 +1,12 @@
 import argparse
+import hashlib
+import io
 import json
+import mimetypes
 import os
+import re
 import shlex
+import shutil
 import subprocess
 import sys
 
@@ -12,6 +17,7 @@ from datetime import timedelta
 from werkzeug.security import check_password_hash
 from wtforms import PasswordField, StringField, SubmitField
 
+import wormhole
 from comfyui_client import ComfyUIClient
 from job_store import JobStore, job_duration
 
@@ -44,6 +50,16 @@ _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
 # output-dir files, so the same string is the LoadImage input, the persisted
 # selection, and the preview key -- no conversion anywhere.
 _OUTPUT_SUFFIX = " [output]"
+
+# Prompt-database entries are bare <name>.txt files in the selected directory.
+# Names are constrained to a conservative slug: no leading dot, no path
+# separators, so a name can never escape the database directory.
+_PROMPT_EXT = ".txt"
+_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]*$")
+
+# Guard against accidentally selecting a huge remote file: previews and edit
+# staging are synchronous transfers, fine on a LAN but not unbounded.
+_MAX_REMOTE_IMAGE_BYTES = 50 * 1024 * 1024
 
 
 def _list_dir_images(directory):
@@ -104,12 +120,15 @@ class User(flask_login.UserMixin):
 
 def create_app(store, workflows, workflow_dir, subdomain="/cozy",
                input_dir=None, output_dir=None, workflow_kinds=None,
-               secret_key=None, password_hash=None, restart_cmd=None):
+               secret_key=None, password_hash=None, restart_cmd=None,
+               prompt_db_dir=None):
     global _PW_HASH
     if password_hash is not None:
         _PW_HASH = password_hash
     input_dir = input_dir or os.path.join(workflow_dir, "input")
     output_dir = output_dir or os.path.join(workflow_dir, "output")
+    prompt_db_dir = prompt_db_dir or os.path.join(
+        getattr(store, "state_dir", os.getcwd()), "prompts")
     workflow_kinds = workflow_kinds or {}
     urlroot = subdomain if subdomain == "/" else subdomain + "/"
     prefix = subdomain.replace("/", "")
@@ -167,7 +186,18 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
             return flask.jsonify({"error": "unknown workflow"}), 400
         prompt = data.get("prompt", "")
         image = data.get("image", "") or ""
+        remote = data.get("remote_image") or None
         if workflow_kinds.get(wf) == "edit":
+            if remote:
+                rhost = (remote.get("host") or "").strip()
+                rpath = remote.get("path") or ""
+                if not rpath.lower().endswith(_IMAGE_EXTS):
+                    return flask.jsonify({"error": "valid input image required"}), 400
+                try:
+                    image = _stage_remote_image(rhost, rpath)
+                except (wormhole.WormholeError, OSError) as e:
+                    return flask.jsonify({"error": str(e)}), 502
+                store.set_image_src(rhost, os.path.dirname(rpath))
             if not _resolve_image_ref(input_dir, output_dir, image):
                 return flask.jsonify({"error": "valid input image required"}), 400
         try:
@@ -215,6 +245,136 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
             return flask.jsonify({"error": "not found"}), 404
         return flask.send_file(full)
 
+    def _stage_remote_image(host, rpath):
+        """Fetch a remote image into the input dir; return the input-relative
+        path handed to ComfyUI's LoadImage. The sha1 prefix keeps files from
+        different remote dirs with the same basename from colliding."""
+        data = wormhole.read_file(host, rpath,
+                                  max_bytes=_MAX_REMOTE_IMAGE_BYTES)
+        digest = hashlib.sha1(rpath.encode("utf-8")).hexdigest()[:8]
+        rel = os.path.join("wormhole", host or "local",
+                           digest + "-" + os.path.basename(rpath))
+        dest = os.path.join(input_dir, rel)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "wb") as f:
+            f.write(data)
+        return rel
+
+    def _current_pdb():
+        """(host, path) of the selected prompt database, falling back to the
+        configured local default when none has been selected yet."""
+        db = store.read_state().get("prompt_db") or {}
+        return db.get("host") or "", db.get("path") or prompt_db_dir
+
+    def _pdb_error(e):
+        return flask.jsonify({"error": str(e)}), 502
+
+    @bp.route("/api/remote-image", methods=["GET"])
+    @flask_login.login_required
+    def remote_image():
+        host = (flask.request.args.get("host") or "").strip()
+        path = flask.request.args.get("path") or ""
+        if not path.lower().endswith(_IMAGE_EXTS):
+            return flask.jsonify({"error": "not an image"}), 404
+        try:
+            data = wormhole.read_file(host, path,
+                                      max_bytes=_MAX_REMOTE_IMAGE_BYTES)
+        except wormhole.WormholeError as e:
+            return flask.jsonify({"error": str(e)}), 502
+        mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        return flask.send_file(io.BytesIO(data), mimetype=mime)
+
+    @bp.route("/api/browse", methods=["GET"])
+    @flask_login.login_required
+    def browse():
+        host = (flask.request.args.get("host") or "").strip()
+        path = flask.request.args.get("path") or ""
+        try:
+            if not path:
+                path = wormhole.home(host)
+            entries = wormhole.list_dir(host, path)
+        except wormhole.WormholeError as e:
+            return _pdb_error(e)
+        resp = {"path": path,
+                "dirs": [e["name"] for e in entries if e["is_dir"]]}
+        if flask.request.args.get("files") == "img":
+            resp["files"] = [e["name"] for e in entries
+                             if not e["is_dir"]
+                             and e["name"].lower().endswith(_IMAGE_EXTS)]
+        return flask.jsonify(resp)
+
+    @bp.route("/api/pdb/select", methods=["POST"])
+    @flask_login.login_required
+    def pdb_select():
+        data = flask.request.get_json(force=True, silent=True) or {}
+        host = (data.get("host") or "").strip()
+        path = (data.get("path") or "").strip()
+        if not path:
+            return flask.jsonify({"error": "path required"}), 400
+        try:
+            wormhole.list_dir(host, path)  # prove it exists and is listable
+        except wormhole.WormholeError as e:
+            return _pdb_error(e)
+        store.set_prompt_db(host, path)
+        return flask.jsonify({"ok": True})
+
+    @bp.route("/api/pdb/prompts", methods=["GET"])
+    @flask_login.login_required
+    def pdb_prompts():
+        host, path = _current_pdb()
+        try:
+            names = wormhole.list_files(host, path, (_PROMPT_EXT,))
+        except wormhole.WormholeError as e:
+            return _pdb_error(e)
+        # Hidden/oddly-named files can now appear in listings (ls -a); only
+        # offer names the load/save/delete endpoints would accept.
+        prompts = [n[:-len(_PROMPT_EXT)] for n in names]
+        return flask.jsonify({"db": {"host": host, "path": path},
+                              "prompts": [p for p in prompts if _NAME_RE.match(p)]})
+
+    @bp.route("/api/pdb/prompt", methods=["GET"])
+    @flask_login.login_required
+    def pdb_prompt_get():
+        name = flask.request.args.get("name") or ""
+        if not _NAME_RE.match(name):
+            return flask.jsonify({"error": "invalid prompt name"}), 400
+        host, path = _current_pdb()
+        try:
+            data = wormhole.read_file(host, os.path.join(path, name + _PROMPT_EXT))
+        except wormhole.WormholeError as e:
+            return _pdb_error(e)
+        return flask.jsonify({"name": name,
+                              "text": data.decode("utf-8", errors="replace")})
+
+    @bp.route("/api/pdb/prompt", methods=["POST"])
+    @flask_login.login_required
+    def pdb_prompt_save():
+        data = flask.request.get_json(force=True, silent=True) or {}
+        name = data.get("name") or ""
+        if not _NAME_RE.match(name):
+            return flask.jsonify({"error": "invalid prompt name"}), 400
+        host, path = _current_pdb()
+        try:
+            wormhole.write_file(host, os.path.join(path, name + _PROMPT_EXT),
+                                (data.get("text") or "").encode("utf-8"))
+        except wormhole.WormholeError as e:
+            return _pdb_error(e)
+        return flask.jsonify({"ok": True})
+
+    @bp.route("/api/pdb/delete", methods=["POST"])
+    @flask_login.login_required
+    def pdb_delete():
+        data = flask.request.get_json(force=True, silent=True) or {}
+        name = data.get("name") or ""
+        if not _NAME_RE.match(name):
+            return flask.jsonify({"error": "invalid prompt name"}), 400
+        host, path = _current_pdb()
+        try:
+            wormhole.delete_file(host, os.path.join(path, name + _PROMPT_EXT))
+        except wormhole.WormholeError as e:
+            return _pdb_error(e)
+        return flask.jsonify({"ok": True})
+
     @bp.route("/api/clear", methods=["POST"])
     @flask_login.login_required
     def clear():
@@ -238,6 +398,10 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
     @bp.route("/api/flush", methods=["POST"])
     @flask_login.login_required
     def flush():
+        # Staged remote images are cozy's own artifacts; remove them here
+        # rather than assuming the admin flush.sh scripts recurse into
+        # subdirectories.
+        shutil.rmtree(os.path.join(input_dir, "wormhole"), ignore_errors=True)
         # Run a flush.sh (if present) in the input and output dirs. The scripts
         # are placed there out-of-band by the admin; a missing one is a no-op, so
         # the button is always available and simply flushes whatever is wired up.
@@ -286,6 +450,9 @@ def run():
     parser.add_argument("--output-dir", type=str, default="",
                         help="Directory of selectable output images for edit workflows "
                              "(default <workflow-dir>/output)")
+    parser.add_argument("--prompt-db-dir", type=str, default="",
+                        help="Directory of saved prompt .txt files "
+                             "(default <state-dir>/prompts)")
     parser.add_argument("--secrets-file", type=str, required=True,
                         help="Path to JSON file with secret_key and password_hash")
     parser.add_argument("--comfyui-restart-cmd", type=str, default="",
@@ -312,7 +479,8 @@ def run():
                      workflow_kinds=workflow_kinds,
                      secret_key=secrets["secret_key"].encode(),
                      password_hash=secrets["password_hash"],
-                     restart_cmd=restart_cmd)
+                     restart_cmd=restart_cmd,
+                     prompt_db_dir=args.prompt_db_dir or os.path.join(state_dir, "prompts"))
     app.run(host="0.0.0.0", port=args.port)
 
 

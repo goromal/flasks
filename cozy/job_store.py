@@ -58,6 +58,7 @@ class JobStore:
     def _default_state(self):
         return {"workflow": None, "prompt": "", "width": DEFAULT_W,
                 "height": DEFAULT_H, "image": "", "job": _idle_job(),
+                "prompt_db": None, "known_hosts": [], "image_src": None,
                 "output": os.path.exists(self.image_path)}
 
     def _read_raw(self):
@@ -138,6 +139,24 @@ class JobStore:
                 state["height"] = int(height)
             if image is not None:
                 state["image"] = image
+            self._write_state(state)
+
+    def _remember_host(self, state, host):
+        if host and host not in state["known_hosts"]:
+            state["known_hosts"] = state["known_hosts"] + [host]
+
+    def set_prompt_db(self, host, path):
+        with self._lock:
+            state = self._read_raw()
+            state["prompt_db"] = {"host": host, "path": path}
+            self._remember_host(state, host)
+            self._write_state(state)
+
+    def set_image_src(self, host, path):
+        with self._lock:
+            state = self._read_raw()
+            state["image_src"] = {"host": host, "path": path}
+            self._remember_host(state, host)
             self._write_state(state)
 
     # -- running -------------------------------------------------------------
@@ -247,6 +266,11 @@ class JobStore:
             state = self._read_raw()
             state["prompt"] = ""
             state["image"] = ""
+            # Clear resets the remote selections too (prompt DB and image
+            # source) but keeps known_hosts: retyping hostnames is the pain
+            # the history exists to avoid.
+            state["prompt_db"] = None
+            state["image_src"] = None
             state["job"] = _idle_job()
             state["output"] = False
             self._write_state(state)

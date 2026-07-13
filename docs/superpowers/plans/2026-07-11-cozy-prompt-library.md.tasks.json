@@ -1,0 +1,76 @@
+{
+  "planPath": "docs/superpowers/plans/2026-07-11-cozy-prompt-library.md",
+  "tasks": [
+    {
+      "id": 1,
+      "subject": "Task 1: wormhole library with tests",
+      "description": "**Goal:** Standalone stdlib-only wormhole package providing local-or-remote (ssh) file operations, fully unit-tested without touching a real remote.\n\n**Plan:** flasks docs/superpowers/plans/2026-07-11-cozy-prompt-library.md -> Task 1 (complete code).\n\n**Files:**\n- Create: wormhole/setup.py, wormhole/wormhole.py, wormhole/tests/__init__.py, wormhole/tests/test_wormhole.py\n\n**Acceptance Criteria:**\n- unittest suite passes with bare python3\n- ssh argv exact with BatchMode/ConnectTimeout and shlex-quoted paths\n- all failures raise WormholeError\n- read_file max_bytes enforced\n\n**Verify:** cd /data/andrew/dev/ui/sources/flasks/wormhole && python3 -m unittest discover -s tests -v -> OK\n\n```json:metadata\n{\"files\": [\"wormhole/setup.py\", \"wormhole/wormhole.py\", \"wormhole/tests/__init__.py\", \"wormhole/tests/test_wormhole.py\"], \"verifyCommand\": \"cd /data/andrew/dev/ui/sources/flasks/wormhole && python3 -m unittest discover -s tests -v\", \"acceptanceCriteria\": [\"unittest suite passes with bare python3\", \"ssh argv exact with BatchMode/ConnectTimeout and shlex-quoted paths\", \"all failures raise WormholeError\", \"read_file max_bytes enforced\"]}\n```",
+      "status": "completed"
+    },
+    {
+      "id": 2,
+      "subject": "Task 2: Package wormhole in anixpkgs and wire into cozy's build",
+      "blockedBy": [
+        1
+      ],
+      "description": "**Goal:** nix build anixpkgs#wormhole and #cozy both succeed with the local flasks override, running each package's pytest suite at build time.\n\n**Plan:** Task 2 in plan doc. Branch anixpkgs to cozy-prompt-library; read anixpkgs-packages skill first.\n\n**Files:**\n- Create: anixpkgs/pkgs/python-packages/flasks/wormhole/default.nix\n- Modify: anixpkgs/pkgs/default.nix, anixpkgs/index.json, anixpkgs/pkgs/python-packages/flasks/cozy/default.nix\n\n**Acceptance Criteria:**\n- wormhole build passes with tests\n- cozy build passes with tests (pytestCheckHook added)\n- index.json python entry {\"attr\": \"wormhole\", \"ci\": true, \"docs\": false}\n\n**Verify:** both nix builds with --override-input flasks exit 0\n\n```json:metadata\n{\"files\": [\"pkgs/python-packages/flasks/wormhole/default.nix\", \"pkgs/default.nix\", \"index.json\", \"pkgs/python-packages/flasks/cozy/default.nix\"], \"verifyCommand\": \"nix build /data/andrew/dev/ui/sources/anixpkgs#cozy --override-input flasks path:/data/andrew/dev/ui/sources/flasks -L\", \"acceptanceCriteria\": [\"wormhole build passes with tests\", \"cozy build passes with tests\", \"index.json entry present\"]}\n```",
+      "status": "completed"
+    },
+    {
+      "id": 3,
+      "subject": "Task 3: JobStore state for prompt DB, known hosts, and image source",
+      "blockedBy": [
+        2
+      ],
+      "description": "**Goal:** state.json persistently carries prompt_db, known_hosts, and image_src, with setter methods on JobStore.\n\n**Plan:** Task 3 in plan doc (complete code).\n\n**Files:**\n- Modify: cozy/job_store.py\n- Test: cozy/tests/test_job_store.py\n\n**Acceptance Criteria:**\n- read_state() always contains prompt_db (None), known_hosts ([]), image_src (None), incl. old state files\n- setters persist {host, path} and append non-empty unseen hosts\n- local host never remembered; no duplicates\n\n**Verify:** cozy nix build exits 0, new tests pass\n\n```json:metadata\n{\"files\": [\"cozy/job_store.py\", \"cozy/tests/test_job_store.py\"], \"verifyCommand\": \"nix build /data/andrew/dev/ui/sources/anixpkgs#cozy --override-input flasks path:/data/andrew/dev/ui/sources/flasks -L\", \"acceptanceCriteria\": [\"state defaults include three new keys\", \"setters persist and remember hosts\", \"local host never remembered, no dups\"]}\n```",
+      "status": "completed"
+    },
+    {
+      "id": 4,
+      "subject": "Task 4: Browse + prompt-database API endpoints",
+      "blockedBy": [
+        3
+      ],
+      "description": "**Goal:** cozy exposes /api/browse and the /api/pdb/* CRUD endpoints backed by wormhole, with a --prompt-db-dir default local database.\n\n**Plan:** Task 4 in plan doc (complete code incl. FakeWormhole).\n\n**Files:**\n- Modify: cozy/cozy.py (import wormhole as module attr access only; tests monkeypatch cozy.wormhole)\n- Test: cozy/tests/test_app.py\n\n**Acceptance Criteria:**\n- /api/browse {path, dirs} (+files when files=img), home default, 502 on WormholeError\n- /api/pdb/select validates then persists; /api/pdb/prompts lists .txt names with fallback DB\n- /api/pdb/prompt GET/POST + /api/pdb/delete roundtrip\n- names not matching ^[A-Za-z0-9][A-Za-z0-9._ -]*$ -> 400\n- login required\n\n**Verify:** cozy nix build exits 0, new tests pass\n\n```json:metadata\n{\"files\": [\"cozy/cozy.py\", \"cozy/tests/test_app.py\"], \"verifyCommand\": \"nix build /data/andrew/dev/ui/sources/anixpkgs#cozy --override-input flasks path:/data/andrew/dev/ui/sources/flasks -L\", \"acceptanceCriteria\": [\"browse endpoint with home default and 502 mapping\", \"pdb select/prompts/prompt/delete CRUD\", \"name validation 400\", \"login required\"]}\n```",
+      "status": "completed"
+    },
+    {
+      "id": 5,
+      "subject": "Task 5: Remote image preview, staging on generate, and flush cleanup",
+      "blockedBy": [
+        4
+      ],
+      "description": "**Goal:** Remote images can be previewed over wormhole and used as edit inputs by staging them into ComfyUI's input dir; flush removes all staged files.\n\n**Plan:** Task 5 in plan doc (complete code).\n\n**Files:**\n- Modify: cozy/cozy.py\n- Test: cozy/tests/test_app.py\n\n**Acceptance Criteria:**\n- /api/remote-image streams with guessed mimetype; non-image -> 404; failure -> 502\n- generate with remote_image stages to <input_dir>/wormhole/<host>/<sha1[:8]>-<basename>, persists image_src\n- staging failure -> 502, no job; non-image -> 400; >50MB rejected\n- flush rmtree's <input_dir>/wormhole first\n\n**Verify:** cozy nix build exits 0, new tests pass\n\n```json:metadata\n{\"files\": [\"cozy/cozy.py\", \"cozy/tests/test_app.py\"], \"verifyCommand\": \"nix build /data/andrew/dev/ui/sources/anixpkgs#cozy --override-input flasks path:/data/andrew/dev/ui/sources/flasks -L\", \"acceptanceCriteria\": [\"preview endpoint with 404/502 paths\", \"staging into input_dir/wormhole with hash prefix\", \"failure paths 502/400 without job\", \"size guard\", \"flush removes staged tree\"]}\n```",
+      "status": "completed"
+    },
+    {
+      "id": 6,
+      "subject": "Task 6: Prompt library UI + shared browse modal",
+      "blockedBy": [
+        4
+      ],
+      "description": "**Goal:** Index page gains a collapsible Prompt library section (host-aware DB selection via a browse modal, searchable prompt list, Load/Save/Save as/Delete) in the existing vanilla-JS style.\n\n**Plan:** Task 6 in plan doc (complete CSS/HTML/JS).\n\n**Files:**\n- Modify: cozy/templates/index.html\n- Test: cozy/tests/test_app.py\n\n**Acceptance Criteria:**\n- ids pdb, pdb-browse, pdb-select, modal-backdrop, modal-host present in page\n- modal: host input + Go, breadcrumb, Up, filter, dir navigation, select action\n- Load fills textarea; Save overwrites; Save as prompts; Delete confirms\n- lazy fetch on first expand\n\n**Verify:** cozy nix build exits 0\n\n```json:metadata\n{\"files\": [\"cozy/templates/index.html\", \"cozy/tests/test_app.py\"], \"verifyCommand\": \"nix build /data/andrew/dev/ui/sources/anixpkgs#cozy --override-input flasks path:/data/andrew/dev/ui/sources/flasks -L\", \"acceptanceCriteria\": [\"template ids present\", \"modal navigation with filter\", \"load/save/saveas/delete wired\", \"lazy fetch on expand\"]}\n```",
+      "status": "completed"
+    },
+    {
+      "id": 7,
+      "subject": "Task 7: Remote image picker UI",
+      "blockedBy": [
+        5,
+        6
+      ],
+      "description": "**Goal:** Edit workflows can pick a remote image via the browse modal (with preview) and submit it as remote_image on Generate.\n\n**Plan:** Task 7 in plan doc (complete code).\n\n**Files:**\n- Modify: cozy/templates/index.html\n- Test: cozy/tests/test_app.py\n\n**Acceptance Criteria:**\n- ids remote-image-btn and remote-image-label present\n- remote pick shows host:path label + preview; payload carries remote_image, omits image\n- mutual exclusion with local dropdown; Clear resets both\n- modal starts at persisted image_src\n\n**Verify:** cozy nix build exits 0\n\n```json:metadata\n{\"files\": [\"cozy/templates/index.html\", \"cozy/tests/test_app.py\"], \"verifyCommand\": \"nix build /data/andrew/dev/ui/sources/anixpkgs#cozy --override-input flasks path:/data/andrew/dev/ui/sources/flasks -L\", \"acceptanceCriteria\": [\"template ids present\", \"remote_image in generate payload\", \"mutual exclusion with local pick\", \"modal starts at image_src\"]}\n```",
+      "status": "completed"
+    },
+    {
+      "id": 8,
+      "subject": "Task 8: NixOS module option, deploy, and cross-machine smoke test",
+      "blockedBy": [
+        7
+      ],
+      "description": "**Goal:** cozy runs deployed with a provisioned prompt DB dir; prompt save/load and a remote-image edit generation are demonstrated working cross-machine.\n\n**USER-ORDERED GATE - NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it \"verified inline\", or by substituting a cheaper check. Close only after every item in acceptanceCriteria has been re-validated independently, with output captured.\n\n**Plan:** Task 8 in plan doc. Deploy via the anixpkgs-deploy skill.\n\n**Files:**\n- Modify: anixpkgs/pkgs/nixos/modules/comfyui/module.nix\n\n**Acceptance Criteria:**\n- promptDbDir option + tmpfiles + ExecStart flag\n- deployed cozy responds 200/302 to curl\n- smoke-test.txt save/load roundtrip with cat evidence\n- cross-machine browse + prompt load from second machine\n- remote-image edit generation with staged file evidence\n- flush removes wormhole tree\n\n**Verify:** curl -s -o /dev/null -w '%{http_code}' http://$(hostname).local/cozy/ -> 200 or 302, plus manual UI walkthrough with captured output per criterion\n\n```json:metadata\n{\"files\": [\"pkgs/nixos/modules/comfyui/module.nix\"], \"verifyCommand\": \"curl -s -o /dev/null -w '%{http_code}' http://$(hostname).local/cozy/\", \"acceptanceCriteria\": [\"module option + tmpfiles + flag\", \"deployed cozy responds 200/302\", \"smoke-test.txt save/load roundtrip with cat evidence\", \"cross-machine browse + prompt load\", \"remote-image edit generation with staged file evidence\", \"flush removes wormhole tree\"], \"userGate\": true, \"tags\": [\"user-gate\"], \"requiresUserSpecification\": false}\n```",
+      "status": "completed"
+    }
+  ],
+  "lastUpdated": "2026-07-13T06:47:43"
+}

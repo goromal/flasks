@@ -54,6 +54,21 @@
         #output { margin-top:24px; text-align:center; }
         #output img { max-width:100%; border-radius:8px; }
         #hidden-inputs { display:none; }
+        .modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center; z-index:10; }
+        .modal { background:#fff; width:90%; max-width:520px; max-height:85vh; overflow:auto; border-radius:12px; padding:20px; }
+        .modal-row { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+        .modal-row input[type="text"] { flex:1; padding:8px 10px; font-size:0.95rem; border:2px solid #ced4da; border-radius:6px; }
+        #modal-path { font-size:0.85rem; color:#495057; word-break:break-all; margin-bottom:8px; }
+        #modal-list { list-style:none; margin:8px 0; padding:0; max-height:40vh; overflow:auto; border:1px solid #e9ecef; border-radius:6px; }
+        #modal-list li { padding:8px 12px; cursor:pointer; border-bottom:1px solid #f1f3f5; }
+        #modal-list li:hover { background:#f0f4ff; }
+        #modal-list li.b-picked { background:#e2eaff; }
+        details#pdb { margin-top:16px; }
+        details#pdb summary { font-weight:600; color:#495057; cursor:pointer; }
+        .pdb-row { display:flex; gap:8px; margin-top:8px; }
+        .pdb-row select { flex:1; }
+        .pdb-row input[type="text"] { flex:1; padding:8px 10px; font-size:0.95rem; border:2px solid #ced4da; border-radius:6px; }
+        .pdb-path { font-size:0.85rem; color:#495057; margin-top:6px; word-break:break-all; }
     </style>
 </head>
 
@@ -75,6 +90,10 @@
             <div id="image-picker" style="display:none;">
                 <label for="image-select">Input image</label>
                 <select id="image-select"></select>
+                <div class="prompt-actions">
+                    <button type="button" class="secondary" id="remote-image-btn">Remote&hellip;</button>
+                </div>
+                <div class="pdb-path" id="remote-image-label" style="display:none;"></div>
                 <div id="preview-wrap" style="margin-top:12px; display:none;">
                     <img id="preview" alt="input preview" style="max-width:100%; border-radius:8px;" />
                 </div>
@@ -84,7 +103,25 @@
             <div class="prompt-actions">
                 <button type="button" class="secondary" id="copy-btn" aria-label="Copy prompt to clipboard">&#128203; Copy</button>
                 <button type="button" class="secondary" id="paste-btn" aria-label="Paste clipboard text into prompt">&#128203; Paste</button>
+                <button type="button" class="secondary" id="clear-text-btn" aria-label="Clear prompt text">&#10006; Clear text</button>
             </div>
+            <details id="pdb">
+                <summary>Prompt library</summary>
+                <div class="pdb-path" id="pdb-path"></div>
+                <div class="pdb-row">
+                    <select id="pdb-select"></select>
+                    <button type="button" class="secondary" id="pdb-browse">Browse&hellip;</button>
+                </div>
+                <div class="pdb-row">
+                    <input type="text" id="pdb-filter" placeholder="filter prompts" />
+                </div>
+                <div class="prompt-actions">
+                    <button type="button" class="secondary" id="pdb-load">Load</button>
+                    <button type="button" class="secondary" id="pdb-save">Save</button>
+                    <button type="button" class="secondary" id="pdb-saveas">Save as&hellip;</button>
+                    <button type="button" class="secondary" id="pdb-delete">Delete</button>
+                </div>
+            </details>
             <div class="dims">
                 <div>
                     <label for="width">Width</label>
@@ -116,10 +153,31 @@
         </div>
     </div>
 
+    <div class="modal-backdrop" id="modal-backdrop" style="display:none;">
+        <div class="modal">
+            <div class="modal-row">
+                <input type="text" id="modal-host" list="known-hosts" placeholder="hostname (empty = local)" />
+                <datalist id="known-hosts"></datalist>
+                <button type="button" class="secondary" id="modal-go">Go</button>
+                <button type="button" class="secondary" id="modal-close">Close</button>
+            </div>
+            <div id="modal-path"></div>
+            <div class="modal-row">
+                <button type="button" class="secondary" id="modal-up">&#8679; Up</button>
+                <input type="text" id="modal-filter" placeholder="filter" />
+            </div>
+            <ul id="modal-list"></ul>
+            <div id="modal-preview-wrap" style="display:none;"><img id="modal-preview" alt="preview" style="max-width:100%; border-radius:8px;" /></div>
+            <button type="button" id="modal-select">Select this directory</button>
+        </div>
+    </div>
+
     <script>
         const root = "{{ urlroot }}";
         const WORKFLOW_KINDS = {{ workflow_kinds | tojson }};
         const initialImage = {{ state.image | tojson }};
+        const KNOWN_HOSTS = {{ state.known_hosts | tojson }};
+        const IMAGE_SRC = {{ state.image_src | tojson }};
         const workflowSel = document.getElementById("workflow");
         const imagePicker = document.getElementById("image-picker");
         const imageSelect = document.getElementById("image-select");
@@ -177,7 +235,10 @@
         }
 
         workflowSel.addEventListener("change", applyKind);
-        imageSelect.addEventListener("change", updatePreview);
+        imageSelect.addEventListener("change", () => {
+            if (imageSelect.value) { clearRemoteImage(); }
+            updatePreview();
+        });
         const bar = document.getElementById("bar");
         const progress = document.getElementById("progress");
         const errorBox = document.getElementById("error");
@@ -242,7 +303,10 @@
                 width: parseInt(document.getElementById("width").value, 10),
                 height: parseInt(document.getElementById("height").value, 10),
             };
-            if (currentKind() === "edit") payload.image = imageSelect.value;
+            if (currentKind() === "edit") {
+                if (remoteImage) payload.remote_image = remoteImage;
+                else payload.image = imageSelect.value;
+            }
             const r = await fetch(root + "api/generate", {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload),
@@ -254,8 +318,11 @@
         document.getElementById("clear").addEventListener("click", async () => {
             await fetch(root + "api/clear", { method: "POST" });
             document.getElementById("prompt").value = "";
-            imageSelect.value = ""; updatePreview();
+            imageSelect.value = ""; clearRemoteImage(); updatePreview();
             output.innerHTML = ""; showError(""); showDuration(null); bar.style.width = "0%";
+            // The server reset the prompt-DB selection too; re-sync the
+            // library panel if it has been opened.
+            if (pdbLoaded) { pdbHost = ""; refreshPdb(); }
         });
 
         const restartBtn = document.getElementById("restart");
@@ -351,6 +418,11 @@
             }
         });
 
+        document.getElementById("clear-text-btn").addEventListener("click", () => {
+            promptTA.value = "";
+            promptTA.focus();
+        });
+
         // Paste replaces the entire textarea value with clipboard content.
         // Replacing is simpler and avoids cursor-position maths; consistent with
         // how mobile "Select All → Paste" works when starting a new prompt.
@@ -365,6 +437,210 @@
                 promptTA.focus();
                 showError("Clipboard read not supported — please use Ctrl/Cmd+V (desktop) or long-press → Paste (mobile) to paste into the prompt field.");
             }
+        });
+
+        // --- Shared local/remote directory browser modal ---
+        const modalBackdrop = document.getElementById("modal-backdrop");
+        const modalHost = document.getElementById("modal-host");
+        const modalPathEl = document.getElementById("modal-path");
+        const modalFilter = document.getElementById("modal-filter");
+        const modalList = document.getElementById("modal-list");
+        const modalSelectBtn = document.getElementById("modal-select");
+        const modalPreviewWrap = document.getElementById("modal-preview-wrap");
+        const modalPreview = document.getElementById("modal-preview");
+        let browser = null; // {mode, path, entries, picked, onPick}
+
+        function renderKnownHosts() {
+            document.getElementById("known-hosts").innerHTML =
+                KNOWN_HOSTS.map(h => '<option value="' + escAttr(h) + '">').join("");
+        }
+
+        function rememberHost(h) {
+            if (h && !KNOWN_HOSTS.includes(h)) { KNOWN_HOSTS.push(h); renderKnownHosts(); }
+        }
+
+        // mode "dir": pick a directory. mode "img": pick an image file (with preview).
+        function openBrowser(host, mode, startPath, onPick) {
+            browser = { mode: mode, onPick: onPick, path: "", entries: [], picked: null };
+            modalHost.value = host || "";
+            modalSelectBtn.textContent = mode === "img" ? "Use this image" : "Select this directory";
+            modalFilter.value = "";
+            modalBackdrop.style.display = "flex";
+            browseTo(startPath || "");
+        }
+
+        async function browseTo(path) {
+            const q = "host=" + encodeURIComponent(modalHost.value.trim()) +
+                      "&path=" + encodeURIComponent(path) +
+                      (browser.mode === "img" ? "&files=img" : "");
+            let d;
+            try {
+                const r = await fetch(root + "api/browse?" + q);
+                d = await r.json();
+                if (!r.ok) { showError(d.error || "browse failed"); return; }
+            } catch (e) { showError("browse failed: " + e.message); return; }
+            showError("");
+            browser.path = d.path;
+            browser.picked = null;
+            browser.entries = (d.dirs || []).map(n => ({ name: n, dir: true }))
+                .concat((d.files || []).map(n => ({ name: n, dir: false })));
+            modalPreviewWrap.style.display = "none";
+            modalSelectBtn.disabled = browser.mode === "img";
+            modalPathEl.textContent = d.path;
+            renderBrowser();
+        }
+
+        function joinPath(a, b) { return a.replace(/\/+$/, "") + "/" + b; }
+        function parentPath(p) {
+            const q = p.replace(/\/+$/, "");
+            const i = q.lastIndexOf("/");
+            return i > 0 ? q.slice(0, i) : "/";
+        }
+
+        function renderBrowser() {
+            const f = modalFilter.value.toLowerCase();
+            modalList.innerHTML = "";
+            browser.entries
+                .filter(e => !f || e.name.toLowerCase().includes(f))
+                .forEach(e => {
+                    const li = document.createElement("li");
+                    li.textContent = (e.dir ? "📁 " : "🖼 ") + e.name;
+                    li.addEventListener("click", () => {
+                        if (e.dir) { browseTo(joinPath(browser.path, e.name)); return; }
+                        browser.picked = joinPath(browser.path, e.name);
+                        [...modalList.children].forEach(c => c.classList.remove("b-picked"));
+                        li.classList.add("b-picked");
+                        modalPreview.src = root + "api/remote-image?host=" +
+                            encodeURIComponent(modalHost.value.trim()) +
+                            "&path=" + encodeURIComponent(browser.picked) + "&t=" + Date.now();
+                        modalPreviewWrap.style.display = "block";
+                        modalSelectBtn.disabled = false;
+                    });
+                    modalList.appendChild(li);
+                });
+        }
+
+        document.getElementById("modal-go").addEventListener("click", () => browseTo(""));
+        document.getElementById("modal-up").addEventListener("click", () => browseTo(parentPath(browser.path)));
+        document.getElementById("modal-close").addEventListener("click", () => { modalBackdrop.style.display = "none"; });
+        modalFilter.addEventListener("input", renderBrowser);
+        modalSelectBtn.addEventListener("click", () => {
+            const res = browser.mode === "img" ? browser.picked : browser.path;
+            modalBackdrop.style.display = "none";
+            rememberHost(modalHost.value.trim());
+            browser.onPick(modalHost.value.trim(), res);
+        });
+
+        // --- Prompt library ---
+        const pdbDetails = document.getElementById("pdb");
+        const pdbPathEl = document.getElementById("pdb-path");
+        const pdbSelect = document.getElementById("pdb-select");
+        const pdbFilter = document.getElementById("pdb-filter");
+        let pdbPrompts = [];
+        let pdbHost = "";
+        let pdbLoaded = false;
+
+        function renderPdbPrompts() {
+            const f = pdbFilter.value.toLowerCase();
+            pdbSelect.innerHTML = pdbPrompts
+                .filter(n => !f || n.toLowerCase().includes(f))
+                .map(n => '<option value="' + escAttr(n) + '">' + escHtml(n) + '</option>')
+                .join("");
+        }
+
+        async function refreshPdb() {
+            let d;
+            try {
+                const r = await fetch(root + "api/pdb/prompts");
+                d = await r.json();
+                if (!r.ok) {
+                    pdbPathEl.textContent = "⚠ " + (d.error || "prompt database unavailable");
+                    pdbPrompts = []; renderPdbPrompts(); return;
+                }
+            } catch (e) { pdbPathEl.textContent = "⚠ " + e.message; return; }
+            pdbHost = d.db.host;
+            pdbPathEl.textContent = (d.db.host ? d.db.host + ":" : "") + d.db.path;
+            pdbPrompts = d.prompts;
+            renderPdbPrompts();
+        }
+
+        pdbDetails.addEventListener("toggle", () => {
+            if (pdbDetails.open && !pdbLoaded) { pdbLoaded = true; renderKnownHosts(); refreshPdb(); }
+        });
+
+        document.getElementById("pdb-browse").addEventListener("click", () => {
+            openBrowser(pdbHost, "dir", "", async (host, path) => {
+                const r = await fetch(root + "api/pdb/select", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ host: host, path: path }),
+                });
+                if (!r.ok) { const d = await r.json().catch(() => ({})); showError(d.error || "select failed"); return; }
+                refreshPdb();
+            });
+        });
+
+        document.getElementById("pdb-load").addEventListener("click", async () => {
+            if (!pdbSelect.value) return;
+            const r = await fetch(root + "api/pdb/prompt?name=" + encodeURIComponent(pdbSelect.value));
+            const d = await r.json();
+            if (!r.ok) { showError(d.error || "load failed"); return; }
+            promptTA.value = d.text;
+        });
+
+        async function savePrompt(name) {
+            const r = await fetch(root + "api/pdb/prompt", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name: name, text: promptTA.value }),
+            });
+            if (!r.ok) { const d = await r.json().catch(() => ({})); showError(d.error || "save failed"); return; }
+            refreshPdb();
+        }
+
+        document.getElementById("pdb-save").addEventListener("click", () => {
+            if (pdbSelect.value) savePrompt(pdbSelect.value);
+        });
+        document.getElementById("pdb-saveas").addEventListener("click", () => {
+            const name = prompt("Prompt name:");
+            if (name && name.trim()) savePrompt(name.trim());
+        });
+        document.getElementById("pdb-delete").addEventListener("click", async () => {
+            if (!pdbSelect.value) return;
+            if (!confirm('Delete prompt "' + pdbSelect.value + '"?')) return;
+            const r = await fetch(root + "api/pdb/delete", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name: pdbSelect.value }),
+            });
+            if (!r.ok) { const d = await r.json().catch(() => ({})); showError(d.error || "delete failed"); return; }
+            refreshPdb();
+        });
+        pdbFilter.addEventListener("input", renderPdbPrompts);
+
+        // --- Remote input image (edit workflows) ---
+        let remoteImage = null; // {host, path} or null
+        const remoteImageBtn = document.getElementById("remote-image-btn");
+        const remoteImageLabel = document.getElementById("remote-image-label");
+
+        function clearRemoteImage() {
+            remoteImage = null;
+            remoteImageLabel.textContent = "";
+            remoteImageLabel.style.display = "none";
+        }
+
+        function setRemoteImage(host, path) {
+            if (!path) { clearRemoteImage(); updatePreview(); return; }
+            remoteImage = { host: host, path: path };
+            remoteImageLabel.textContent = (host ? host + ":" : "") + path;
+            remoteImageLabel.style.display = "block";
+            imageSelect.value = "";
+            preview.src = root + "api/remote-image?host=" + encodeURIComponent(host) +
+                "&path=" + encodeURIComponent(path) + "&t=" + Date.now();
+            previewWrap.style.display = "block";
+        }
+
+        remoteImageBtn.addEventListener("click", () => {
+            openBrowser((IMAGE_SRC && IMAGE_SRC.host) || "", "img",
+                        (IMAGE_SRC && IMAGE_SRC.path) || "",
+                        (h, p) => setRemoteImage(h, p));
         });
 
         // Restore state on load: show image if present, resume polling if running.

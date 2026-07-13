@@ -179,3 +179,35 @@ def test_read_backfills_missing_keys(tmp_path):
     assert st["image"] == ""
     assert st["prompt"] == "hi"
     assert "job" in st
+
+
+def test_prompt_db_and_known_hosts_persist(tmp_path):
+    store = job_store.JobStore(str(tmp_path), FakeClient([]))
+    st = store.read_state()
+    assert st["prompt_db"] is None and st["known_hosts"] == [] and st["image_src"] is None
+
+    store.set_prompt_db("box", "/data/prompts")
+    st = job_store.JobStore(str(tmp_path), FakeClient([])).read_state()  # fresh instance: persisted
+    assert st["prompt_db"] == {"host": "box", "path": "/data/prompts"}
+    assert st["known_hosts"] == ["box"]
+
+    store.set_prompt_db("box", "/elsewhere")  # same host: no duplicate
+    assert store.read_state()["known_hosts"] == ["box"]
+
+    store.set_image_src("", "/local/imgs")  # local host: not remembered
+    st = store.read_state()
+    assert st["image_src"] == {"host": "", "path": "/local/imgs"}
+    assert st["known_hosts"] == ["box"]
+
+    store.set_image_src("otherbox", "/imgs")
+    assert store.read_state()["known_hosts"] == ["box", "otherbox"]
+
+
+def test_clear_resets_remote_selections_keeps_hosts(tmp_path):
+    store = job_store.JobStore(str(tmp_path), FakeClient([]))
+    store.set_prompt_db("box", "/data/prompts")
+    store.set_image_src("otherbox", "/imgs")
+    store.clear()
+    st = store.read_state()
+    assert st["prompt_db"] is None and st["image_src"] is None
+    assert st["known_hosts"] == ["box", "otherbox"]
