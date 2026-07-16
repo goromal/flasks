@@ -599,3 +599,13 @@ def test_queue_remove_and_clear(queue_ctx):
     assert c.post("/cozy/api/queue/remove", json={"id": jid}).status_code == 200
     assert qs.read()["jobs"] == []
     assert c.post("/cozy/api/queue/clear").status_code == 200
+
+
+def test_index_renders_with_queue_tabs(queue_ctx):
+    c, qs, sched, run_lock = queue_ctx
+    _login(c)
+    r = c.get("/cozy/")
+    assert r.status_code == 200
+    body = r.get_data(as_text=True)
+    assert 'id="tab-queue"' in body
+    assert 'id="single-view"' in body

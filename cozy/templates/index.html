@@ -69,6 +69,10 @@
         .pdb-row select { flex:1; }
         .pdb-row input[type="text"] { flex:1; padding:8px 10px; font-size:0.95rem; border:2px solid #ced4da; border-radius:6px; }
         .pdb-path { font-size:0.85rem; color:#495057; margin-top:6px; word-break:break-all; }
+        .tabs { display:flex; gap:8px; margin-bottom:16px; }
+        .tab { margin-top:0; width:auto; flex:1; padding:10px; background:#e9ecef; color:#495057; box-shadow:none; }
+        .tab.active { background:linear-gradient(135deg,#4e73df 0%,#224abe 100%); color:#fff; }
+        .eta { margin-top:8px; text-align:center; color:#4e73df; font-weight:600; display:none; }
     </style>
 </head>
 
@@ -79,6 +83,13 @@
             <a class="logout" href="{{ urlroot }}logout">Log out</a>
         </div>
 
+        {% if has_queue %}
+        <div class="tabs">
+            <button type="button" class="tab active" id="tab-single">Single</button>
+            <button type="button" class="tab" id="tab-queue">Queue</button>
+        </div>
+        {% endif %}
+        <div id="single-view">
         <label for="workflow">Workflow</label>
         <select id="workflow">
             {% for w in workflows %}
@@ -136,6 +147,7 @@
         </div>
 
         <div class="progress" id="progress"><div id="bar"></div></div>
+        <div class="eta" id="eta"></div>
         <div class="error" id="error"></div>
         <div class="duration" id="duration"></div>
 
@@ -151,6 +163,10 @@
         <div class="flush-row">
             <button class="flush" id="flush">Flush</button>
         </div>
+        </div><!-- /single-view -->
+        {% if has_queue %}
+        <div id="queue-view" style="display:none;"></div>
+        {% endif %}
     </div>
 
     <div class="modal-backdrop" id="modal-backdrop" style="display:none;">
@@ -243,6 +259,7 @@
         const progress = document.getElementById("progress");
         const errorBox = document.getElementById("error");
         const durationBox = document.getElementById("duration");
+        const etaBox = document.getElementById("eta");
         const genBtn = document.getElementById("generate");
         const output = document.getElementById("output");
         let polling = null;
@@ -264,6 +281,12 @@
             durationBox.style.display = t ? "block" : "none";
         }
 
+        function showEta(secs) {
+            const t = (secs == null) ? "" : formatDuration(secs);
+            etaBox.textContent = t ? "~" + t + " remaining" : "";
+            etaBox.style.display = t ? "block" : "none";
+        }
+
         function setRunning(on) {
             genBtn.disabled = on;
             progress.style.display = on ? "block" : "none";
@@ -279,8 +302,10 @@
             if (s.status === "running") {
                 setRunning(true);
                 bar.style.width = (s.progress || 0) + "%";
+                showEta(s.eta);
             } else {
                 setRunning(false);
+                showEta(null);
                 if (polling) { clearInterval(polling); polling = null; }
                 if (s.status === "failed") showError(s.error || "generation failed");
                 else showError("");
@@ -652,6 +677,26 @@
             if (hasImage) { showImage(); showDuration(st.duration); }
             applyKind();
         })();
+
+        const tabSingle = document.getElementById("tab-single");
+        const tabQueue = document.getElementById("tab-queue");
+        const singleView = document.getElementById("single-view");
+        const queueView = document.getElementById("queue-view");
+        let queuePoll = null;
+        function startQueuePolling() {}
+        function stopQueuePolling() {}
+        if (tabSingle) {
+            function showTab(which) {
+                const q = which === "queue";
+                singleView.style.display = q ? "none" : "block";
+                queueView.style.display = q ? "block" : "none";
+                tabQueue.classList.toggle("active", q);
+                tabSingle.classList.toggle("active", !q);
+                if (q) startQueuePolling(); else stopQueuePolling();
+            }
+            tabSingle.addEventListener("click", () => showTab("single"));
+            tabQueue.addEventListener("click", () => showTab("queue"));
+        }
     </script>
 </body>
 
