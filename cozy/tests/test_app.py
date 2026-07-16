@@ -610,3 +610,27 @@ def test_index_renders_with_queue_tabs(queue_ctx):
     assert 'id="tab-queue"' in body
     assert 'id="single-view"' in body
     assert 'id="q-add"' in body
+
+
+def test_queue_image_is_cacheable(queue_ctx):
+    # Per-job result files are immutable (unique id-based path); the endpoint
+    # must let the browser cache them so the queue view's polling re-render
+    # never re-fetches a finished thumbnail.
+    c, qs, sched, run_lock = queue_ctx
+    _login(c)
+    open(qs.image_path("abc"), "wb").write(b"IMG")
+    r = c.get("/cozy/api/queue/image?id=abc")
+    assert r.status_code == 200
+    assert "immutable" in r.headers.get("Cache-Control", "")
+
+
+def test_queue_results_use_stable_image_url(queue_ctx):
+    # Result thumbnails must render incrementally (renderResults, only rebuilt
+    # when the result set changes) and use a stable, non-cache-busted URL so
+    # finished images persist across the 1s poll instead of reloading.
+    c, qs, sched, run_lock = queue_ctx
+    _login(c)
+    body = c.get("/cozy/").get_data(as_text=True)
+    assert "renderResults(" in body
+    assert 'api/queue/image?id="' in body
+    assert 'api/queue/image?id=" + encodeURIComponent(j.id) + "&t="' not in body

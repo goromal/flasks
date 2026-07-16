@@ -516,7 +516,12 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         path = queue_store.image_path(job_id) if job_id else ""
         if not path or not os.path.exists(path):
             return flask.jsonify({"error": "no image"}), 404
-        return flask.send_file(path, mimetype="image/png")
+        # Per-job result files are immutable (unique id-based path), so let the
+        # browser cache them hard: the queue view re-renders on each poll and
+        # must not re-fetch finished thumbnails.
+        resp = flask.send_file(path, mimetype="image/png")
+        resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+        return resp
 
     @bp.route("/api/restart-comfyui", methods=["POST"])
     @flask_login.login_required

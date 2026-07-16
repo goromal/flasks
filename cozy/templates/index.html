@@ -788,13 +788,25 @@
             }
             document.getElementById("q-total").textContent =
                 s.total_eta == null ? "" : "Total remaining: ~" + formatDuration(s.total_eta);
+            renderResults(s.results);
+        }
+
+        // Result images live at immutable, id-based paths, so their URLs are
+        // stable (no cache-buster). Only rebuild the gallery when the result
+        // set actually changes; otherwise leave the already-loaded thumbnails
+        // in place so they persist across the 1s poll instead of reloading.
+        let lastResultsSig = null;
+        function renderResults(results) {
+            const sig = results.map(j => j.id + ":" + (j.has_image ? 1 : 0) + ":" + j.status).join(",");
+            if (sig === lastResultsSig) return;
+            lastResultsSig = sig;
             const res = document.getElementById("q-results");
             res.innerHTML = "";
-            s.results.forEach(j => {
+            results.forEach(j => {
                 const fig = document.createElement("figure");
                 if (j.has_image) {
                     const img = document.createElement("img");
-                    img.src = root + "api/queue/image?id=" + encodeURIComponent(j.id) + "&t=" + Date.now();
+                    img.src = root + "api/queue/image?id=" + encodeURIComponent(j.id);
                     img.addEventListener("click", () => window.open(img.src, "_blank"));
                     fig.appendChild(img);
                 }
