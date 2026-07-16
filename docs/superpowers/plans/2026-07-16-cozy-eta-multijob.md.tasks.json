@@ -1,0 +1,91 @@
+{
+  "planPath": "docs/superpowers/plans/2026-07-16-cozy-eta-multijob.md",
+  "tasks": [
+    {
+      "id": 0,
+      "nativeId": 7,
+      "subject": "Task 0: image_size.py — stdlib dimension reader",
+      "status": "pending",
+      "description": "**Goal:** Read (width, height) from PNG/JPEG/WebP/GIF/BMP headers with no third-party deps.\n\n**Files:** Create flasks/cozy/image_size.py; Test flasks/cozy/tests/test_image_size.py\n\n**Acceptance Criteria:** returns (w,h) for PNG/JPEG/GIF/BMP/WebP; returns None on unrecognized/unreadable.\n\n**Verify:** cd flasks/cozy && python -m pytest tests/test_image_size.py -v\n\n```json:metadata\n{\"files\": [\"flasks/cozy/image_size.py\", \"flasks/cozy/tests/test_image_size.py\"], \"verifyCommand\": \"cd flasks/cozy && python -m pytest tests/test_image_size.py -v\", \"acceptanceCriteria\": [\"returns (w,h) for PNG/JPEG/GIF/BMP/WebP\", \"returns None on unrecognized/unreadable\"]}\n```"
+    },
+    {
+      "id": 1,
+      "nativeId": 8,
+      "subject": "Task 1: eta.py — pure ETA estimator + history log",
+      "status": "pending",
+      "description": "**Goal:** Append per-job durations to history.jsonl and predict/blend an ETA from workflow + pixel area.\n\n**Files:** Create flasks/cozy/eta.py; Test flasks/cozy/tests/test_eta.py\n\n**Acceptance Criteria:** predict covers none/workflow-only/exact/single-proportional/multi-linear; blend covers history-only/progress-only/weighted + clamp + None; record_completion appends and trims.\n\n**Verify:** cd flasks/cozy && python -m pytest tests/test_eta.py -v\n\n```json:metadata\n{\"files\": [\"flasks/cozy/eta.py\", \"flasks/cozy/tests/test_eta.py\"], \"verifyCommand\": \"cd flasks/cozy && python -m pytest tests/test_eta.py -v\", \"acceptanceCriteria\": [\"predict covers all 5 branches\", \"blend covers 3 branches + clamp + None\", \"record_completion appends and trims\"]}\n```"
+    },
+    {
+      "id": 2,
+      "nativeId": 9,
+      "subject": "Task 2: runner.py — extracted job-run core + RunLock",
+      "status": "pending",
+      "description": "**Goal:** execute() runs one ComfyUI job returning image bytes; RunLock serializes single-job path and queue.\n\n**Files:** Create flasks/cozy/runner.py; Test flasks/cozy/tests/test_runner.py\n\n**Acceptance Criteria:** execute reports progress + returns bytes; raises RunnerError on error/no-output; RunLock mutual exclusion + idempotent release.\n\n**Verify:** cd flasks/cozy && python -m pytest tests/test_runner.py -v\n\n```json:metadata\n{\"files\": [\"flasks/cozy/runner.py\", \"flasks/cozy/tests/test_runner.py\"], \"verifyCommand\": \"cd flasks/cozy && python -m pytest tests/test_runner.py -v\", \"acceptanceCriteria\": [\"execute success returns bytes + progress\", \"execute raises on error and no-output\", \"RunLock mutual exclusion + idempotent release\"]}\n```"
+    },
+    {
+      "id": 3,
+      "nativeId": 10,
+      "subject": "Task 3: Refactor job_store.py onto runner + RunLock + ETA",
+      "status": "pending",
+      "blockedBy": [1, 2],
+      "description": "**Goal:** Single-job path uses runner.execute, holds shared RunLock, accepts eta_pixels, records durations to history.jsonl.\n\n**Files:** Modify flasks/cozy/job_store.py; Test flasks/cozy/tests/test_job_store.py\n\n**Acceptance Criteria:** existing tests still pass; success records history pixels; start rejected when lock held.\n\n**Verify:** cd flasks/cozy && python -m pytest tests/test_job_store.py -v\n\n```json:metadata\n{\"files\": [\"flasks/cozy/job_store.py\", \"flasks/cozy/tests/test_job_store.py\"], \"verifyCommand\": \"cd flasks/cozy && python -m pytest tests/test_job_store.py -v\", \"acceptanceCriteria\": [\"existing job_store tests still pass\", \"success records history pixels\", \"start rejected when lock held\"]}\n```"
+    },
+    {
+      "id": 4,
+      "nativeId": 11,
+      "subject": "Task 4: queue_store.py — QueueStore persistence + mutators",
+      "status": "pending",
+      "blockedBy": [1],
+      "description": "**Goal:** Persist queue.json + per-job images with atomic writes and all mutators the Scheduler and API need.\n\n**Files:** Create flasks/cozy/queue_store.py; Test flasks/cozy/tests/test_queue_store.py\n\n**Acceptance Criteria:** add/remove/persist across instances; pop_next+finish_current cycle; snapshot predicts eta.\n\n**Verify:** cd flasks/cozy && python -m pytest tests/test_queue_store.py -v\n\n```json:metadata\n{\"files\": [\"flasks/cozy/queue_store.py\", \"flasks/cozy/tests/test_queue_store.py\"], \"verifyCommand\": \"cd flasks/cozy && python -m pytest tests/test_queue_store.py -v\", \"acceptanceCriteria\": [\"add/remove/persist across instances\", \"pop_next + finish_current cycle\", \"snapshot predicts eta\"]}\n```"
+    },
+    {
+      "id": 5,
+      "nativeId": 12,
+      "subject": "Task 5: Scheduler — autonomous queue drain with rest gap",
+      "status": "pending",
+      "blockedBy": [0, 1, 2, 4],
+      "description": "**Goal:** Scheduler drains the queue via runner.execute, continues on failure, 30s gap between jobs, stoppable, resumes after restart.\n\n**Files:** Modify flasks/cozy/queue_store.py; Test flasks/cozy/tests/test_scheduler.py\n\n**Acceptance Criteria:** runs in order + records history; continue-on-failure; gap between but not after last; resume finalizes leftover current.\n\n**Verify:** cd flasks/cozy && python -m pytest tests/test_scheduler.py -v\n\n```json:metadata\n{\"files\": [\"flasks/cozy/queue_store.py\", \"flasks/cozy/tests/test_scheduler.py\"], \"verifyCommand\": \"cd flasks/cozy && python -m pytest tests/test_scheduler.py -v\", \"acceptanceCriteria\": [\"runs in order + records history\", \"continue-on-failure\", \"gap between but not after last\", \"resume finalizes leftover current\"]}\n```"
+    },
+    {
+      "id": 6,
+      "nativeId": 13,
+      "subject": "Task 6: /api/status ETA + eta_pixels in /api/generate",
+      "status": "pending",
+      "blockedBy": [0, 1, 3],
+      "description": "**Goal:** /api/status returns live eta; generate computes eta_pixels from the input image for edit workflows.\n\n**Files:** Modify flasks/cozy/cozy.py; Test flasks/cozy/tests/test_app.py\n\n**Acceptance Criteria:** /api/status includes eta; edit generate computes+passes eta_pixels.\n\n**Verify:** cd flasks/cozy && python -m pytest tests/test_app.py -v\n\n```json:metadata\n{\"files\": [\"flasks/cozy/cozy.py\", \"flasks/cozy/tests/test_app.py\"], \"verifyCommand\": \"cd flasks/cozy && python -m pytest tests/test_app.py -v\", \"acceptanceCriteria\": [\"/api/status includes eta\", \"edit generate computes+passes eta_pixels\"]}\n```"
+    },
+    {
+      "id": 7,
+      "nativeId": 14,
+      "subject": "Task 7: /api/queue/* routes + create_app/run wiring",
+      "status": "pending",
+      "blockedBy": [4, 5, 6],
+      "description": "**Goal:** Expose queue over HTTP; construct QueueStore/Scheduler in create_app/run with --rest-gap and restart-resume; block generate while queue active.\n\n**Files:** Modify flasks/cozy/cozy.py; Test flasks/cozy/tests/test_app.py\n\n**Acceptance Criteria:** add/remove/start/stop/clear/status/image behave; queue/start 409 when busy; generate 409 while queue active.\n\n**Verify:** cd flasks/cozy && python -m pytest tests/test_app.py -v\n\n```json:metadata\n{\"files\": [\"flasks/cozy/cozy.py\", \"flasks/cozy/tests/test_app.py\"], \"verifyCommand\": \"cd flasks/cozy && python -m pytest tests/test_app.py -v\", \"acceptanceCriteria\": [\"queue add/remove/start/stop/clear/status/image behave\", \"queue/start 409 when busy\", \"generate 409 while queue active\"]}\n```"
+    },
+    {
+      "id": 8,
+      "nativeId": 15,
+      "subject": "Task 8: index.html — Single/Queue tabs + Single ETA line",
+      "status": "pending",
+      "blockedBy": [6],
+      "description": "**Goal:** Add Single/Queue tab toggle wrapping current UI; show remaining-time line under Single progress bar from /api/status eta.\n\n**Files:** Modify flasks/cozy/templates/index.html\n\n**Acceptance Criteria:** tab bar toggles single/queue views (hidden without has_queue); Single ETA line updates each poll, blank when null.\n\n**Verify:** cd flasks/cozy && python -m pytest tests/test_app.py -v (template renders)\n\n```json:metadata\n{\"files\": [\"flasks/cozy/templates/index.html\"], \"verifyCommand\": \"cd flasks/cozy && python -m pytest tests/test_app.py -v\", \"acceptanceCriteria\": [\"tab bar toggles single/queue views, hidden without has_queue\", \"Single ETA line updates each poll, blank when null\"]}\n```"
+    },
+    {
+      "id": 9,
+      "nativeId": 16,
+      "subject": "Task 9: index.html — Queue tab UI",
+      "status": "pending",
+      "blockedBy": [7, 8],
+      "description": "**Goal:** Fill queue-view with pending list, add-current-settings, per-job + total ETA, running bar + gap countdown, Start/Stop, results gallery — driven by /api/queue/status.\n\n**Files:** Modify flasks/cozy/templates/index.html\n\n**Acceptance Criteria:** Add-current-settings appends to Pending; polling renders pending/running/gap/total/results; start/stop/remove/clear work; 409 shows busy notice.\n\n**Verify:** manual run per plan + cd flasks/cozy && python -m pytest tests/test_app.py -v\n\n```json:metadata\n{\"files\": [\"flasks/cozy/templates/index.html\"], \"verifyCommand\": \"cd flasks/cozy && python -m pytest tests/test_app.py -v\", \"acceptanceCriteria\": [\"Add-current-settings appends to Pending\", \"polling renders pending/running/gap/total/results\", \"start/stop/remove/clear work; 409 shows busy notice\"]}\n```"
+    },
+    {
+      "id": 10,
+      "nativeId": 17,
+      "subject": "Task 10: anixpkgs — changelog + deployment verification",
+      "status": "pending",
+      "blockedBy": [7],
+      "description": "**Goal:** Confirm deployment needs no module change; record the feature in anixpkgs changes log.\n\n**Files:** Create anixpkgs/changes/pr-cozy-eta-multijob.md; verify module.nix + default.nix (no edit expected)\n\n**Acceptance Criteria:** cozy builds with new modules + check phase passes; runtime paths writable (no module edit); changelog entry exists.\n\n**Verify:** cd anixpkgs && nix build .#cozy 2>&1 | tail -5 (fallback: pytest as check-phase proxy)\n\n```json:metadata\n{\"files\": [\"anixpkgs/changes/pr-cozy-eta-multijob.md\"], \"verifyCommand\": \"cd anixpkgs && nix build .#cozy 2>&1 | tail -5\", \"acceptanceCriteria\": [\"cozy builds with new modules + check phase passes\", \"runtime paths writable (no module edit needed)\", \"changelog entry exists\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-07-16"
+}
