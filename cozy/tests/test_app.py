@@ -7,11 +7,12 @@ import wormhole as wormhole_mod
 
 
 class FakeStore:
-    def __init__(self):
+    def __init__(self, state_dir="/tmp"):
         self._running = False
         self.cleared = False
         self.started = None
         self.image_path = "/nonexistent/output.png"
+        self.state_dir = state_dir
         self.prompt_db = None
         self.image_src = None
 
@@ -20,7 +21,7 @@ class FakeStore:
                 "image": "",
                 "prompt_db": None, "known_hosts": [], "image_src": None,
                 "job": {"status": "running" if self._running else "idle",
-                        "progress": 42, "error": None,
+                        "progress": 42, "error": None, "record_pixels": 320000,
                         "started_at": "2026-06-23T10:00:00-06:00",
                         "finished_at": "2026-06-23T10:00:30-06:00"},
                 "output": False}
@@ -34,11 +35,11 @@ class FakeStore:
     def set_image_src(self, host, path):
         self.image_src = (host, path)
 
-    def start(self, name, path, prompt, w, h, image=""):
+    def start(self, name, path, prompt, w, h, image="", eta_pixels=None):
         if self._running:
             return False
         self._running = True
-        self.started = (name, prompt, w, h, image)
+        self.started = (name, prompt, w, h, image, eta_pixels)
         return True
 
     def clear(self):
@@ -87,7 +88,7 @@ def test_generate_then_conflict(client, monkeypatch, tmp_path):
     r1 = client.post("/cozy/api/generate", json={"workflow": "imggen", "prompt": "x",
                                                  "width": 400, "height": 800})
     assert r1.status_code == 200
-    assert client._store.started == ("imggen", "x", 400, 800, "")
+    assert client._store.started == ("imggen", "x", 400, 800, "", None)
     r2 = client.post("/cozy/api/generate", json={"workflow": "imggen", "prompt": "x",
                                                  "width": 400, "height": 800})
     assert r2.status_code == 409
@@ -498,3 +499,18 @@ def test_index_has_remote_image_ui(edit_client):
     page = edit_client.get("/cozy/").data
     assert b'id="remote-image-btn"' in page
     assert b'id="remote-image-label"' in page
+
+
+def test_status_includes_eta(client, monkeypatch):
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    _login(client)
+    r = client.get("/cozy/api/status")
+    assert r.status_code == 200
+    assert "eta" in r.get_json()
+
+
+def test_status_eta_nonnegative_or_null(client, monkeypatch):
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    _login(client)
+    body = client.get("/cozy/api/status").get_json()
+    assert body["eta"] is None or body["eta"] >= 0

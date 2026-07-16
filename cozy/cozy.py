@@ -20,6 +20,8 @@ from wtforms import PasswordField, StringField, SubmitField
 import wormhole
 from comfyui_client import ComfyUIClient
 from job_store import JobStore, job_duration
+import eta
+import image_size
 
 _PW_HASH = None  # populated from the secrets file at startup; see _load_secrets
 
@@ -205,10 +207,16 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
             height = int(data.get("height", 800))
         except (TypeError, ValueError):
             return flask.jsonify({"error": "invalid dimensions"}), 400
+        eta_pixels = None
+        if workflow_kinds.get(wf) == "edit":
+            full = _resolve_image_ref(input_dir, output_dir, image)
+            dims = image_size.image_size(full) if full else None
+            eta_pixels = dims[0] * dims[1] if dims else 0
         path = os.path.join(workflow_dir, wf + ".api.json")
         if not os.path.exists(path):
             return flask.jsonify({"error": "workflow file missing"}), 400
-        if not store.start(wf, path, prompt, width, height, image):
+        if not store.start(wf, path, prompt, width, height, image,
+                           eta_pixels=eta_pixels):
             return flask.jsonify({"error": "already running"}), 409
         return flask.jsonify({"ok": True})
 
@@ -217,12 +225,20 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
     def status():
         state = store.read_state()
         job = state["job"]
+        eta_secs = None
+        if job.get("status") == "running":
+            history = eta.load_history(store.state_dir)
+            hist_total = eta.predict(history, state.get("workflow"),
+                                     job.get("record_pixels") or 0)
+            eta_secs = eta.blend(hist_total, eta.seconds_since(job.get("started_at")),
+                                 job.get("progress", 0))
         return flask.jsonify({
             "status": job["status"],
             "progress": job.get("progress", 0),
             "error": job.get("error"),
             "has_image": bool(state.get("output")),
             "duration": job_duration(job),
+            "eta": eta_secs,
         })
 
     @bp.route("/api/image", methods=["GET"])
