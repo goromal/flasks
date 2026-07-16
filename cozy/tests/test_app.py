@@ -3,6 +3,8 @@ import os
 import pytest
 
 import cozy
+import queue_store
+import runner
 import wormhole as wormhole_mod
 
 
@@ -514,3 +516,86 @@ def test_status_eta_nonnegative_or_null(client, monkeypatch):
     _login(client)
     body = client.get("/cozy/api/status").get_json()
     assert body["eta"] is None or body["eta"] >= 0
+
+
+@pytest.fixture
+def queue_ctx(tmp_path, monkeypatch):
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    open(os.path.join(str(tmp_path), "imggen.api.json"), "w").write("{}")
+    store = FakeStore(str(tmp_path))
+    qs = queue_store.QueueStore(str(tmp_path))
+    run_lock = runner.RunLock()
+
+    class FakeSched:
+        rest_gap = 30
+
+        def __init__(self):
+            self.started = False
+
+        def start(self):
+            if run_lock.busy():
+                return False
+            self.started = True
+            return True
+
+        def stop(self):
+            self.started = False
+
+        def is_active(self):
+            return qs.read().get("active", False)
+
+    sched = FakeSched()
+    app = cozy.create_app(store=store, workflows=["imggen", "imggen2"],
+                          workflow_dir=str(tmp_path), subdomain="/cozy",
+                          input_dir=str(tmp_path), output_dir=str(tmp_path),
+                          workflow_kinds={"imggen": "generate"},
+                          queue_store=qs, scheduler=sched)
+    app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
+    return app.test_client(), qs, sched, run_lock
+
+
+def test_queue_add_and_status(queue_ctx):
+    c, qs, sched, run_lock = queue_ctx
+    _login(c)
+    r = c.post("/cozy/api/queue/add", json={"workflow": "imggen",
+               "prompt": "p", "width": 400, "height": 800})
+    assert r.status_code == 200 and "id" in r.get_json()
+    s = c.get("/cozy/api/queue/status").get_json()
+    assert len(s["jobs"]) == 1
+    assert "total_eta" in s
+
+
+def test_generate_blocked_when_queue_active(queue_ctx):
+    c, qs, sched, run_lock = queue_ctx
+    _login(c)
+    qs.set_active(True)
+    r = c.post("/cozy/api/generate", json={"workflow": "imggen",
+               "prompt": "p", "width": 400, "height": 800})
+    assert r.status_code == 409
+
+
+def test_queue_start_conflict_when_busy(queue_ctx):
+    c, qs, sched, run_lock = queue_ctx
+    _login(c)
+    assert run_lock.try_acquire() is True  # single job holds the GPU
+    r = c.post("/cozy/api/queue/start")
+    assert r.status_code == 409
+    run_lock.release()
+
+
+def test_queue_image_404_when_missing(queue_ctx):
+    c, qs, sched, run_lock = queue_ctx
+    _login(c)
+    r = c.get("/cozy/api/queue/image?id=nope")
+    assert r.status_code == 404
+
+
+def test_queue_remove_and_clear(queue_ctx):
+    c, qs, sched, run_lock = queue_ctx
+    _login(c)
+    jid = c.post("/cozy/api/queue/add", json={"workflow": "imggen",
+                 "prompt": "p", "width": 400, "height": 800}).get_json()["id"]
+    assert c.post("/cozy/api/queue/remove", json={"id": jid}).status_code == 200
+    assert qs.read()["jobs"] == []
+    assert c.post("/cozy/api/queue/clear").status_code == 200
