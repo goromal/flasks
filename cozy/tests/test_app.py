@@ -638,3 +638,13 @@ def test_queue_results_use_stable_image_url(queue_ctx):
     assert "renderResults(" in body
     assert 'api/queue/image?id="' in body
     assert 'api/queue/image?id=" + encodeURIComponent(j.id) + "&t="' not in body
+
+
+def test_image_src_remembered_on_selection(client, monkeypatch):
+    # Picking a remote image persists its host + directory so the picker
+    # reopens there next time (until Clear resets it).
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    _login(client)
+    r = client.post("/cozy/api/image-src", json={"host": "box", "path": "/pics/cats"})
+    assert r.status_code == 200
+    assert client._store.image_src == ("box", "/pics/cats")

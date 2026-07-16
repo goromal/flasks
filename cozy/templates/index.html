@@ -226,7 +226,7 @@
         const WORKFLOW_KINDS = {{ workflow_kinds | tojson }};
         const initialImage = {{ state.image | tojson }};
         const KNOWN_HOSTS = {{ state.known_hosts | tojson }};
-        const IMAGE_SRC = {{ state.image_src | tojson }};
+        let IMAGE_SRC = {{ state.image_src | tojson }};
         const workflowSel = document.getElementById("workflow");
         const imagePicker = document.getElementById("image-picker");
         const imageSelect = document.getElementById("image-select");
@@ -377,6 +377,7 @@
             await fetch(root + "api/clear", { method: "POST" });
             document.getElementById("prompt").value = "";
             imageSelect.value = ""; clearRemoteImage(); updatePreview();
+            IMAGE_SRC = null;  // Clear also forgets the remembered remote source dir
             output.innerHTML = ""; showError(""); showDuration(null); bar.style.width = "0%";
             // The server reset the prompt-DB selection too; re-sync the
             // library panel if it has been opened.
@@ -695,10 +696,21 @@
             previewWrap.style.display = "block";
         }
 
+        // Remember the host + source directory a remote image was picked from,
+        // so the picker reopens there next time. Persisted server-side (survives
+        // reload) until the Clear button resets it.
+        function rememberImageSrc(host, path) {
+            IMAGE_SRC = { host: host, path: parentPath(path) };
+            fetch(root + "api/image-src", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ host: host, path: IMAGE_SRC.path }),
+            });
+        }
+
         remoteImageBtn.addEventListener("click", () => {
             openBrowser((IMAGE_SRC && IMAGE_SRC.host) || "", "img",
                         (IMAGE_SRC && IMAGE_SRC.path) || "",
-                        (h, p) => setRemoteImage(h, p));
+                        (h, p) => { rememberImageSrc(h, p); setRemoteImage(h, p); });
         });
 
         // Restore state on load: show image if present, resume polling if running.

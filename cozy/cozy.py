@@ -394,6 +394,15 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         store.clear()
         return flask.jsonify({"ok": True})
 
+    @bp.route("/api/image-src", methods=["POST"])
+    @flask_login.login_required
+    def image_src_set():
+        # Remember the host + directory a remote input image was picked from, so
+        # the picker reopens there next time. Persisted until Clear resets it.
+        data = flask.request.get_json(force=True, silent=True) or {}
+        store.set_image_src((data.get("host") or "").strip(), data.get("path") or "")
+        return flask.jsonify({"ok": True})
+
     def _queue_or_503():
         if queue_store is None or scheduler is None:
             return flask.jsonify({"error": "queue not configured"}), 503
