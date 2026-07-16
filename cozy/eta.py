@@ -124,6 +124,6 @@ def blend(historical_total, elapsed, progress_pct):
         return max(historical_total - elapsed, 0)
     if historical_total is None:
         return max(prog_total - elapsed, 0)
-    hist_rem = max(historical_total - elapsed, 0)
-    prog_rem = max(prog_total - elapsed, 0)
-    return min(hist_rem, prog_rem)
+    w = min(max(progress_pct / 100.0, 0.0), 1.0)
+    est_total = (1 - w) * historical_total + w * prog_total
+    return max(est_total - elapsed, 0)

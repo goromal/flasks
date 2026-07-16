@@ -37,9 +37,14 @@ def test_blend_progress_only():
     assert eta.blend(None, 40, 40) == 60
 
 
-def test_blend_weighted_both_clamped():
-    assert eta.blend(120, 50, 50) == 50
-    assert eta.blend(10, 100, 50) == 0
+def test_blend_weighted_both():
+    # w=0.5: est_total = 0.5*120 + 0.5*(50/0.5) = 110; remaining 110-50 = 60
+    assert eta.blend(120, 50, 50) == 60
+
+
+def test_blend_weighted_clamped():
+    # w=1.0: prog_total = 100/1.0 = 100; est_total = 100; remaining clamped to 0
+    assert eta.blend(10, 100, 100) == 0
 
 
 def test_blend_none_when_no_source():
