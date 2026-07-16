@@ -23,6 +23,7 @@ from job_store import JobStore, job_duration
 import eta
 import image_size
 import queue_store
+from queue_store import stage_remote_image
 import runner
 
 _PW_HASH = None  # populated from the secrets file at startup; see _load_secrets
@@ -268,18 +269,9 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
 
     def _stage_remote_image(host, rpath):
         """Fetch a remote image into the input dir; return the input-relative
-        path handed to ComfyUI's LoadImage. The sha1 prefix keeps files from
-        different remote dirs with the same basename from colliding."""
-        data = wormhole.read_file(host, rpath,
-                                  max_bytes=_MAX_REMOTE_IMAGE_BYTES)
-        digest = hashlib.sha1(rpath.encode("utf-8")).hexdigest()[:8]
-        rel = os.path.join("wormhole", host or "local",
-                           digest + "-" + os.path.basename(rpath))
-        dest = os.path.join(input_dir, rel)
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        with open(dest, "wb") as f:
-            f.write(data)
-        return rel
+        path handed to ComfyUI's LoadImage. Shared with the queue Scheduler so
+        both stage identically."""
+        return stage_remote_image(input_dir, host, rpath, _MAX_REMOTE_IMAGE_BYTES)
 
     def _current_pdb():
         """(host, path) of the selected prompt database, falling back to the
@@ -422,13 +414,19 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         remote = data.get("remote_image") or None
         eta_pixels = None
         kind = workflow_kinds.get(wf)
-        if kind == "edit" and not remote:
-            full = _resolve_image_ref(input_dir, output_dir, image)
-            if not full:
-                return None, (flask.jsonify({"error": "valid input image required"}), 400)
-            dims = image_size.image_size(full)
-            eta_pixels = dims[0] * dims[1] if dims else 0
-        elif kind != "edit":
+        if kind == "edit":
+            if remote:
+                # Remote images are staged (and their pixels measured) when the
+                # job runs; validate only that the path names an image here.
+                if not (remote.get("path") or "").lower().endswith(_IMAGE_EXTS):
+                    return None, (flask.jsonify({"error": "valid input image required"}), 400)
+            else:
+                full = _resolve_image_ref(input_dir, output_dir, image)
+                if not full:
+                    return None, (flask.jsonify({"error": "valid input image required"}), 400)
+                dims = image_size.image_size(full)
+                eta_pixels = dims[0] * dims[1] if dims else 0
+        else:
             eta_pixels = width * height
         return {"workflow": wf, "kind": kind, "prompt": data.get("prompt", ""),
                 "width": width, "height": height, "image": image,

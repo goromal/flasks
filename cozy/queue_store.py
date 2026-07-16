@@ -16,6 +16,26 @@ import runner
 import workflows
 
 REST_GAP_SECONDS = 30
+MAX_REMOTE_IMAGE_BYTES = 50 * 1024 * 1024
+
+
+def stage_remote_image(input_dir, host, rpath, max_bytes=MAX_REMOTE_IMAGE_BYTES):
+    """Fetch a remote image into the input dir; return the input-relative path
+    handed to ComfyUI's LoadImage. The sha1 prefix keeps files from different
+    remote dirs with the same basename from colliding. Shared by the single-job
+    path (cozy.generate) and the queue Scheduler so both stage identically."""
+    import hashlib
+
+    import wormhole
+    data = wormhole.read_file(host, rpath, max_bytes=max_bytes)
+    digest = hashlib.sha1(rpath.encode("utf-8")).hexdigest()[:8]
+    rel = os.path.join("wormhole", host or "local",
+                       digest + "-" + os.path.basename(rpath))
+    dest = os.path.join(input_dir, rel)
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    with open(dest, "wb") as f:
+        f.write(data)
+    return rel
 
 
 class QueueStore:
@@ -265,9 +285,10 @@ class Scheduler:
             image = job.get("image") or ""
             eta_pixels = job.get("eta_pixels")
             remote = job.get("remote_image")
-            if remote and self._stage_remote:
-                image = self._stage_remote(remote.get("host") or "",
-                                           remote.get("path") or "")
+            if remote:
+                stager = self._stage_remote or (
+                    lambda h, p: stage_remote_image(self.input_dir, h, p))
+                image = stager(remote.get("host") or "", remote.get("path") or "")
                 dims = image_size.image_size(os.path.join(self.input_dir, image))
                 eta_pixels = dims[0] * dims[1] if dims else 0
             path = os.path.join(self.workflow_dir, job["workflow"] + ".api.json")

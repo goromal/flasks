@@ -419,6 +419,10 @@ def remote_edit_client(tmp_path, monkeypatch):
     monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
     fake = FakeWormhole()
     monkeypatch.setattr(cozy, "wormhole", fake)
+    # Staging now lives in queue_store.stage_remote_image (shared with the
+    # queue), which imports wormhole itself — point the real module's read_file
+    # at the fake so both the single-tab and queue paths stage identically.
+    monkeypatch.setattr(wormhole_mod, "read_file", fake.read_file)
     store = FakeStore()
     in_dir = tmp_path / "input"
     in_dir.mkdir()

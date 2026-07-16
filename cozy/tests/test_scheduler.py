@@ -80,3 +80,31 @@ def test_resume_finalizes_leftover_current(tmp_path):
     results = store.read()["results"]
     assert results and results[0]["id"] == "abc"
     assert results[0]["status"] == "failed"
+
+
+def test_remote_edit_job_staged_by_default(tmp_path, monkeypatch):
+    # A queued edit job whose input is a remote image must be staged even when
+    # no stage_remote is injected (run() does not pass one). Regression guard
+    # for "edit workflow requires an input image" on remote edit queue jobs.
+    seen = {}
+
+    def fake_execute(client, graph, cid, on_progress=None, on_prompt_id=None):
+        return b"IMG"
+
+    def fake_load_patch(path, prompt, w, h, image=None):
+        seen["image"] = image
+        return ({}, 400, 800)
+
+    monkeypatch.setattr(queue_store, "stage_remote_image",
+                        lambda input_dir, host, path: "wormhole/h/staged.png")
+    store = queue_store.QueueStore(str(tmp_path))
+    sched = queue_store.Scheduler(
+        store, client=object(), workflow_dir=str(tmp_path),
+        workflow_kinds={"e": "edit"}, input_dir=str(tmp_path),
+        output_dir=str(tmp_path), run_lock=runner.RunLock(), rest_gap=30,
+        execute=fake_execute, sleep=lambda s: None, load_patch=fake_load_patch)
+    store.add_job({"workflow": "e", "kind": "edit", "image": "",
+                   "remote_image": {"host": "h", "path": "/x/y.png"}})
+    sched._loop()
+    assert seen["image"] == "wormhole/h/staged.png"
+    assert store.read()["results"][0]["status"] == "success"
