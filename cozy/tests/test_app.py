@@ -609,3 +609,4 @@ def test_index_renders_with_queue_tabs(queue_ctx):
     body = r.get_data(as_text=True)
     assert 'id="tab-queue"' in body
     assert 'id="single-view"' in body
+    assert 'id="q-add"' in body

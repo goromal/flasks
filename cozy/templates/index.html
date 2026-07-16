@@ -73,6 +73,17 @@
         .tab { margin-top:0; width:auto; flex:1; padding:10px; background:#e9ecef; color:#495057; box-shadow:none; }
         .tab.active { background:linear-gradient(135deg,#4e73df 0%,#224abe 100%); color:#fff; }
         .eta { margin-top:8px; text-align:center; color:#4e73df; font-weight:600; display:none; }
+        .q-list { list-style:none; margin:8px 0; padding:0; }
+        .q-list li { display:flex; align-items:center; gap:8px; padding:8px 10px; border:1px solid #e9ecef; border-radius:6px; margin-bottom:6px; }
+        .q-list li .q-meta { flex:1; font-size:0.9rem; }
+        .q-list li .q-eta { color:#4e73df; font-weight:600; font-size:0.85rem; }
+        .q-list li button { margin-top:0; width:auto; padding:4px 10px; background:#6c757d; box-shadow:none; }
+        .q-total { margin:12px 0; text-align:center; font-weight:700; color:#224abe; }
+        .q-results { display:flex; flex-wrap:wrap; gap:10px; margin:8px 0; }
+        .q-results figure { margin:0; width:120px; text-align:center; font-size:0.8rem; }
+        .q-results img { width:120px; border-radius:6px; cursor:pointer; }
+        .q-results .failed { color:#721c24; }
+        #q-bar { height:100%; width:0%; background:linear-gradient(135deg,#4e73df,#224abe); transition:width 0.3s; }
     </style>
 </head>
 
@@ -165,7 +176,29 @@
         </div>
         </div><!-- /single-view -->
         {% if has_queue %}
-        <div id="queue-view" style="display:none;"></div>
+        <div id="queue-view" style="display:none;">
+            <label>Pending</label>
+            <ul id="q-pending" class="q-list"></ul>
+            <button type="button" class="secondary" id="q-add">+ Add current settings as job</button>
+
+            <div id="q-running" style="display:none;">
+                <label>Running</label>
+                <div id="q-running-label"></div>
+                <div class="progress" style="display:block;"><div id="q-bar"></div></div>
+                <div class="eta" id="q-running-eta" style="display:block;"></div>
+            </div>
+            <div class="eta" id="q-gap" style="display:none;"></div>
+
+            <div class="q-total" id="q-total"></div>
+            <div class="prompt-actions">
+                <button type="button" class="secondary" id="q-start">Start queue</button>
+                <button type="button" class="secondary" id="q-stop">Stop</button>
+            </div>
+
+            <label>Results</label>
+            <div id="q-results" class="q-results"></div>
+            <button type="button" class="secondary" id="q-clear">Clear results</button>
+        </div>
         {% endif %}
     </div>
 
@@ -683,8 +716,125 @@
         const singleView = document.getElementById("single-view");
         const queueView = document.getElementById("queue-view");
         let queuePoll = null;
-        function startQueuePolling() {}
-        function stopQueuePolling() {}
+        function startQueuePolling() {
+            if (!queuePoll) queuePoll = setInterval(refreshQueue, 1000);
+            refreshQueue();
+        }
+        function stopQueuePolling() {
+            if (queuePoll) { clearInterval(queuePoll); queuePoll = null; }
+        }
+
+        function currentJobPayload() {
+            const payload = {
+                workflow: workflowSel.value,
+                prompt: document.getElementById("prompt").value,
+                width: parseInt(document.getElementById("width").value, 10),
+                height: parseInt(document.getElementById("height").value, 10),
+            };
+            if (currentKind() === "edit") {
+                if (remoteImage) payload.remote_image = remoteImage;
+                else payload.image = imageSelect.value;
+            }
+            return payload;
+        }
+
+        async function refreshQueue() {
+            let s;
+            try {
+                const r = await fetch(root + "api/queue/status");
+                if (!r.ok) return;
+                s = await r.json();
+            } catch (e) { return; }
+            const pend = document.getElementById("q-pending");
+            pend.innerHTML = "";
+            s.jobs.forEach((j, i) => {
+                const li = document.createElement("li");
+                const meta = document.createElement("div");
+                meta.className = "q-meta";
+                meta.textContent = (i + 1) + ". " + j.workflow + "  " +
+                    (j.kind === "edit" ? "(edit)" : (j.width + "x" + j.height)) +
+                    "  “" + (j.prompt || "").slice(0, 30) + "”";
+                const eta = document.createElement("span");
+                eta.className = "q-eta";
+                eta.textContent = j.eta == null ? "" : "~" + formatDuration(j.eta);
+                const rm = document.createElement("button");
+                rm.textContent = "✖";
+                rm.addEventListener("click", async () => {
+                    await fetch(root + "api/queue/remove", {
+                        method: "POST", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ id: j.id }) });
+                    refreshQueue();
+                });
+                li.append(meta, eta, rm);
+                pend.appendChild(li);
+            });
+            const running = document.getElementById("q-running");
+            const gap = document.getElementById("q-gap");
+            if (s.current) {
+                running.style.display = "block";
+                document.getElementById("q-running-label").textContent =
+                    s.current.workflow + "  “" + (s.current.prompt || "").slice(0, 30) + "”";
+                document.getElementById("q-bar").style.width = (s.current.progress || 0) + "%";
+                document.getElementById("q-running-eta").textContent =
+                    s.current.eta == null ? "" : "~" + formatDuration(s.current.eta) + " remaining";
+            } else {
+                running.style.display = "none";
+            }
+            if (s.gap_until && !s.current) {
+                gap.style.display = "block";
+                gap.textContent = "Resting before next job…";
+            } else {
+                gap.style.display = "none";
+            }
+            document.getElementById("q-total").textContent =
+                s.total_eta == null ? "" : "Total remaining: ~" + formatDuration(s.total_eta);
+            const res = document.getElementById("q-results");
+            res.innerHTML = "";
+            s.results.forEach(j => {
+                const fig = document.createElement("figure");
+                if (j.has_image) {
+                    const img = document.createElement("img");
+                    img.src = root + "api/queue/image?id=" + encodeURIComponent(j.id) + "&t=" + Date.now();
+                    img.addEventListener("click", () => window.open(img.src, "_blank"));
+                    fig.appendChild(img);
+                }
+                const cap = document.createElement("figcaption");
+                if (j.status === "failed") {
+                    cap.className = "failed";
+                    cap.textContent = j.workflow + " FAILED: " + (j.error || "error");
+                } else {
+                    cap.textContent = j.workflow + "  " + formatDuration(j.duration);
+                }
+                fig.appendChild(cap);
+                res.appendChild(fig);
+            });
+        }
+
+        const qAdd = document.getElementById("q-add");
+        if (qAdd) {
+            qAdd.addEventListener("click", async () => {
+                showError("");
+                const r = await fetch(root + "api/queue/add", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(currentJobPayload()) });
+                if (!r.ok) { const e = await r.json().catch(() => ({})); showError(e.error || "add failed"); return; }
+                refreshQueue();
+            });
+            document.getElementById("q-start").addEventListener("click", async () => {
+                showError("");
+                const r = await fetch(root + "api/queue/start", { method: "POST" });
+                if (r.status === 409) { showError("Busy — a single job is running."); return; }
+                refreshQueue();
+            });
+            document.getElementById("q-stop").addEventListener("click", async () => {
+                await fetch(root + "api/queue/stop", { method: "POST" });
+                refreshQueue();
+            });
+            document.getElementById("q-clear").addEventListener("click", async () => {
+                await fetch(root + "api/queue/clear", { method: "POST" });
+                refreshQueue();
+            });
+        }
         if (tabSingle) {
             function showTab(which) {
                 const q = which === "queue";
