@@ -36,6 +36,7 @@
             padding: 0;
             display: flex;
             justify-content: flex-end;
+            gap: 6px;
         }
 
         nav li { margin: 0; }
@@ -576,6 +577,34 @@
             min-height: 36px;
             font-size: 0.9rem;
         }
+
+        .autoplay-bar {
+            display: flex;
+            align-items: center;
+            margin: 16px 0;
+            padding: 12px 16px;
+            background-color: #ffffff;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .autoplay-bar label {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            font-weight: 600;
+            color: #495057;
+            font-size: 0.95rem;
+        }
+
+        .autoplay-bar input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            margin: 0;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
     </style>
 </head>
 
@@ -587,6 +616,9 @@
 
     <nav>
         <ul>
+            {% if root != "zzz" %}
+            <li><a href="{{ urlroot }}zzz">Directory</a></li>
+            {% endif %}
             <li><a href="{{ urlroot }}logout">Logout</a></li>
         </ul>
     </nav>
@@ -595,6 +627,15 @@
         <h1>Stamp Server: {{ datadir }} ({{ nleft }} Left)</h1>
 
         <div id="statusMessage" class="status-message"></div>
+
+        {% if root.startswith('restamp/') %}
+        <div class="autoplay-bar">
+            <label>
+                <input type="checkbox" id="autoplayToggle" onchange="toggleAutoplay(this.checked)">
+                <span>Auto-play &mdash; videos play through, images linger 10s, then advance</span>
+            </label>
+        </div>
+        {% endif %}
 
         {% if err %}
         <div class="error-message">{{ msg }}</div>
@@ -734,7 +775,7 @@
         </div>
         {% endif %}
 
-        <form action="{{ urlroot }}{{ root }}" method="POST">
+        <form id="stampForm" action="{{ urlroot }}{{ root }}" method="POST">
             <textarea id="text" name="text" placeholder="Enter stamp text here..."></textarea>
             {% if root.startswith('restamp/') %}
             <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
@@ -1290,6 +1331,62 @@
             })
             .catch(err => { hideLoading(); showStatus('Error: ' + err.message, true); });
         }
+        // ===== RESTAMP AUTO-PLAY =====
+
+        {% if root.startswith('restamp/') %}
+        // When enabled, walk through the deck hands-free: videos play to the end,
+        // images linger for 10s, then the current file is skipped (empty-text form
+        // submit → server drops it from the deck and serves the next). The flag is
+        // kept in sessionStorage so it survives the full-page reload between files.
+        const AUTOPLAY_KEY = 'stampRestampAutoplay';
+        let _autoplayTimer = null;
+
+        function autoplayOn() {
+            return sessionStorage.getItem(AUTOPLAY_KEY) === '1';
+        }
+
+        function autoplayAdvance() {
+            if (!autoplayOn()) return;
+            const form = document.getElementById('stampForm');
+            const ta = document.getElementById('text');
+            if (form && ta) { ta.value = ''; form.submit(); }
+        }
+
+        function startAutoplay() {
+            const video = document.getElementById('currentVideo');
+            const img = document.getElementById('currentImage');
+            if (video) {
+                video.loop = false;   // let it reach 'ended' so we can advance
+                video.addEventListener('ended', autoplayAdvance, { once: true });
+                // Try to play with sound; a cross-page navigation drops the user
+                // gesture, so fall back to muted playback if the browser blocks it.
+                const p = video.play();
+                if (p && typeof p.catch === 'function') {
+                    p.catch(() => { video.muted = true; video.play().catch(() => {}); });
+                }
+            } else if (img) {
+                _autoplayTimer = setTimeout(autoplayAdvance, 10000);
+            }
+        }
+
+        function toggleAutoplay(on) {
+            sessionStorage.setItem(AUTOPLAY_KEY, on ? '1' : '0');
+            if (on) {
+                startAutoplay();
+            } else {
+                if (_autoplayTimer) { clearTimeout(_autoplayTimer); _autoplayTimer = null; }
+                const video = document.getElementById('currentVideo');
+                if (video) video.loop = true;   // restore normal looping playback
+            }
+        }
+
+        (function initAutoplay() {
+            const toggle = document.getElementById('autoplayToggle');
+            if (toggle) toggle.checked = autoplayOn();
+            if (autoplayOn()) startAutoplay();
+        })();
+        {% endif %}
+
         // ===== STAMPABLES DIR PICKER =====
 
         {% if root == "zzz" %}
