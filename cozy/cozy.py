@@ -20,6 +20,11 @@ from wtforms import PasswordField, StringField, SubmitField
 import wormhole
 from comfyui_client import ComfyUIClient
 from job_store import JobStore, job_duration
+import eta
+import image_size
+import queue_store
+from queue_store import stage_remote_image
+import runner
 
 _PW_HASH = None  # populated from the secrets file at startup; see _load_secrets
 
@@ -121,7 +126,7 @@ class User(flask_login.UserMixin):
 def create_app(store, workflows, workflow_dir, subdomain="/cozy",
                input_dir=None, output_dir=None, workflow_kinds=None,
                secret_key=None, password_hash=None, restart_cmd=None,
-               prompt_db_dir=None):
+               prompt_db_dir=None, queue_store=None, scheduler=None):
     global _PW_HASH
     if password_hash is not None:
         _PW_HASH = password_hash
@@ -175,11 +180,14 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         state["job"]["duration"] = job_duration(state["job"])
         return flask.render_template(
             "index.html", urlroot=urlroot, workflows=workflows, state=state,
-            workflow_kinds=workflow_kinds, can_restart=bool(restart_cmd))
+            workflow_kinds=workflow_kinds, can_restart=bool(restart_cmd),
+            has_queue=bool(queue_store))
 
     @bp.route("/api/generate", methods=["POST"])
     @flask_login.login_required
     def generate():
+        if scheduler is not None and scheduler.is_active():
+            return flask.jsonify({"error": "queue is running"}), 409
         data = flask.request.get_json(force=True, silent=True) or {}
         wf = data.get("workflow")
         if wf not in workflows:
@@ -205,10 +213,16 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
             height = int(data.get("height", 800))
         except (TypeError, ValueError):
             return flask.jsonify({"error": "invalid dimensions"}), 400
+        eta_pixels = None
+        if workflow_kinds.get(wf) == "edit":
+            full = _resolve_image_ref(input_dir, output_dir, image)
+            dims = image_size.image_size(full) if full else None
+            eta_pixels = dims[0] * dims[1] if dims else 0
         path = os.path.join(workflow_dir, wf + ".api.json")
         if not os.path.exists(path):
             return flask.jsonify({"error": "workflow file missing"}), 400
-        if not store.start(wf, path, prompt, width, height, image):
+        if not store.start(wf, path, prompt, width, height, image,
+                           eta_pixels=eta_pixels):
             return flask.jsonify({"error": "already running"}), 409
         return flask.jsonify({"ok": True})
 
@@ -217,12 +231,20 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
     def status():
         state = store.read_state()
         job = state["job"]
+        eta_secs = None
+        if job.get("status") == "running":
+            history = eta.load_history(store.state_dir)
+            hist_total = eta.predict(history, state.get("workflow"),
+                                     job.get("record_pixels") or 0)
+            eta_secs = eta.blend(hist_total, eta.seconds_since(job.get("started_at")),
+                                 job.get("progress", 0))
         return flask.jsonify({
             "status": job["status"],
             "progress": job.get("progress", 0),
             "error": job.get("error"),
             "has_image": bool(state.get("output")),
             "duration": job_duration(job),
+            "eta": eta_secs,
         })
 
     @bp.route("/api/image", methods=["GET"])
@@ -247,18 +269,9 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
 
     def _stage_remote_image(host, rpath):
         """Fetch a remote image into the input dir; return the input-relative
-        path handed to ComfyUI's LoadImage. The sha1 prefix keeps files from
-        different remote dirs with the same basename from colliding."""
-        data = wormhole.read_file(host, rpath,
-                                  max_bytes=_MAX_REMOTE_IMAGE_BYTES)
-        digest = hashlib.sha1(rpath.encode("utf-8")).hexdigest()[:8]
-        rel = os.path.join("wormhole", host or "local",
-                           digest + "-" + os.path.basename(rpath))
-        dest = os.path.join(input_dir, rel)
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        with open(dest, "wb") as f:
-            f.write(data)
-        return rel
+        path handed to ComfyUI's LoadImage. Shared with the queue Scheduler so
+        both stage identically."""
+        return stage_remote_image(input_dir, host, rpath, _MAX_REMOTE_IMAGE_BYTES)
 
     def _current_pdb():
         """(host, path) of the selected prompt database, falling back to the
@@ -381,6 +394,142 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         store.clear()
         return flask.jsonify({"ok": True})
 
+    @bp.route("/api/image-src", methods=["POST"])
+    @flask_login.login_required
+    def image_src_set():
+        # Remember the host + directory a remote input image was picked from, so
+        # the picker reopens there next time. Persisted until Clear resets it.
+        data = flask.request.get_json(force=True, silent=True) or {}
+        store.set_image_src((data.get("host") or "").strip(), data.get("path") or "")
+        return flask.jsonify({"ok": True})
+
+    def _queue_or_503():
+        if queue_store is None or scheduler is None:
+            return flask.jsonify({"error": "queue not configured"}), 503
+        return None
+
+    def _build_spec(data):
+        """Validate a queue job payload like /api/generate and return
+        (spec_dict, None) or (None, error_response)."""
+        wf = data.get("workflow")
+        if wf not in workflows:
+            return None, (flask.jsonify({"error": "unknown workflow"}), 400)
+        try:
+            width = int(data.get("width", 400))
+            height = int(data.get("height", 800))
+        except (TypeError, ValueError):
+            return None, (flask.jsonify({"error": "invalid dimensions"}), 400)
+        image = data.get("image", "") or ""
+        remote = data.get("remote_image") or None
+        eta_pixels = None
+        kind = workflow_kinds.get(wf)
+        if kind == "edit":
+            if remote:
+                # Remote images are staged (and their pixels measured) when the
+                # job runs; validate only that the path names an image here.
+                if not (remote.get("path") or "").lower().endswith(_IMAGE_EXTS):
+                    return None, (flask.jsonify({"error": "valid input image required"}), 400)
+            else:
+                full = _resolve_image_ref(input_dir, output_dir, image)
+                if not full:
+                    return None, (flask.jsonify({"error": "valid input image required"}), 400)
+                dims = image_size.image_size(full)
+                eta_pixels = dims[0] * dims[1] if dims else 0
+        else:
+            eta_pixels = width * height
+        return {"workflow": wf, "kind": kind, "prompt": data.get("prompt", ""),
+                "width": width, "height": height, "image": image,
+                "remote_image": remote, "eta_pixels": eta_pixels}, None
+
+    @bp.route("/api/queue/add", methods=["POST"])
+    @flask_login.login_required
+    def queue_add():
+        err = _queue_or_503()
+        if err:
+            return err
+        data = flask.request.get_json(force=True, silent=True) or {}
+        spec, bad = _build_spec(data)
+        if bad:
+            return bad
+        jid = queue_store.add_job(spec)
+        history = eta.load_history(queue_store.state_dir)
+        return flask.jsonify({"id": jid,
+                              "eta": eta.predict(history, spec["workflow"],
+                                                 spec["eta_pixels"] or 0)})
+
+    @bp.route("/api/queue/remove", methods=["POST"])
+    @flask_login.login_required
+    def queue_remove():
+        err = _queue_or_503()
+        if err:
+            return err
+        data = flask.request.get_json(force=True, silent=True) or {}
+        queue_store.remove_job(data.get("id") or "")
+        return flask.jsonify({"ok": True})
+
+    @bp.route("/api/queue/start", methods=["POST"])
+    @flask_login.login_required
+    def queue_start():
+        err = _queue_or_503()
+        if err:
+            return err
+        if not scheduler.start():
+            return flask.jsonify({"error": "busy"}), 409
+        return flask.jsonify({"ok": True})
+
+    @bp.route("/api/queue/stop", methods=["POST"])
+    @flask_login.login_required
+    def queue_stop():
+        err = _queue_or_503()
+        if err:
+            return err
+        scheduler.stop()
+        return flask.jsonify({"ok": True})
+
+    @bp.route("/api/queue/clear", methods=["POST"])
+    @flask_login.login_required
+    def queue_clear():
+        err = _queue_or_503()
+        if err:
+            return err
+        queue_store.clear_results()
+        return flask.jsonify({"ok": True})
+
+    @bp.route("/api/queue/status", methods=["GET"])
+    @flask_login.login_required
+    def queue_status():
+        err = _queue_or_503()
+        if err:
+            return err
+        history = eta.load_history(queue_store.state_dir)
+        snap = queue_store.snapshot(history)
+        total = 0.0
+        if snap["current"] and snap["current"]["eta"]:
+            total += snap["current"]["eta"]
+        for j in snap["jobs"]:
+            if j["eta"]:
+                total += j["eta"]
+        total += len(snap["jobs"]) * scheduler.rest_gap
+        snap["total_eta"] = total or None
+        return flask.jsonify(snap)
+
+    @bp.route("/api/queue/image", methods=["GET"])
+    @flask_login.login_required
+    def queue_image():
+        err = _queue_or_503()
+        if err:
+            return err
+        job_id = flask.request.args.get("id", "")
+        path = queue_store.image_path(job_id) if job_id else ""
+        if not path or not os.path.exists(path):
+            return flask.jsonify({"error": "no image"}), 404
+        # Per-job result files are immutable (unique id-based path), so let the
+        # browser cache them hard: the queue view re-renders on each poll and
+        # must not re-fetch finished thumbnails.
+        resp = flask.send_file(path, mimetype="image/png")
+        resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+        return resp
+
     @bp.route("/api/restart-comfyui", methods=["POST"])
     @flask_login.login_required
     def restart_comfyui():
@@ -458,6 +607,8 @@ def run():
     parser.add_argument("--comfyui-restart-cmd", type=str, default="",
                         help="Command run to restart ComfyUI (e.g. "
                              "'systemctl restart comfyui.service'); empty hides the restart button")
+    parser.add_argument("--rest-gap", type=int, default=30,
+                        help="Seconds to rest between queued jobs")
     args = parser.parse_args()
 
     state_dir = args.state_dir or os.path.join(os.getcwd(), "cozy-state")
@@ -470,7 +621,13 @@ def run():
         n: _wf.load_meta(os.path.join(workflow_dir, n + ".api.json"))["kind"]
         for n in names if os.path.exists(os.path.join(workflow_dir, n + ".api.json"))
     }
-    store = JobStore(state_dir, ComfyUIClient(args.comfyui_url))
+    run_lock = runner.RunLock()
+    store = JobStore(state_dir, ComfyUIClient(args.comfyui_url), run_lock=run_lock)
+    qstore = queue_store.QueueStore(state_dir)
+    scheduler = queue_store.Scheduler(
+        qstore, ComfyUIClient(args.comfyui_url), workflow_dir, workflow_kinds,
+        input_dir, output_dir, run_lock, rest_gap=args.rest_gap)
+    scheduler.resume()
     secrets = _load_secrets(args.secrets_file)
     restart_cmd = shlex.split(args.comfyui_restart_cmd) if args.comfyui_restart_cmd else None
     app = create_app(store=store, workflows=names,
@@ -480,7 +637,8 @@ def run():
                      secret_key=secrets["secret_key"].encode(),
                      password_hash=secrets["password_hash"],
                      restart_cmd=restart_cmd,
-                     prompt_db_dir=args.prompt_db_dir or os.path.join(state_dir, "prompts"))
+                     prompt_db_dir=args.prompt_db_dir or os.path.join(state_dir, "prompts"),
+                     queue_store=qstore, scheduler=scheduler)
     app.run(host="0.0.0.0", port=args.port)
 
 

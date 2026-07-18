@@ -1,7 +1,9 @@
 import json
 import os
 
+import eta as eta_mod
 import job_store
+import runner as runner_mod
 
 
 class FakeEvents:
@@ -211,3 +213,28 @@ def test_clear_resets_remote_selections_keeps_hosts(tmp_path):
     st = store.read_state()
     assert st["prompt_db"] is None and st["image_src"] is None
     assert st["known_hosts"] == ["box", "otherbox"]
+
+
+def test_start_records_history_pixels(tmp_path):
+    events = [
+        {"type": "progress", "data": {"value": 5, "max": 10, "prompt_id": "pid-1"}},
+        {"type": "executing", "data": {"node": None, "prompt_id": "pid-1"}},
+    ]
+    history = {"pid-1": {"outputs": {"9": {"images": [
+        {"filename": "out.png", "subfolder": "", "type": "output"}]}}}}
+    client = FakeClient(events, history=history, image=b"PNGBYTES")
+    store = job_store.JobStore(str(tmp_path), client)
+    assert store.start("imggen", _fixture_path(), "hi", 400, 800, "")
+    _wait_idle(store)
+    hist = eta_mod.load_history(str(tmp_path))
+    assert hist and hist[-1]["workflow"] == "imggen"
+    # The fixture has no _cozy key so no snapping occurs; effective area is 400*800.
+    assert hist[-1]["pixels"] == 400 * 800
+
+
+def test_start_rejected_when_lock_held(tmp_path):
+    lock = runner_mod.RunLock()
+    store = job_store.JobStore(str(tmp_path), FakeClient([]), run_lock=lock)
+    assert lock.try_acquire() is True  # simulate the queue holding the GPU
+    assert store.start("imggen", _fixture_path(), "p", 400, 800, "") is False
+    lock.release()

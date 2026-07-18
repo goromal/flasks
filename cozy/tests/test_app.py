@@ -3,15 +3,18 @@ import os
 import pytest
 
 import cozy
+import queue_store
+import runner
 import wormhole as wormhole_mod
 
 
 class FakeStore:
-    def __init__(self):
+    def __init__(self, state_dir="/tmp"):
         self._running = False
         self.cleared = False
         self.started = None
         self.image_path = "/nonexistent/output.png"
+        self.state_dir = state_dir
         self.prompt_db = None
         self.image_src = None
 
@@ -20,7 +23,7 @@ class FakeStore:
                 "image": "",
                 "prompt_db": None, "known_hosts": [], "image_src": None,
                 "job": {"status": "running" if self._running else "idle",
-                        "progress": 42, "error": None,
+                        "progress": 42, "error": None, "record_pixels": 320000,
                         "started_at": "2026-06-23T10:00:00-06:00",
                         "finished_at": "2026-06-23T10:00:30-06:00"},
                 "output": False}
@@ -34,11 +37,11 @@ class FakeStore:
     def set_image_src(self, host, path):
         self.image_src = (host, path)
 
-    def start(self, name, path, prompt, w, h, image=""):
+    def start(self, name, path, prompt, w, h, image="", eta_pixels=None):
         if self._running:
             return False
         self._running = True
-        self.started = (name, prompt, w, h, image)
+        self.started = (name, prompt, w, h, image, eta_pixels)
         return True
 
     def clear(self):
@@ -87,7 +90,7 @@ def test_generate_then_conflict(client, monkeypatch, tmp_path):
     r1 = client.post("/cozy/api/generate", json={"workflow": "imggen", "prompt": "x",
                                                  "width": 400, "height": 800})
     assert r1.status_code == 200
-    assert client._store.started == ("imggen", "x", 400, 800, "")
+    assert client._store.started == ("imggen", "x", 400, 800, "", None)
     r2 = client.post("/cozy/api/generate", json={"workflow": "imggen", "prompt": "x",
                                                  "width": 400, "height": 800})
     assert r2.status_code == 409
@@ -416,6 +419,10 @@ def remote_edit_client(tmp_path, monkeypatch):
     monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
     fake = FakeWormhole()
     monkeypatch.setattr(cozy, "wormhole", fake)
+    # Staging now lives in queue_store.stage_remote_image (shared with the
+    # queue), which imports wormhole itself — point the real module's read_file
+    # at the fake so both the single-tab and queue paths stage identically.
+    monkeypatch.setattr(wormhole_mod, "read_file", fake.read_file)
     store = FakeStore()
     in_dir = tmp_path / "input"
     in_dir.mkdir()
@@ -498,3 +505,146 @@ def test_index_has_remote_image_ui(edit_client):
     page = edit_client.get("/cozy/").data
     assert b'id="remote-image-btn"' in page
     assert b'id="remote-image-label"' in page
+
+
+def test_status_includes_eta(client, monkeypatch):
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    _login(client)
+    r = client.get("/cozy/api/status")
+    assert r.status_code == 200
+    assert "eta" in r.get_json()
+
+
+def test_status_eta_nonnegative_or_null(client, monkeypatch):
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    _login(client)
+    body = client.get("/cozy/api/status").get_json()
+    assert body["eta"] is None or body["eta"] >= 0
+
+
+@pytest.fixture
+def queue_ctx(tmp_path, monkeypatch):
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    open(os.path.join(str(tmp_path), "imggen.api.json"), "w").write("{}")
+    store = FakeStore(str(tmp_path))
+    qs = queue_store.QueueStore(str(tmp_path))
+    run_lock = runner.RunLock()
+
+    class FakeSched:
+        rest_gap = 30
+
+        def __init__(self):
+            self.started = False
+
+        def start(self):
+            if run_lock.busy():
+                return False
+            self.started = True
+            return True
+
+        def stop(self):
+            self.started = False
+
+        def is_active(self):
+            return qs.read().get("active", False)
+
+    sched = FakeSched()
+    app = cozy.create_app(store=store, workflows=["imggen", "imggen2"],
+                          workflow_dir=str(tmp_path), subdomain="/cozy",
+                          input_dir=str(tmp_path), output_dir=str(tmp_path),
+                          workflow_kinds={"imggen": "generate"},
+                          queue_store=qs, scheduler=sched)
+    app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
+    return app.test_client(), qs, sched, run_lock
+
+
+def test_queue_add_and_status(queue_ctx):
+    c, qs, sched, run_lock = queue_ctx
+    _login(c)
+    r = c.post("/cozy/api/queue/add", json={"workflow": "imggen",
+               "prompt": "p", "width": 400, "height": 800})
+    assert r.status_code == 200 and "id" in r.get_json()
+    s = c.get("/cozy/api/queue/status").get_json()
+    assert len(s["jobs"]) == 1
+    assert "total_eta" in s
+
+
+def test_generate_blocked_when_queue_active(queue_ctx):
+    c, qs, sched, run_lock = queue_ctx
+    _login(c)
+    qs.set_active(True)
+    r = c.post("/cozy/api/generate", json={"workflow": "imggen",
+               "prompt": "p", "width": 400, "height": 800})
+    assert r.status_code == 409
+
+
+def test_queue_start_conflict_when_busy(queue_ctx):
+    c, qs, sched, run_lock = queue_ctx
+    _login(c)
+    assert run_lock.try_acquire() is True  # single job holds the GPU
+    r = c.post("/cozy/api/queue/start")
+    assert r.status_code == 409
+    run_lock.release()
+
+
+def test_queue_image_404_when_missing(queue_ctx):
+    c, qs, sched, run_lock = queue_ctx
+    _login(c)
+    r = c.get("/cozy/api/queue/image?id=nope")
+    assert r.status_code == 404
+
+
+def test_queue_remove_and_clear(queue_ctx):
+    c, qs, sched, run_lock = queue_ctx
+    _login(c)
+    jid = c.post("/cozy/api/queue/add", json={"workflow": "imggen",
+                 "prompt": "p", "width": 400, "height": 800}).get_json()["id"]
+    assert c.post("/cozy/api/queue/remove", json={"id": jid}).status_code == 200
+    assert qs.read()["jobs"] == []
+    assert c.post("/cozy/api/queue/clear").status_code == 200
+
+
+def test_index_renders_with_queue_tabs(queue_ctx):
+    c, qs, sched, run_lock = queue_ctx
+    _login(c)
+    r = c.get("/cozy/")
+    assert r.status_code == 200
+    body = r.get_data(as_text=True)
+    assert 'id="tab-queue"' in body
+    assert 'id="single-view"' in body
+    assert 'id="q-add"' in body
+
+
+def test_queue_image_is_cacheable(queue_ctx):
+    # Per-job result files are immutable (unique id-based path); the endpoint
+    # must let the browser cache them so the queue view's polling re-render
+    # never re-fetches a finished thumbnail.
+    c, qs, sched, run_lock = queue_ctx
+    _login(c)
+    open(qs.image_path("abc"), "wb").write(b"IMG")
+    r = c.get("/cozy/api/queue/image?id=abc")
+    assert r.status_code == 200
+    assert "immutable" in r.headers.get("Cache-Control", "")
+
+
+def test_queue_results_use_stable_image_url(queue_ctx):
+    # Result thumbnails must render incrementally (renderResults, only rebuilt
+    # when the result set changes) and use a stable, non-cache-busted URL so
+    # finished images persist across the 1s poll instead of reloading.
+    c, qs, sched, run_lock = queue_ctx
+    _login(c)
+    body = c.get("/cozy/").get_data(as_text=True)
+    assert "renderResults(" in body
+    assert 'api/queue/image?id="' in body
+    assert 'api/queue/image?id=" + encodeURIComponent(j.id) + "&t="' not in body
+
+
+def test_image_src_remembered_on_selection(client, monkeypatch):
+    # Picking a remote image persists its host + directory so the picker
+    # reopens there next time (until Clear resets it).
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    _login(client)
+    r = client.post("/cozy/api/image-src", json={"host": "box", "path": "/pics/cats"})
+    assert r.status_code == 200
+    assert client._store.image_src == ("box", "/pics/cats")

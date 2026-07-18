@@ -69,6 +69,21 @@
         .pdb-row select { flex:1; }
         .pdb-row input[type="text"] { flex:1; padding:8px 10px; font-size:0.95rem; border:2px solid #ced4da; border-radius:6px; }
         .pdb-path { font-size:0.85rem; color:#495057; margin-top:6px; word-break:break-all; }
+        .tabs { display:flex; gap:8px; margin-bottom:16px; }
+        .tab { margin-top:0; width:auto; flex:1; padding:10px; background:#e9ecef; color:#495057; box-shadow:none; }
+        .tab.active { background:linear-gradient(135deg,#4e73df 0%,#224abe 100%); color:#fff; }
+        .eta { margin-top:8px; text-align:center; color:#4e73df; font-weight:600; display:none; }
+        .q-list { list-style:none; margin:8px 0; padding:0; }
+        .q-list li { display:flex; align-items:center; gap:8px; padding:8px 10px; border:1px solid #e9ecef; border-radius:6px; margin-bottom:6px; }
+        .q-list li .q-meta { flex:1; font-size:0.9rem; }
+        .q-list li .q-eta { color:#4e73df; font-weight:600; font-size:0.85rem; }
+        .q-list li button { margin-top:0; width:auto; padding:4px 10px; background:#6c757d; box-shadow:none; }
+        .q-total { margin:12px 0; text-align:center; font-weight:700; color:#224abe; }
+        .q-results { display:flex; flex-wrap:wrap; gap:10px; margin:8px 0; }
+        .q-results figure { margin:0; width:120px; text-align:center; font-size:0.8rem; }
+        .q-results img { width:120px; border-radius:6px; cursor:pointer; }
+        .q-results .failed { color:#721c24; }
+        #q-bar { height:100%; width:0%; background:linear-gradient(135deg,#4e73df,#224abe); transition:width 0.3s; }
     </style>
 </head>
 
@@ -79,6 +94,13 @@
             <a class="logout" href="{{ urlroot }}logout">Log out</a>
         </div>
 
+        {% if has_queue %}
+        <div class="tabs">
+            <button type="button" class="tab active" id="tab-single">Single</button>
+            <button type="button" class="tab" id="tab-queue">Queue</button>
+        </div>
+        {% endif %}
+        <div id="single-view">
         <label for="workflow">Workflow</label>
         <select id="workflow">
             {% for w in workflows %}
@@ -136,6 +158,7 @@
         </div>
 
         <div class="progress" id="progress"><div id="bar"></div></div>
+        <div class="eta" id="eta"></div>
         <div class="error" id="error"></div>
         <div class="duration" id="duration"></div>
 
@@ -151,6 +174,32 @@
         <div class="flush-row">
             <button class="flush" id="flush">Flush</button>
         </div>
+        </div><!-- /single-view -->
+        {% if has_queue %}
+        <div id="queue-view" style="display:none;">
+            <label>Pending</label>
+            <ul id="q-pending" class="q-list"></ul>
+            <button type="button" class="secondary" id="q-add">+ Add current settings as job</button>
+
+            <div id="q-running" style="display:none;">
+                <label>Running</label>
+                <div id="q-running-label"></div>
+                <div class="progress" style="display:block;"><div id="q-bar"></div></div>
+                <div class="eta" id="q-running-eta" style="display:block;"></div>
+            </div>
+            <div class="eta" id="q-gap" style="display:none;"></div>
+
+            <div class="q-total" id="q-total"></div>
+            <div class="prompt-actions">
+                <button type="button" class="secondary" id="q-start">Start queue</button>
+                <button type="button" class="secondary" id="q-stop">Stop</button>
+            </div>
+
+            <label>Results</label>
+            <div id="q-results" class="q-results"></div>
+            <button type="button" class="secondary" id="q-clear">Clear results</button>
+        </div>
+        {% endif %}
     </div>
 
     <div class="modal-backdrop" id="modal-backdrop" style="display:none;">
@@ -177,7 +226,7 @@
         const WORKFLOW_KINDS = {{ workflow_kinds | tojson }};
         const initialImage = {{ state.image | tojson }};
         const KNOWN_HOSTS = {{ state.known_hosts | tojson }};
-        const IMAGE_SRC = {{ state.image_src | tojson }};
+        let IMAGE_SRC = {{ state.image_src | tojson }};
         const workflowSel = document.getElementById("workflow");
         const imagePicker = document.getElementById("image-picker");
         const imageSelect = document.getElementById("image-select");
@@ -243,6 +292,7 @@
         const progress = document.getElementById("progress");
         const errorBox = document.getElementById("error");
         const durationBox = document.getElementById("duration");
+        const etaBox = document.getElementById("eta");
         const genBtn = document.getElementById("generate");
         const output = document.getElementById("output");
         let polling = null;
@@ -264,6 +314,12 @@
             durationBox.style.display = t ? "block" : "none";
         }
 
+        function showEta(secs) {
+            const t = (secs == null) ? "" : formatDuration(secs);
+            etaBox.textContent = t ? "~" + t + " remaining" : "";
+            etaBox.style.display = t ? "block" : "none";
+        }
+
         function setRunning(on) {
             genBtn.disabled = on;
             progress.style.display = on ? "block" : "none";
@@ -279,8 +335,10 @@
             if (s.status === "running") {
                 setRunning(true);
                 bar.style.width = (s.progress || 0) + "%";
+                showEta(s.eta);
             } else {
                 setRunning(false);
+                showEta(null);
                 if (polling) { clearInterval(polling); polling = null; }
                 if (s.status === "failed") showError(s.error || "generation failed");
                 else showError("");
@@ -319,6 +377,7 @@
             await fetch(root + "api/clear", { method: "POST" });
             document.getElementById("prompt").value = "";
             imageSelect.value = ""; clearRemoteImage(); updatePreview();
+            IMAGE_SRC = null;  // Clear also forgets the remembered remote source dir
             output.innerHTML = ""; showError(""); showDuration(null); bar.style.width = "0%";
             // The server reset the prompt-DB selection too; re-sync the
             // library panel if it has been opened.
@@ -637,10 +696,21 @@
             previewWrap.style.display = "block";
         }
 
+        // Remember the host + source directory a remote image was picked from,
+        // so the picker reopens there next time. Persisted server-side (survives
+        // reload) until the Clear button resets it.
+        function rememberImageSrc(host, path) {
+            IMAGE_SRC = { host: host, path: parentPath(path) };
+            fetch(root + "api/image-src", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ host: host, path: IMAGE_SRC.path }),
+            });
+        }
+
         remoteImageBtn.addEventListener("click", () => {
             openBrowser((IMAGE_SRC && IMAGE_SRC.host) || "", "img",
                         (IMAGE_SRC && IMAGE_SRC.path) || "",
-                        (h, p) => setRemoteImage(h, p));
+                        (h, p) => { rememberImageSrc(h, p); setRemoteImage(h, p); });
         });
 
         // Restore state on load: show image if present, resume polling if running.
@@ -652,6 +722,155 @@
             if (hasImage) { showImage(); showDuration(st.duration); }
             applyKind();
         })();
+
+        const tabSingle = document.getElementById("tab-single");
+        const tabQueue = document.getElementById("tab-queue");
+        const singleView = document.getElementById("single-view");
+        const queueView = document.getElementById("queue-view");
+        let queuePoll = null;
+        function startQueuePolling() {
+            if (!queuePoll) queuePoll = setInterval(refreshQueue, 1000);
+            refreshQueue();
+        }
+        function stopQueuePolling() {
+            if (queuePoll) { clearInterval(queuePoll); queuePoll = null; }
+        }
+
+        function currentJobPayload() {
+            const payload = {
+                workflow: workflowSel.value,
+                prompt: document.getElementById("prompt").value,
+                width: parseInt(document.getElementById("width").value, 10),
+                height: parseInt(document.getElementById("height").value, 10),
+            };
+            if (currentKind() === "edit") {
+                if (remoteImage) payload.remote_image = remoteImage;
+                else payload.image = imageSelect.value;
+            }
+            return payload;
+        }
+
+        async function refreshQueue() {
+            let s;
+            try {
+                const r = await fetch(root + "api/queue/status");
+                if (!r.ok) return;
+                s = await r.json();
+            } catch (e) { return; }
+            const pend = document.getElementById("q-pending");
+            pend.innerHTML = "";
+            s.jobs.forEach((j, i) => {
+                const li = document.createElement("li");
+                const meta = document.createElement("div");
+                meta.className = "q-meta";
+                meta.textContent = (i + 1) + ". " + j.workflow + "  " +
+                    (j.kind === "edit" ? "(edit)" : (j.width + "x" + j.height)) +
+                    "  “" + (j.prompt || "").slice(0, 30) + "”";
+                const eta = document.createElement("span");
+                eta.className = "q-eta";
+                eta.textContent = j.eta == null ? "" : "~" + formatDuration(j.eta);
+                const rm = document.createElement("button");
+                rm.textContent = "✖";
+                rm.addEventListener("click", async () => {
+                    await fetch(root + "api/queue/remove", {
+                        method: "POST", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ id: j.id }) });
+                    refreshQueue();
+                });
+                li.append(meta, eta, rm);
+                pend.appendChild(li);
+            });
+            const running = document.getElementById("q-running");
+            const gap = document.getElementById("q-gap");
+            if (s.current) {
+                running.style.display = "block";
+                document.getElementById("q-running-label").textContent =
+                    s.current.workflow + "  “" + (s.current.prompt || "").slice(0, 30) + "”";
+                document.getElementById("q-bar").style.width = (s.current.progress || 0) + "%";
+                document.getElementById("q-running-eta").textContent =
+                    s.current.eta == null ? "" : "~" + formatDuration(s.current.eta) + " remaining";
+            } else {
+                running.style.display = "none";
+            }
+            if (s.gap_until && !s.current) {
+                gap.style.display = "block";
+                gap.textContent = "Resting before next job…";
+            } else {
+                gap.style.display = "none";
+            }
+            document.getElementById("q-total").textContent =
+                s.total_eta == null ? "" : "Total remaining: ~" + formatDuration(s.total_eta);
+            renderResults(s.results);
+        }
+
+        // Result images live at immutable, id-based paths, so their URLs are
+        // stable (no cache-buster). Only rebuild the gallery when the result
+        // set actually changes; otherwise leave the already-loaded thumbnails
+        // in place so they persist across the 1s poll instead of reloading.
+        let lastResultsSig = null;
+        function renderResults(results) {
+            const sig = results.map(j => j.id + ":" + (j.has_image ? 1 : 0) + ":" + j.status).join(",");
+            if (sig === lastResultsSig) return;
+            lastResultsSig = sig;
+            const res = document.getElementById("q-results");
+            res.innerHTML = "";
+            results.forEach(j => {
+                const fig = document.createElement("figure");
+                if (j.has_image) {
+                    const img = document.createElement("img");
+                    img.src = root + "api/queue/image?id=" + encodeURIComponent(j.id);
+                    img.addEventListener("click", () => window.open(img.src, "_blank"));
+                    fig.appendChild(img);
+                }
+                const cap = document.createElement("figcaption");
+                if (j.status === "failed") {
+                    cap.className = "failed";
+                    cap.textContent = j.workflow + " FAILED: " + (j.error || "error");
+                } else {
+                    cap.textContent = j.workflow + "  " + formatDuration(j.duration);
+                }
+                fig.appendChild(cap);
+                res.appendChild(fig);
+            });
+        }
+
+        const qAdd = document.getElementById("q-add");
+        if (qAdd) {
+            qAdd.addEventListener("click", async () => {
+                showError("");
+                const r = await fetch(root + "api/queue/add", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(currentJobPayload()) });
+                if (!r.ok) { const e = await r.json().catch(() => ({})); showError(e.error || "add failed"); return; }
+                refreshQueue();
+            });
+            document.getElementById("q-start").addEventListener("click", async () => {
+                showError("");
+                const r = await fetch(root + "api/queue/start", { method: "POST" });
+                if (r.status === 409) { showError("Busy — a single job is running."); return; }
+                refreshQueue();
+            });
+            document.getElementById("q-stop").addEventListener("click", async () => {
+                await fetch(root + "api/queue/stop", { method: "POST" });
+                refreshQueue();
+            });
+            document.getElementById("q-clear").addEventListener("click", async () => {
+                await fetch(root + "api/queue/clear", { method: "POST" });
+                refreshQueue();
+            });
+        }
+        if (tabSingle) {
+            function showTab(which) {
+                const q = which === "queue";
+                singleView.style.display = q ? "none" : "block";
+                queueView.style.display = q ? "block" : "none";
+                tabQueue.classList.toggle("active", q);
+                tabSingle.classList.toggle("active", !q);
+                if (q) startQueuePolling(); else stopQueuePolling();
+            }
+            tabSingle.addEventListener("click", () => showTab("single"));
+            tabQueue.addEventListener("click", () => showTab("queue"));
+        }
     </script>
 </body>
 
