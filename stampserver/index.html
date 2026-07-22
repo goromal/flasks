@@ -125,6 +125,34 @@
             gap: 10px;
         }
 
+        .whitespace-inputs {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .ws-field {
+            display: flex;
+            flex-direction: column;
+            font-weight: 500;
+            font-size: 0.85rem;
+            color: #495057;
+            flex: 1;
+            min-width: 70px;
+        }
+
+        .ws-input {
+            margin-top: 4px;
+            padding: 10px;
+            border: 2px solid #d1d3e2;
+            border-radius: 8px;
+            font-size: 1rem;
+            min-height: 44px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
         .btn {
             padding: 14px 24px;
             margin: 0;
@@ -666,6 +694,20 @@
             </div>
 
             <div class="control-group">
+                <label>Add Whitespace</label>
+                <div class="whitespace-inputs">
+                    <label class="ws-field">Top<input type="number" id="wsTop" class="ws-input" min="0" value="0" oninput="updateWhitespacePreview()"></label>
+                    <label class="ws-field">Bottom<input type="number" id="wsBottom" class="ws-input" min="0" value="0" oninput="updateWhitespacePreview()"></label>
+                    <label class="ws-field">Left<input type="number" id="wsLeft" class="ws-input" min="0" value="0" oninput="updateWhitespacePreview()"></label>
+                    <label class="ws-field">Right<input type="number" id="wsRight" class="ws-input" min="0" value="0" oninput="updateWhitespacePreview()"></label>
+                </div>
+                <div class="btn-group">
+                    <button class="btn" onclick="applyWhitespace()">Apply Whitespace</button>
+                    <button class="btn" onclick="resetWhitespace()">Reset</button>
+                </div>
+            </div>
+
+            <div class="control-group">
                 <label>File Actions</label>
                 <div class="btn-group">
                     <button class="btn" onclick="duplicateImage()">Duplicate Image</button>
@@ -894,6 +936,68 @@
             .then(data => {
                 if (data.success) {
                     showStatus('Image rotated successfully!');
+                    const img = document.getElementById('currentImage');
+                    img.src = img.src.split('?')[0] + '?t=' + Date.now();
+                } else {
+                    showStatus('Error: ' + (data.error || 'Unknown error'), true);
+                }
+            })
+            .catch(err => showStatus('Error: ' + err.message, true));
+        }
+
+        // ===== IMAGE WHITESPACE =====
+
+        function readWhitespaceValues() {
+            const v = id => Math.max(0, parseInt(document.getElementById(id).value, 10) || 0);
+            return { top: v('wsTop'), bottom: v('wsBottom'), left: v('wsLeft'), right: v('wsRight') };
+        }
+
+        function updateWhitespacePreview() {
+            const img = document.getElementById('currentImage');
+            const container = img ? img.closest('.image-container') : null;
+            if (!img || !container) return;
+            const { top, bottom, left, right } = readWhitespaceValues();
+            // Scale requested source pixels to the displayed image size so the
+            // previewed white border matches what will be baked in.
+            const scaleX = img.naturalWidth ? img.clientWidth / img.naturalWidth : 0;
+            const scaleY = img.naturalHeight ? img.clientHeight / img.naturalHeight : 0;
+            container.style.paddingTop = (top * scaleY) + 'px';
+            container.style.paddingBottom = (bottom * scaleY) + 'px';
+            container.style.paddingLeft = (left * scaleX) + 'px';
+            container.style.paddingRight = (right * scaleX) + 'px';
+        }
+
+        function clearWhitespacePreview() {
+            const img = document.getElementById('currentImage');
+            const container = img ? img.closest('.image-container') : null;
+            if (container) container.style.padding = '';
+        }
+
+        function resetWhitespace() {
+            ['wsTop', 'wsBottom', 'wsLeft', 'wsRight'].forEach(id => {
+                document.getElementById(id).value = 0;
+            });
+            clearWhitespacePreview();
+        }
+
+        function applyWhitespace() {
+            const filename = getCurrentFilename();
+            if (!filename) { showStatus('Error: Could not determine filename', true); return; }
+            const vals = readWhitespaceValues();
+            if (vals.top + vals.bottom + vals.left + vals.right === 0) {
+                showStatus('Error: Enter at least one whitespace value', true);
+                return;
+            }
+            fetch('{{ urlroot }}api/pad-image', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filename, top: vals.top, bottom: vals.bottom, left: vals.left, right: vals.right })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    showStatus('Whitespace added successfully!');
+                    resetWhitespace();
                     const img = document.getElementById('currentImage');
                     img.src = img.src.split('?')[0] + '?t=' + Date.now();
                 } else {

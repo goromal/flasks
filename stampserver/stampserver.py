@@ -14,6 +14,7 @@ from random import shuffle
 from datetime import timedelta
 from PIL import Image
 import cv2
+from imageops import pad_image
 
 STAMP_RE = re.compile(r"stamped\.(.*?)\.")
 
@@ -425,6 +426,52 @@ def crop_image_api():
         # Save to temporary file first, then rename (atomic operation)
         temp_path = file_path + '.tmp'
         cropped_img.save(temp_path, format=img_format)
+        os.replace(temp_path, file_path)
+
+        return flask.jsonify({'success': True})
+
+    except Exception as e:
+        return flask.jsonify({'success': False, 'error': str(e)}), 500
+
+@bp.route("/api/pad-image", methods=["POST"])
+@flask_login.login_required
+def pad_image_api():
+    try:
+        data = flask.request.get_json()
+        filename = data.get('filename')
+
+        if not filename:
+            return flask.jsonify({'success': False, 'error': 'Missing filename parameter'}), 400
+
+        file_path = os.path.join(RES_DIR, filename)
+
+        if not os.path.exists(file_path):
+            return flask.jsonify({'success': False, 'error': f'File not found: {filename}'}), 404
+
+        if not filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+            return flask.jsonify({'success': False, 'error': 'Only image files (PNG, JPEG) can be padded'}), 400
+
+        try:
+            top = int(data.get('top', 0))
+            bottom = int(data.get('bottom', 0))
+            left = int(data.get('left', 0))
+            right = int(data.get('right', 0))
+        except (TypeError, ValueError):
+            return flask.jsonify({'success': False, 'error': 'Padding values must be integers'}), 400
+
+        if min(top, bottom, left, right) < 0:
+            return flask.jsonify({'success': False, 'error': 'Padding values must be non-negative'}), 400
+
+        if (top + bottom + left + right) == 0:
+            return flask.jsonify({'success': False, 'error': 'At least one side must be greater than zero'}), 400
+
+        img_format = 'JPEG' if filename.lower().endswith(('.jpg', '.jpeg')) else 'PNG'
+
+        img = Image.open(file_path)
+        padded = pad_image(img, top, bottom, left, right)
+
+        temp_path = file_path + '.tmp'
+        padded.save(temp_path, format=img_format)
         os.replace(temp_path, file_path)
 
         return flask.jsonify({'success': True})
