@@ -14,7 +14,7 @@ from random import shuffle
 from datetime import timedelta
 from PIL import Image
 import cv2
-from imageops import pad_image
+from imageops import pad_image, fill_white_rect
 
 STAMP_RE = re.compile(r"stamped\.(.*?)\.")
 
@@ -426,6 +426,57 @@ def crop_image_api():
         # Save to temporary file first, then rename (atomic operation)
         temp_path = file_path + '.tmp'
         cropped_img.save(temp_path, format=img_format)
+        os.replace(temp_path, file_path)
+
+        return flask.jsonify({'success': True})
+
+    except Exception as e:
+        return flask.jsonify({'success': False, 'error': str(e)}), 500
+
+@bp.route("/api/whiteout-image", methods=["POST"])
+@flask_login.login_required
+def whiteout_image_api():
+    try:
+        data = flask.request.get_json()
+        filename = data.get('filename')
+        x = data.get('x')
+        y = data.get('y')
+        width = data.get('width')
+        height = data.get('height')
+
+        if not filename or x is None or y is None or width is None or height is None:
+            return flask.jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+
+        # Construct full file path
+        file_path = os.path.join(RES_DIR, filename)
+
+        # Validate file exists and is an image
+        if not os.path.exists(file_path):
+            return flask.jsonify({'success': False, 'error': f'File not found: {filename}'}), 404
+
+        if not filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+            return flask.jsonify({'success': False, 'error': 'Only image files (PNG, JPEG) can be edited'}), 400
+
+        img_format = 'JPEG' if filename.lower().endswith(('.jpg', '.jpeg')) else 'PNG'
+
+        # Validate rectangle parameters
+        if width <= 0 or height <= 0:
+            return flask.jsonify({'success': False, 'error': 'Width and height must be positive'}), 400
+
+        # Open image with Pillow
+        img = Image.open(file_path)
+        img_width, img_height = img.size
+
+        # Validate rectangle bounds
+        if x < 0 or y < 0 or x + width > img_width or y + height > img_height:
+            return flask.jsonify({'success': False, 'error': f'Rectangle bounds exceed image dimensions ({img_width}x{img_height})'}), 400
+
+        # Fill the selected rectangle with opaque white
+        whited_img = fill_white_rect(img, x, y, width, height)
+
+        # Save to temporary file first, then rename (atomic operation)
+        temp_path = file_path + '.tmp'
+        whited_img.save(temp_path, format=img_format)
         os.replace(temp_path, file_path)
 
         return flask.jsonify({'success': True})
