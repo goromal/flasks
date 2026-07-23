@@ -232,13 +232,35 @@
         }
 
         #cropCanvas,
-        #videoCropCanvas {
+        #videoCropCanvas,
+        #whiteRectCanvas {
             position: absolute;
             top: 0;
             left: 0;
             cursor: default;
             display: none;
             touch-action: none;
+        }
+
+        /* Floating action bar: guarantees Apply/Cancel are reachable on phones,
+           where a full-bleed crop/draw canvas (touch-action: none) otherwise
+           swallows every touch and traps the user with no way to scroll to the
+           in-panel buttons. Shown only on narrow screens; desktop is unchanged. */
+        #floatingActions {
+            display: none;
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 1000;
+            gap: 12px;
+            padding: 12px;
+            background: rgba(33, 37, 41, 0.95);
+            box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.3);
+        }
+        #floatingActions .btn { flex: 1; margin: 0; }
+        @media (max-width: 768px) {
+            #floatingActions.active { display: flex; }
         }
 
         .crop-info {
@@ -694,6 +716,18 @@
             </div>
 
             <div class="control-group">
+                <label>White Rectangle</label>
+                <div class="btn-group">
+                    <button class="btn" id="enableWhiteRectBtn" onclick="enableWhiteRectMode()">Draw White Rect</button>
+                    <button class="btn btn-danger" id="applyWhiteRectBtn" onclick="applyWhiteRect()" style="display: none;">Apply White Rect</button>
+                    <button class="btn" id="cancelWhiteRectBtn" onclick="cancelWhiteRect()" style="display: none;">Cancel</button>
+                </div>
+                <div id="whiteRectInfo" class="crop-info" style="display: none;">
+                    Drag edges or corners to position the white rectangle
+                </div>
+            </div>
+
+            <div class="control-group">
                 <label>Add Whitespace</label>
                 <div class="whitespace-inputs">
                     <label class="ws-field">Top<input type="number" id="wsTop" class="ws-input" min="0" value="0" oninput="updateWhitespacePreview()"></label>
@@ -718,6 +752,7 @@
         <div class="image-container">
             <img id="currentImage" src="{{ file }}" alt="" />
             <canvas id="cropCanvas"></canvas>
+            <canvas id="whiteRectCanvas"></canvas>
         </div>
 
         {% elif ftype == "MP4" %}
@@ -1007,6 +1042,27 @@
             .catch(err => showStatus('Error: ' + err.message, true));
         }
 
+        // ===== FLOATING ACTION BAR (mobile) =====
+        // A fixed Apply/Cancel bar so the user is never trapped when a full-bleed
+        // crop/draw canvas (touch-action: none) covers the whole phone screen.
+        // Visible only on narrow screens via CSS; desktop uses the in-panel buttons.
+
+        function showFloatingActions(applyFn, cancelFn, applyLabel) {
+            const bar = document.getElementById('floatingActions');
+            if (!bar) return;
+            const apply = document.getElementById('floatApplyBtn');
+            const cancel = document.getElementById('floatCancelBtn');
+            apply.textContent = applyLabel || 'Apply';
+            apply.onclick = applyFn;
+            cancel.onclick = cancelFn;
+            bar.classList.add('active');
+        }
+
+        function hideFloatingActions() {
+            const bar = document.getElementById('floatingActions');
+            if (bar) bar.classList.remove('active');
+        }
+
         // ===== IMAGE CROP =====
 
         let cropMode = false;
@@ -1029,6 +1085,7 @@
         }
 
         function enableCropMode() {
+            if (whiteRectMode) cancelWhiteRect();
             cropMode = true;
             const canvas = document.getElementById('cropCanvas');
             canvas.style.display = 'block';
@@ -1041,6 +1098,7 @@
             cropRect = { left: margin, top: margin, right: canvas.width - margin, bottom: canvas.height - margin };
             setupCropHandlers();
             drawCropOverlay();
+            showFloatingActions(applyCrop, cancelCrop, 'Apply Crop');
             const img = document.getElementById('currentImage');
             if (img && typeof ResizeObserver !== 'undefined') {
                 resizeObserver = new ResizeObserver(() => {
@@ -1064,6 +1122,7 @@
             document.getElementById('enableCropBtn').style.display = 'inline-block';
             document.getElementById('applyCropBtn').style.display = 'none';
             document.getElementById('cancelCropBtn').style.display = 'none';
+            hideFloatingActions();
             if (resizeObserver) { resizeObserver.disconnect(); resizeObserver = null; }
         }
 
@@ -1202,6 +1261,113 @@
             .catch(err => showStatus('Error: ' + err.message, true));
         }
 
+        // ===== WHITE RECTANGLE =====
+        // Same drag/resize machinery as crop, but the overlay previews an opaque
+        // white fill (what gets baked in) and Apply paints one rectangle white.
+
+        let whiteRectMode = false;
+        let whiteRect = { left: 0, top: 0, right: 0, bottom: 0 };
+        let whiteRectResizeObserver = null;
+
+        function updateWhiteRectCanvasSize() {
+            const img = document.getElementById('currentImage');
+            const canvas = document.getElementById('whiteRectCanvas');
+            if (img && canvas) { canvas.width = img.offsetWidth; canvas.height = img.offsetHeight; }
+        }
+
+        function enableWhiteRectMode() {
+            if (cropMode) cancelCrop();
+            whiteRectMode = true;
+            const canvas = document.getElementById('whiteRectCanvas');
+            canvas.style.display = 'block';
+            document.getElementById('whiteRectInfo').style.display = 'block';
+            document.getElementById('enableWhiteRectBtn').style.display = 'none';
+            document.getElementById('applyWhiteRectBtn').style.display = 'inline-block';
+            document.getElementById('cancelWhiteRectBtn').style.display = 'inline-block';
+            updateWhiteRectCanvasSize();
+            const margin = Math.min(canvas.width, canvas.height) * 0.1;
+            whiteRect = { left: margin, top: margin, right: canvas.width - margin, bottom: canvas.height - margin };
+            makeCropHandlers(canvas, () => whiteRect, r => { whiteRect = r; drawWhiteRectOverlay(); });
+            drawWhiteRectOverlay();
+            showFloatingActions(applyWhiteRect, cancelWhiteRect, 'Apply White Rect');
+            const img = document.getElementById('currentImage');
+            if (img && typeof ResizeObserver !== 'undefined') {
+                whiteRectResizeObserver = new ResizeObserver(() => {
+                    if (!whiteRectMode) return;
+                    const ow = canvas.width, oh = canvas.height;
+                    updateWhiteRectCanvasSize();
+                    whiteRect = { left: whiteRect.left/ow*canvas.width, top: whiteRect.top/oh*canvas.height,
+                                  right: whiteRect.right/ow*canvas.width, bottom: whiteRect.bottom/oh*canvas.height };
+                    drawWhiteRectOverlay();
+                });
+                whiteRectResizeObserver.observe(img);
+            }
+        }
+
+        function cancelWhiteRect() {
+            whiteRectMode = false;
+            const canvas = document.getElementById('whiteRectCanvas');
+            canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+            canvas.style.display = 'none';
+            document.getElementById('whiteRectInfo').style.display = 'none';
+            document.getElementById('enableWhiteRectBtn').style.display = 'inline-block';
+            document.getElementById('applyWhiteRectBtn').style.display = 'none';
+            document.getElementById('cancelWhiteRectBtn').style.display = 'none';
+            hideFloatingActions();
+            if (whiteRectResizeObserver) { whiteRectResizeObserver.disconnect(); whiteRectResizeObserver = null; }
+        }
+
+        function drawWhiteRectOverlay() {
+            const canvas = document.getElementById('whiteRectCanvas');
+            const ctx = canvas.getContext('2d');
+            const rect = whiteRect;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const w = rect.right-rect.left, h = rect.bottom-rect.top;
+            // Semi-transparent white fill previews what will be painted opaque white.
+            ctx.fillStyle = 'rgba(255,255,255,0.7)';
+            ctx.fillRect(rect.left, rect.top, w, h);
+            // Red border/handles so the selection stays visible against white.
+            ctx.strokeStyle = '#ff3b30'; ctx.lineWidth = 2;
+            ctx.strokeRect(rect.left, rect.top, w, h);
+            const hs = 20;
+            [[rect.left,rect.top],[rect.right,rect.top],[rect.left,rect.bottom],[rect.right,rect.bottom]].forEach(([cx,cy]) => {
+                ctx.fillStyle='white'; ctx.strokeStyle='#ff3b30'; ctx.lineWidth=2;
+                ctx.beginPath(); ctx.arc(cx,cy,hs/2,0,2*Math.PI); ctx.fill(); ctx.stroke();
+            });
+            [[(rect.left+rect.right)/2,rect.top],[(rect.left+rect.right)/2,rect.bottom],
+             [rect.left,(rect.top+rect.bottom)/2],[rect.right,(rect.top+rect.bottom)/2]].forEach(([cx,cy]) => {
+                ctx.beginPath(); ctx.arc(cx,cy,hs/3,0,2*Math.PI); ctx.fill(); ctx.stroke();
+            });
+            const infoEl = document.getElementById('whiteRectInfo');
+            if (infoEl) infoEl.textContent = `White rectangle: ${Math.round(w)}x${Math.round(h)} at (${Math.round(rect.left)}, ${Math.round(rect.top)})`;
+        }
+
+        function applyWhiteRect() {
+            const filename = getCurrentFilename();
+            if (!filename) { showStatus('Error: Could not determine filename', true); return; }
+            const img = document.getElementById('currentImage');
+            const scaleX = img.naturalWidth/img.offsetWidth, scaleY = img.naturalHeight/img.offsetHeight;
+            const w = whiteRect.right-whiteRect.left, h = whiteRect.bottom-whiteRect.top;
+            if (w<=0||h<=0) { showStatus('Error: Invalid rectangle', true); return; }
+            const ax=Math.floor(whiteRect.left*scaleX), ay=Math.floor(whiteRect.top*scaleY);
+            const aw=Math.floor(whiteRect.right*scaleX)-ax, ah=Math.floor(whiteRect.bottom*scaleY)-ay;
+            const sx=Math.max(0,Math.min(ax,img.naturalWidth-1)), sy=Math.max(0,Math.min(ay,img.naturalHeight-1));
+            const sw=Math.max(1,Math.min(aw,img.naturalWidth-sx)), sh=Math.max(1,Math.min(ah,img.naturalHeight-sy));
+            fetch('{{ urlroot }}api/whiteout-image', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filename, x: sx, y: sy, width: sw, height: sh })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    showStatus('White rectangle applied!'); cancelWhiteRect();
+                    const img = document.getElementById('currentImage');
+                    img.src = img.src.split('?')[0] + '?t=' + Date.now();
+                } else { showStatus('Error: ' + (data.error || 'Unknown error'), true); }
+            })
+            .catch(err => showStatus('Error: ' + err.message, true));
+        }
+
         // ===== IMAGE DUPLICATE =====
 
         function duplicateImage() {
@@ -1304,6 +1470,7 @@
             videoCropRect = { left: margin, top: margin, right: canvas.width-margin, bottom: canvas.height-margin };
             makeCropHandlers(canvas, () => videoCropRect, r => { videoCropRect = r; drawVideoCropOverlay(); });
             drawVideoCropOverlay();
+            showFloatingActions(applyVideoCrop, cancelVideoCrop, 'Apply Crop');
             const video = document.getElementById('currentVideo');
             if (video && typeof ResizeObserver !== 'undefined') {
                 videoResizeObserver = new ResizeObserver(() => {
@@ -1328,6 +1495,7 @@
             document.getElementById('enableVideoCropBtn').style.display = 'inline-block';
             document.getElementById('applyVideoCropBtn').style.display = 'none';
             document.getElementById('cancelVideoCropBtn').style.display = 'none';
+            hideFloatingActions();
             if (videoResizeObserver) { videoResizeObserver.disconnect(); videoResizeObserver = null; }
         }
 
@@ -1600,6 +1768,11 @@
         loadStampablesInfo();
         {% endif %}
     </script>
+
+    <div id="floatingActions">
+        <button class="btn btn-danger" id="floatApplyBtn">Apply</button>
+        <button class="btn" id="floatCancelBtn">Cancel</button>
+    </div>
 </body>
 
 </html>

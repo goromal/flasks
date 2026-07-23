@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from PIL import Image
 
-from imageops import pad_image
+from imageops import pad_image, fill_white_rect
 
 
 def _corner_is_white(img, xy):
@@ -39,8 +39,28 @@ def test_pad_zero_is_noop_size():
     assert out.size == (5, 5)
 
 
+def test_white_rect_rgb_fills_and_preserves_size():
+    img = Image.new("RGB", (10, 10), (0, 0, 0))
+    out = fill_white_rect(img, x=2, y=3, width=4, height=5)
+    assert out.size == (10, 10)                  # size unchanged
+    assert out.getpixel((2, 3)) == (255, 255, 255)   # rect top-left white
+    assert out.getpixel((5, 7)) == (255, 255, 255)   # rect bottom-right white
+    assert out.getpixel((0, 0)) == (0, 0, 0)         # outside untouched
+    assert out.getpixel((6, 3)) == (0, 0, 0)         # just right of rect untouched
+
+
+def test_white_rect_rgba_preserves_mode_and_opaque_fill():
+    img = Image.new("RGBA", (8, 8), (10, 20, 30, 255))
+    out = fill_white_rect(img, x=1, y=1, width=2, height=2)
+    assert out.mode == "RGBA"
+    assert out.getpixel((1, 1)) == (255, 255, 255, 255)
+    assert out.getpixel((0, 0)) == (10, 20, 30, 255)
+
+
 if __name__ == "__main__":
     test_pad_rgb_grows_and_white()
     test_pad_rgba_preserves_mode_and_white_fill()
     test_pad_zero_is_noop_size()
+    test_white_rect_rgb_fills_and_preserves_size()
+    test_white_rect_rgba_preserves_mode_and_opaque_fill()
     print("OK")
