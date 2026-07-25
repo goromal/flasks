@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mail</title>
+<link rel="icon" type="image/svg+xml" href="{{ subdomain }}/favicon.svg">
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --ink: #1c2230; --muted: #6b7280;
+    --line: #e3e6ea; --accent: #2563eb; --accent-ink: #fff;
+    --danger: #dc2626; --ok: #16a34a; --warn: #d97706;
+    --bar-track: #e9edf2; --bar-dl: #2563eb; --bar-ap: #16a34a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --panel: #1a1e26; --ink: #e6e9ef; --muted: #97a0b0;
+      --line: #2a303b; --accent: #3b82f6; --accent-ink: #fff;
+      --bar-track: #232a34;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+         background: var(--bg); color: var(--ink); }
+  header { padding: 16px 20px; border-bottom: 1px solid var(--line);
+           display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 18px; margin: 0; font-weight: 650; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 20px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+           padding: 18px; margin-bottom: 20px; }
+  .panel h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em;
+              color: var(--muted); margin: 0 0 14px; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--panel);
+           color: var(--ink); border-radius: 8px; padding: 7px 13px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button.danger { color: var(--danger); border-color: var(--danger); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  input, select { font: inherit; padding: 6px 9px; border: 1px solid var(--line);
+                  border-radius: 7px; background: var(--bg); color: var(--ink); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 13px; }
+  .row-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .muted { color: var(--muted); }
+  .bar-wrap { margin: 10px 0; }
+  .bar-label { display: flex; justify-content: space-between; font-size: 13px;
+               color: var(--muted); margin-bottom: 4px; }
+  .bar { height: 10px; border-radius: 999px; background: var(--bar-track); overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0; transition: width .15s linear; }
+  .bar.dl > i { background: var(--bar-dl); }
+  .bar.ap > i { background: var(--bar-ap); }
+  #run-status { font-size: 13px; font-weight: 600; }
+  .s-running { color: var(--warn); } .s-success { color: var(--ok); }
+  .s-failed { color: var(--danger); } .s-cancelled { color: var(--muted); }
+  #log { font: 12px/1.4 ui-monospace, Menlo, monospace; background: var(--bg);
+         border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+         height: 130px; overflow: auto; white-space: pre-wrap; margin-top: 10px; }
+  .arch-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+  .arch-toolbar input[type=search] { flex: 1; min-width: 160px; }
+  #arch-list { max-height: 340px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+  .arch-item { display: flex; gap: 10px; align-items: center; padding: 8px 10px;
+               border-bottom: 1px solid var(--line); cursor: pointer; }
+  .arch-item:hover { background: var(--bg); }
+  .arch-item .meta { flex: 1; min-width: 0; }
+  .arch-item .subj { font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .arch-item .sub { font-size: 12px; color: var(--muted); white-space: nowrap;
+                    overflow: hidden; text-overflow: ellipsis; }
+  .tag { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--bar-track);
+         color: var(--muted); }
+  #viewer { width: 100%; height: 420px; border: 1px solid var(--line); border-radius: 8px;
+            margin-top: 12px; background: #fff; display: none; }
+  .count { font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header><h1>&#9993; Mail</h1><span class="muted">GMail cleaner &amp; archive</span></header>
+<div class="wrap">
+
+  <!-- CONFIG EDITOR -->
+  <section class="panel">
+    <h2>Cleaning rules</h2>
+    <table>
+      <thead><tr><th>Label name</th><th style="width:150px">Action</th><th style="width:40px"></th></tr></thead>
+      <tbody id="rules-body"></tbody>
+    </table>
+    <div class="row-actions">
+      <button id="add-rule">+ Add rule</button>
+      <button id="save-rules" class="primary">Save rules</button>
+      <span id="save-msg" class="muted"></span>
+    </div>
+  </section>
+
+  <!-- RUN CONTROLS -->
+  <section class="panel">
+    <h2>Run cleaner</h2>
+    <div class="arch-toolbar">
+      <label>Process latest
+        <input id="num-messages" type="number" min="1" value="1000" style="width:90px">
+      messages</label>
+      <button id="start-btn" class="primary">Start</button>
+      <button id="cancel-btn" class="danger" disabled>Cancel</button>
+      <span id="run-status" class="s-idle">idle</span>
+    </div>
+    <div class="bar-wrap">
+      <div class="bar-label"><span>Download</span><span id="dl-pct">0 / 0</span></div>
+      <div class="bar dl"><i id="dl-bar"></i></div>
+    </div>
+    <div class="bar-wrap">
+      <div class="bar-label"><span>Apply actions</span><span id="ap-pct">0 / 0</span></div>
+      <div class="bar ap"><i id="ap-bar"></i></div>
+    </div>
+    <div id="log"></div>
+  </section>
+
+  <!-- ARCHIVE INDEX -->
+  <section class="panel">
+    <h2>Archived email</h2>
+    <div class="arch-toolbar">
+      <input id="arch-q" type="search" placeholder="Filter (fuzzy, no wildcards needed)&hellip;">
+      <button id="arch-refresh">Refresh</button>
+      <button id="arch-selall">Select all</button>
+      <button id="arch-del" class="danger">Delete selected</button>
+    </div>
+    <div class="count" id="arch-count"></div>
+    <div id="arch-list"></div>
+    <iframe id="viewer" sandbox="allow-same-origin"></iframe>
+  </section>
+
+</div>
+<script>
+const subdomain = "{{ subdomain }}";
+const $ = id => document.getElementById(id);
+const ACTIONS = { D: "Delete", R: "Mark as read", A: "Archive" };
+
+// ── Config editor ───────────────────────────────────────────────────────────
+function addRuleRow(label = "", action = "A") {
+  const tr = document.createElement("tr");
+  const opts = Object.entries(ACTIONS)
+    .map(([v, t]) => `<option value="${v}" ${v === action ? "selected" : ""}>${t}</option>`).join("");
+  tr.innerHTML = `<td><input class="r-label" value="" placeholder="e.g. Newsletters"></td>
+    <td><select class="r-action">${opts}</select></td>
+    <td><button class="r-del" title="remove">&times;</button></td>`;
+  tr.querySelector(".r-label").value = label;
+  tr.querySelector(".r-del").onclick = () => tr.remove();
+  $("rules-body").appendChild(tr);
+}
+function loadRules() {
+  fetch(subdomain + "/config").then(r => r.json()).then(d => {
+    $("rules-body").innerHTML = "";
+    (d.rules || []).forEach(r => addRuleRow(r.label, r.action));
+    if (!(d.rules || []).length) addRuleRow();
+  });
+}
+$("add-rule").onclick = () => addRuleRow();
+$("save-rules").onclick = () => {
+  const rules = [...document.querySelectorAll("#rules-body tr")].map(tr => ({
+    label: tr.querySelector(".r-label").value.trim(),
+    action: tr.querySelector(".r-action").value,
+  })).filter(r => r.label);
+  $("save-msg").textContent = "Saving…";
+  fetch(subdomain + "/config", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ rules }),
+  }).then(r => r.json().then(d => ({ ok: r.ok, d }))).then(({ ok, d }) => {
+    $("save-msg").textContent = ok ? (d.warning || "Saved.") : ("Error: " + (d.error || "failed"));
+    $("save-msg").className = ok ? "muted" : "s-failed";
+  });
+};
+
+// ── Run controls (persist across refresh via /status + /stream) ─────────────
+let es = null, lastRunId = null;
+function setStatus(s) {
+  const el = $("run-status");
+  el.textContent = s;
+  el.className = "s-" + s;
+}
+function setBar(barId, pctId, i, n) {
+  $(barId).style.width = (n ? (100 * i / n) : 0) + "%";
+  $(pctId).textContent = i + " / " + n;
+}
+function resetBars() { setBar("dl-bar", "dl-pct", 0, 0); setBar("ap-bar", "ap-pct", 0, 0); }
+function appendLog(t) { const l = $("log"); l.textContent += t + "\n"; l.scrollTop = l.scrollHeight; }
+
+function handleEvent(data) {
+  if (data === "[DONE]") { es && es.close(); es = null; pollStatus(); loadArchives(); return; }
+  let obj = null;
+  try { obj = JSON.parse(data); } catch (e) {}
+  if (obj && obj.stage === "download") { setBar("dl-bar", "dl-pct", obj.i, obj.n); return; }
+  if (obj && obj.stage === "apply") { setBar("ap-bar", "ap-pct", obj.i, obj.n); return; }
+  if (obj && obj.summary) { appendLog("Summary: " + JSON.stringify(obj.summary)); return; }
+  appendLog(data);
+}
+function attachStream() {
+  if (es) es.close();
+  es = new EventSource(subdomain + "/stream");
+  es.onmessage = ev => handleEvent(ev.data);
+  es.onerror = () => { pollStatus(); };
+}
+function running(on) {
+  $("start-btn").disabled = on;
+  $("cancel-btn").disabled = !on;
+  $("num-messages").disabled = on;
+}
+function pollStatus() {
+  fetch(subdomain + "/status").then(r => r.json()).then(d => {
+    setStatus(d.status || "idle");
+    running(d.running);
+    if (d.running && d.run_id && d.run_id !== lastRunId && !es) {
+      lastRunId = d.run_id; attachStream();
+    }
+  }).catch(() => {});
+}
+$("start-btn").onclick = () => {
+  const n = parseInt($("num-messages").value) || 1000;
+  localStorage.setItem("mail-num", n);
+  resetBars(); $("log").textContent = ""; setStatus("running"); running(true);
+  fetch(subdomain + "/run", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ num_messages: n }),
+  }).then(r => r.json().then(d => ({ ok: r.ok, d }))).then(({ ok, d }) => {
+    if (!ok) { appendLog("[" + (d.error || "could not start") + "]"); pollStatus(); return; }
+    lastRunId = d.run_id; attachStream();
+  });
+};
+$("cancel-btn").onclick = () => {
+  if (!confirm("Cancel the running clean job?")) return;
+  fetch(subdomain + "/cancel", { method: "POST" }).then(() => pollStatus());
+};
+
+// ── Archive index ───────────────────────────────────────────────────────────
+let archEntries = [];
+const RENDER_CAP = 300;   // keep the DOM light for very long lists
+function renderArchives() {
+  const list = $("arch-list");
+  list.innerHTML = "";
+  const shown = archEntries.slice(0, RENDER_CAP);
+  const frag = document.createDocumentFragment();
+  shown.forEach(e => {
+    const row = document.createElement("div");
+    row.className = "arch-item";
+    row.innerHTML = `<input type="checkbox" class="a-chk">
+      <span class="tag"></span>
+      <div class="meta"><div class="subj"></div><div class="sub"></div></div>`;
+    row.querySelector(".tag").textContent = e.label;
+    row.querySelector(".subj").textContent = e.subject || "(no subject)";
+    row.querySelector(".sub").textContent = (e.sender || "") + "  ·  " + (e.date || "");
+    row.querySelector(".a-chk").onclick = ev => ev.stopPropagation();
+    row.dataset.label = e.label; row.dataset.id = e.id;
+    row.onclick = () => {
+      const v = $("viewer");
+      v.src = subdomain + "/archives/view?label=" + encodeURIComponent(e.label) +
+              "&id=" + encodeURIComponent(e.id);
+      v.style.display = "block";
+    };
+    frag.appendChild(row);
+  });
+  list.appendChild(frag);
+  $("arch-count").textContent = archEntries.length +
+    " archived" + (archEntries.length > RENDER_CAP ? " (showing first " + RENDER_CAP + " — refine filter)" : "");
+}
+let archTimer = null;
+function loadArchives() {
+  const q = $("arch-q").value;
+  fetch(subdomain + "/archives?q=" + encodeURIComponent(q))
+    .then(r => r.json()).then(d => { archEntries = d.entries || []; renderArchives(); });
+}
+$("arch-q").addEventListener("input", () => {
+  clearTimeout(archTimer); archTimer = setTimeout(loadArchives, 150);
+});
+$("arch-refresh").onclick = loadArchives;
+$("arch-selall").onclick = () => {
+  document.querySelectorAll("#arch-list .a-chk").forEach(c => c.checked = true);
+};
+$("arch-del").onclick = () => {
+  const items = [...document.querySelectorAll("#arch-list .arch-item")]
+    .filter(r => r.querySelector(".a-chk").checked)
+    .map(r => ({ label: r.dataset.label, id: r.dataset.id }));
+  if (!items.length) { alert("Nothing selected."); return; }
+  if (!confirm("Permanently delete " + items.length + " archived email(s)?")) return;
+  fetch(subdomain + "/archives/delete", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items }),
+  }).then(r => r.json()).then(() => { $("viewer").style.display = "none"; loadArchives(); });
+};
+
+// ── Init ────────────────────────────────────────────────────────────────────
+const savedN = localStorage.getItem("mail-num");
+if (savedN) $("num-messages").value = savedN;
+loadRules();
+loadArchives();
+pollStatus();
+setInterval(pollStatus, 4000);
+</script>
+</body>
+</html>
