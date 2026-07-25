@@ -31,6 +31,15 @@ import math
 # under a new short name, then reference that name from the workflow's
 # "_cozy.resolution". Workflows with no "_cozy" key are submitted with the exact
 # dimensions requested -- flexible models pay no tax.
+#
+# A second policy shape, _SQUARE_POLICIES, serves workflows that must emit a
+# square image and that upscale *after* generation (e.g. imggen2-quantized:
+# Qwen-Image + ESRGAN on a Jetson's unified memory). There the requested size
+# names the final output: it is forced square, snapped to a legal output size,
+# and the graph's latent node is driven at output // base_divisor so the model
+# runs at a memory-safe fraction of what it ultimately emits. The returned
+# width/height stay the output size (what the user sees and what ETA records),
+# because the workflow's fixed upscale chain turns base_divisor:1 back into 1:1.
 
 _RESOLUTION_BUCKETS = {
     # SDXL's standard training resolutions, each ~1.05 MP (the area SDXL was
@@ -48,6 +57,31 @@ _RESOLUTION_BUCKETS = {
         (640, 1536),
     ],
 }
+
+# Square-output policies. Unlike the aspect-ratio buckets above (which vary the
+# shape at a fixed area), these force a 1:1 output and let the user pick its size
+# from a legal set. base_divisor is the factor the workflow upscales by after
+# generation, so its latent node is driven at output // base_divisor -- the knob
+# that keeps a memory-hungry model within budget while still emitting a large
+# final image.
+_SQUARE_POLICIES = {
+    "square2x": {
+        "outputs": [1024, 1280, 1536, 1792, 2048],
+        "base_divisor": 2,
+    },
+}
+
+
+def snap_to_square(width, height, sizes):
+    """Force a request square and return the nearest legal square side.
+
+    The side is taken from the *smaller* requested dimension, so the output
+    square fits within the box the user asked for, then matched to the closest
+    ``sizes`` entry. Aspect ratio is discarded because square-output workflows
+    only ever emit 1:1 images.
+    """
+    side = min(width, height)
+    return min(sizes, key=lambda s: abs(s - side))
 
 
 def snap_to_bucket(width, height, buckets):
@@ -128,11 +162,18 @@ def load_and_patch(path, prompt, width, height, image=None):
         return graph, width, height
 
     policy = cozy_meta.get("resolution")
+    node_width, node_height = width, height
     if policy is not None:
-        buckets = _RESOLUTION_BUCKETS.get(policy)
-        if buckets is None:
-            raise ValueError("unknown resolution policy: %r" % (policy,))
-        width, height = snap_to_bucket(width, height, buckets)
+        square = _SQUARE_POLICIES.get(policy)
+        if square is not None:
+            width = height = snap_to_square(width, height, square["outputs"])
+            node_width = node_height = width // square["base_divisor"]
+        else:
+            buckets = _RESOLUTION_BUCKETS.get(policy)
+            if buckets is None:
+                raise ValueError("unknown resolution policy: %r" % (policy,))
+            width, height = snap_to_bucket(width, height, buckets)
+            node_width, node_height = width, height
 
     pnode = _find_prompt_node(graph)
     if pnode is None:
@@ -142,7 +183,7 @@ def load_and_patch(path, prompt, width, height, image=None):
     dnode = _find_dimension_node(graph)
     if dnode is None:
         raise ValueError("no width/height node found")
-    graph[dnode]["inputs"]["width"] = width
-    graph[dnode]["inputs"]["height"] = height
+    graph[dnode]["inputs"]["width"] = node_width
+    graph[dnode]["inputs"]["height"] = node_height
 
     return graph, width, height

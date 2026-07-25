@@ -65,6 +65,40 @@ def test_resolution_policy_snaps_and_strips_meta(tmp_path):
     assert "_cozy" not in graph
 
 
+def _square_graph():
+    """Minimal graph opting into the 'square2x' policy: a latent node the harness
+    drives at output // 2, standing in for imggen2-quantized's base + ESRGAN
+    upscale chain."""
+    return {
+        "_cozy": {"resolution": "square2x"},
+        "1": {"class_type": "PrimitiveStringMultiline",
+              "_meta": {"title": "Prompt"}, "inputs": {"value": ""}},
+        "2": {"class_type": "EmptySD3LatentImage",
+              "inputs": {"width": 0, "height": 0, "batch_size": 1}},
+    }
+
+
+def test_snap_to_square_uses_smaller_dimension():
+    sizes = workflows._SQUARE_POLICIES["square2x"]["outputs"]
+    assert workflows.snap_to_square(2000, 2000, sizes) == 2048
+    assert workflows.snap_to_square(1300, 1300, sizes) == 1280
+    # A non-square request fits within its smaller side (900), not its area.
+    assert workflows.snap_to_square(900, 1600, sizes) == 1024
+    assert workflows.snap_to_square(1600, 900, sizes) == 1024
+
+
+def test_square_policy_reports_output_but_drives_half(tmp_path):
+    p = tmp_path / "square.api.json"
+    p.write_text(json.dumps(_square_graph()))
+    graph, width, height = workflows.load_and_patch(str(p), "a cat", 2000, 2000)
+    # The user-facing size (and ETA pixels) is the final square output...
+    assert (width, height) == (2048, 2048)
+    # ...but the latent node runs at output // base_divisor for memory safety.
+    assert graph["2"]["inputs"]["width"] == 1024
+    assert graph["2"]["inputs"]["height"] == 1024
+    assert "_cozy" not in graph
+
+
 def test_unknown_resolution_policy_raises(tmp_path):
     g = _sdxl_graph()
     g["_cozy"]["resolution"] = "bogus"
