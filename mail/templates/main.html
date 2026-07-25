@@ -180,7 +180,16 @@ function setBar(barId, pctId, i, n) {
   $(pctId).textContent = i + " / " + n;
 }
 function resetBars() { setBar("dl-bar", "dl-pct", 0, 0); setBar("ap-bar", "ap-pct", 0, 0); }
-function appendLog(t) { const l = $("log"); l.textContent += t + "\n"; l.scrollTop = l.scrollHeight; }
+const LOG_MAX_LINES = 500;   // cap the on-screen log so long runs don't bloat the DOM
+let logLines = [];
+function clearLog() { logLines = []; $("log").textContent = ""; }
+function appendLog(t) {
+  logLines.push(t);
+  if (logLines.length > LOG_MAX_LINES) logLines.splice(0, logLines.length - LOG_MAX_LINES);
+  const l = $("log");
+  l.textContent = logLines.join("\n") + "\n";
+  l.scrollTop = l.scrollHeight;
+}
 
 function handleEvent(data) {
   if (data === "[DONE]") { es && es.close(); es = null; pollStatus(); loadArchives(); return; }
@@ -214,7 +223,7 @@ function pollStatus() {
 $("start-btn").onclick = () => {
   const n = parseInt($("num-messages").value) || 1000;
   localStorage.setItem("mail-num", n);
-  resetBars(); $("log").textContent = ""; setStatus("running"); running(true);
+  resetBars(); clearLog(); setStatus("running"); running(true);
   fetch(subdomain + "/run", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ num_messages: n }),
