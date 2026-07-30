@@ -5,6 +5,10 @@ filesystem; anything else is an ssh destination reached as the invoking
 user. BatchMode is forced, so keys must already be in place and nothing
 ever prompts; a host that needs interaction fails fast instead.
 
+An "<name>.local" mDNS host is transparently redirected to the direct LAN
+IP in ~/secrets/<name>/i.txt when that file exists (mDNS doesn't propagate
+over the VPN); without it the .local name is used as-is. See _resolve_host.
+
 Remote operations shell out to ssh with argv arrays (never a local shell)
 and quote the remote-side paths with shlex.quote. Remote file names
 containing newlines are not supported (the listing is parsed line-wise).
@@ -16,6 +20,11 @@ import subprocess
 
 _SSH_OPTS = ("-o", "BatchMode=yes", "-o", "ConnectTimeout=5")
 _TIMEOUT_SECS = 60
+
+# mDNS names don't propagate over the VPN, so an "<name>.local" host can be
+# redirected to a direct LAN IP recorded in ~/secrets/<name>/i.txt.
+_SECRETS_DIR = os.path.expanduser("~/secrets")
+_MDNS_SUFFIX = ".local"
 
 
 class WormholeError(Exception):
@@ -41,8 +50,29 @@ def _run(argv, input_bytes=None):
     return proc.stdout
 
 
+def _resolve_host(host):
+    """Map an mDNS name to a direct LAN IP when a hint file exists.
+
+    For "<name>.local", if ~/secrets/<name>/i.txt holds an IP, return it
+    (needed over the VPN, where mDNS doesn't propagate). Otherwise return
+    host unchanged -- a bare .local name (mDNS on the LAN), a plain host,
+    or an IP.
+    """
+    if not host or not host.endswith(_MDNS_SUFFIX):
+        return host
+    name = host[: -len(_MDNS_SUFFIX)]
+    if not name:
+        return host
+    try:
+        with open(os.path.join(_SECRETS_DIR, name, "i.txt")) as f:
+            ip = f.readline().strip()
+    except OSError:
+        return host
+    return ip or host
+
+
 def _ssh(host, remote_cmd, input_bytes=None):
-    return _run(["ssh", *_SSH_OPTS, "--", host, remote_cmd], input_bytes)
+    return _run(["ssh", *_SSH_OPTS, "--", _resolve_host(host), remote_cmd], input_bytes)
 
 
 def home(host):

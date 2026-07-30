@@ -113,5 +113,57 @@ class RunHelper(unittest.TestCase):
             wormhole._run(["definitely-not-a-real-binary-xyz"])
 
 
+class ResolveHost(unittest.TestCase):
+    """<name>.local is redirected to ~/secrets/<name>/i.txt when present."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        patcher = mock.patch.object(wormhole, "_SECRETS_DIR", self._tmp.name)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _write_hint(self, name, contents):
+        d = os.path.join(self._tmp.name, name)
+        os.mkdir(d)
+        with open(os.path.join(d, "i.txt"), "w") as f:
+            f.write(contents)
+
+    def test_local_with_hint_resolves_to_ip(self):
+        self._write_hint("box", "192.168.50.86\n")
+        self.assertEqual(wormhole._resolve_host("box.local"), "192.168.50.86")
+
+    def test_local_without_hint_unchanged(self):
+        self.assertEqual(wormhole._resolve_host("box.local"), "box.local")
+
+    def test_empty_hint_falls_back(self):
+        self._write_hint("box", "\n")
+        self.assertEqual(wormhole._resolve_host("box.local"), "box.local")
+
+    def test_multiline_hint_uses_first_line(self):
+        self._write_hint("box", "192.168.50.86\n# comment\n")
+        self.assertEqual(wormhole._resolve_host("box.local"), "192.168.50.86")
+
+    def test_non_local_host_untouched(self):
+        self._write_hint("box", "192.168.50.86\n")
+        self.assertEqual(wormhole._resolve_host("box"), "box")
+        self.assertEqual(wormhole._resolve_host("10.0.0.5"), "10.0.0.5")
+
+    def test_empty_and_none_host_untouched(self):
+        self.assertEqual(wormhole._resolve_host(""), "")
+        self.assertIsNone(wormhole._resolve_host(None))
+
+    def test_bare_suffix_untouched(self):
+        self.assertEqual(wormhole._resolve_host(".local"), ".local")
+
+    def test_ssh_argv_carries_resolved_ip(self):
+        self._write_hint("box", "192.168.50.86\n")
+        with mock.patch.object(wormhole, "_run", return_value=b"/home/andrew\n") as run:
+            wormhole.home("box.local")
+        run.assert_called_once_with(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+             "--", "192.168.50.86", "pwd"], None)
+
+
 if __name__ == "__main__":
     unittest.main()
