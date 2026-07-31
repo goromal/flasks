@@ -212,6 +212,51 @@ def _create_rote(title):
     return flask.redirect(flask.url_for(url_for_prefix + "index"))
 
 
+def _generate_and_store_exam(title, exam_type, source_texts, topics, num_q, emphasis, source_material):
+    """Compose the prompt from source_texts (+ optional topics), generate the
+    exam via Claude, and store it. Returns the number of questions. Raises on
+    Claude/JSON failure (callers flash + redirect)."""
+    combined = "\n\n".join(source_texts)[:40000]
+    emphasis_block = f"\n\nPoints of emphasis:\n{emphasis}" if emphasis else ""
+    topics_block = ("Topics to draw on from your own knowledge:\n"
+                    + "\n".join(f"- {t}" for t in topics)) if topics else ""
+
+    if source_texts and topics:
+        material_section = f"Source material:\n{combined}\n\n{topics_block}"
+    elif source_texts:
+        material_section = f"Source material:\n{combined}"
+    else:
+        material_section = topics_block
+
+    if exam_type == "multiple_choice":
+        prompt = (
+            f"You are a quiz master. Create exactly {num_q} multiple choice questions based on the following. "
+            f"For topic-based questions, draw on your own knowledge.\n\n{material_section}{emphasis_block}\n\n"
+            f"Return ONLY a valid JSON array, no other text:\n"
+            f'[{{"question":"...","options":["a","b","c","d"],"correct":0}}]\n\n'
+            f'"correct" is the 0-based index of the correct option.'
+        )
+    else:  # short_answer
+        prompt = (
+            f"You are a quiz master. Create exactly {num_q} short answer questions based on the following. "
+            f"For topic-based questions, draw on your own knowledge.\n\n{material_section}{emphasis_block}\n\n"
+            f'Return ONLY a valid JSON array of question strings, no other text:\n["question 1","question 2",...]'
+        )
+
+    response = call_claude(prompt)
+    questions = extract_json_array(response)
+    content = json.dumps({"questions": questions})
+
+    db = get_db()
+    db.execute(
+        "INSERT INTO exams (title, exam_type, created_at, source_material, content) VALUES (?,?,?,?,?)",
+        (title, exam_type, now_str(), source_material, content),
+    )
+    db.commit()
+    db.close()
+    return len(questions)
+
+
 def _create_ai_exam(title, exam_type):
     urls = [u.strip() for u in flask.request.form.get("urls", "").splitlines() if u.strip()]
     emphasis = flask.request.form.get("emphasis", "").strip()
@@ -244,54 +289,15 @@ def _create_ai_exam(title, exam_type):
         flask.flash("No source material provided (URLs, files, pasted text, or topics required).")
         return flask.redirect(flask.url_for(url_for_prefix + "create"))
 
-    combined = "\n\n".join(source_texts)[:40000]
-    emphasis_block = f"\n\nPoints of emphasis:\n{emphasis}" if emphasis else ""
-
-    if topics:
-        topics_block = "Topics to draw on from your own knowledge:\n" + "\n".join(f"- {t}" for t in topics)
-    else:
-        topics_block = ""
-
-    if source_texts and topics:
-        material_section = f"Source material:\n{combined}\n\n{topics_block}"
-    elif source_texts:
-        material_section = f"Source material:\n{combined}"
-    else:
-        material_section = topics_block
-
-    if exam_type == "multiple_choice":
-        prompt = (
-            f"You are a quiz master. Create exactly {num_q} multiple choice questions based on the following. "
-            f"For topic-based questions, draw on your own knowledge.\n\n{material_section}{emphasis_block}\n\n"
-            f"Return ONLY a valid JSON array, no other text:\n"
-            f'[{{"question":"...","options":["a","b","c","d"],"correct":0}}]\n\n'
-            f'"correct" is the 0-based index of the correct option.'
-        )
-    else:  # short_answer
-        prompt = (
-            f"You are a quiz master. Create exactly {num_q} short answer questions based on the following. "
-            f"For topic-based questions, draw on your own knowledge.\n\n{material_section}{emphasis_block}\n\n"
-            f'Return ONLY a valid JSON array of question strings, no other text:\n["question 1","question 2",...]'
-        )
-
+    source_material = json.dumps({"urls": urls, "emphasis": emphasis})
     try:
-        response = call_claude(prompt)
-        questions = extract_json_array(response)
+        count = _generate_and_store_exam(
+            title, exam_type, source_texts, topics, num_q, emphasis, source_material)
     except Exception as exc:
         flask.flash(f"Error generating exam via AI: {exc}")
         return flask.redirect(flask.url_for(url_for_prefix + "create"))
 
-    source_material = json.dumps({"urls": urls, "emphasis": emphasis})
-    content = json.dumps({"questions": questions})
-
-    db = get_db()
-    db.execute(
-        "INSERT INTO exams (title, exam_type, created_at, source_material, content) VALUES (?,?,?,?,?)",
-        (title, exam_type, now_str(), source_material, content),
-    )
-    db.commit()
-    db.close()
-    flask.flash(f"Exam created with {len(questions)} questions.")
+    flask.flash(f"Exam created with {count} questions.")
     return flask.redirect(flask.url_for(url_for_prefix + "index"))
 
 
