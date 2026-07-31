@@ -8,6 +8,10 @@ import difflib
 from datetime import datetime
 import flask
 
+import wormhole
+import folio_source
+import folio_fetch
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--port", action="store", type=int, default=5757, help="Port to run the server on")
 parser.add_argument("--subdomain", action="store", type=str, default="/tester", help="Subdomain for a reverse proxy")
@@ -27,6 +31,7 @@ bp = flask.Blueprint("tester", __name__, url_prefix=args.subdomain)
 PWD = os.getcwd()
 DATA_DIR = args.data_dir if (args.data_dir and args.data_dir.startswith("/")) else os.path.join(PWD, args.data_dir or "tester_data")
 DB_PATH = args.db_path if (args.db_path and args.db_path.startswith("/")) else os.path.join(DATA_DIR, "tester.db")
+FOLIO_CACHE_DIR = os.path.join(DATA_DIR, "folio_cache")
 
 app = flask.Flask(__name__)
 
@@ -183,6 +188,132 @@ def create():
     else:
         flask.flash("Invalid exam type.")
         return flask.redirect(flask.url_for(url_for_prefix + "create"))
+
+
+# ── folio-sourced exams ─────────────────────────────────────────────────────
+
+@bp.route("/create-folio", methods=["GET"])
+def create_folio():
+    return flask.render_template("create_folio.html", urlroot=urlroot)
+
+
+@bp.route("/api/folio/browse", methods=["GET"])
+def folio_browse():
+    host = (flask.request.args.get("host") or "").strip()
+    path = flask.request.args.get("path") or ""
+    try:
+        if not path:
+            path = wormhole.home(host)
+        entries = wormhole.list_dir(host, path)
+    except wormhole.WormholeError as e:
+        return flask.jsonify({"error": str(e)}), 502
+    return flask.jsonify({
+        "path": path,
+        "dirs": [e["name"] for e in entries if e["is_dir"]],
+        "files": [e["name"] for e in entries
+                  if not e["is_dir"] and e["name"].lower().endswith(".db")],
+    })
+
+
+@bp.route("/api/folio/books", methods=["POST"])
+def folio_books():
+    data = flask.request.get_json(force=True, silent=True) or {}
+    host = (data.get("host") or "").strip()
+    path = (data.get("path") or "").strip()
+    if not path:
+        return flask.jsonify({"error": "path required"}), 400
+    try:
+        db_path = folio_fetch.fetch_db(host, path, FOLIO_CACHE_DIR)
+    except wormhole.WormholeError as e:
+        return flask.jsonify({"error": str(e)}), 502
+    conn = folio_source.open_ro(db_path)
+    try:
+        return flask.jsonify({"books": folio_source.list_books(conn)})
+    finally:
+        conn.close()
+
+
+@bp.route("/api/folio/chapters", methods=["POST"])
+def folio_chapters():
+    data = flask.request.get_json(force=True, silent=True) or {}
+    host = (data.get("host") or "").strip()
+    path = (data.get("path") or "").strip()
+    book_id = data.get("book_id")
+    if not path or book_id is None:
+        return flask.jsonify({"error": "path and book_id required"}), 400
+    db_path = folio_fetch.cache_path(host, path, FOLIO_CACHE_DIR)
+    if not os.path.exists(db_path):
+        try:
+            db_path = folio_fetch.fetch_db(host, path, FOLIO_CACHE_DIR)
+        except wormhole.WormholeError as e:
+            return flask.jsonify({"error": str(e)}), 502
+    conn = folio_source.open_ro(db_path)
+    try:
+        return flask.jsonify({"chapters": folio_source.list_chapters(conn, int(book_id))})
+    finally:
+        conn.close()
+
+
+@bp.route("/create-folio", methods=["POST"])
+def create_folio_submit():
+    form = flask.request.form
+    exam_type = form.get("exam_type", "")
+    title = form.get("title", "").strip()
+    host = (form.get("host") or "").strip()
+    path = (form.get("path") or "").strip()
+    book_id = form.get("book_id", "")
+    emphasis = form.get("emphasis", "").strip()
+    include_chapter_text = form.get("include_chapter_text") == "on"
+    chapter_ids = [int(c) for c in form.getlist("chapter_ids") if c.strip().isdigit()]
+    try:
+        num_q = max(1, min(30, int(form.get("num_questions", "10"))))
+    except ValueError:
+        num_q = 10
+
+    if not title:
+        flask.flash("Title is required.")
+        return flask.redirect(flask.url_for(url_for_prefix + "create_folio"))
+    if exam_type not in ("multiple_choice", "short_answer"):
+        flask.flash("Invalid exam type.")
+        return flask.redirect(flask.url_for(url_for_prefix + "create_folio"))
+    if not path or not book_id:
+        flask.flash("Select a folio database and a book.")
+        return flask.redirect(flask.url_for(url_for_prefix + "create_folio"))
+
+    try:
+        db_path = folio_fetch.cache_path(host, path, FOLIO_CACHE_DIR)
+        if not os.path.exists(db_path):
+            db_path = folio_fetch.fetch_db(host, path, FOLIO_CACHE_DIR)
+    except wormhole.WormholeError as e:
+        flask.flash(f"Could not read folio database: {e}")
+        return flask.redirect(flask.url_for(url_for_prefix + "create_folio"))
+
+    conn = folio_source.open_ro(db_path)
+    try:
+        materials = folio_source.gather_study_materials(
+            conn, int(book_id), chapter_ids=chapter_ids,
+            include_block_text=include_chapter_text)
+    finally:
+        conn.close()
+    source_texts = folio_source.compose_source_texts(materials)
+
+    if not source_texts:
+        flask.flash("This book/chapter selection has no study materials to build an exam from.")
+        return flask.redirect(flask.url_for(url_for_prefix + "create_folio"))
+
+    source_material = json.dumps({"folio": {
+        "host": host, "db_path": path, "book_id": int(book_id),
+        "book_title": materials["book"]["title"], "chapters": chapter_ids,
+        "include_chapter_text": include_chapter_text}, "emphasis": emphasis})
+    try:
+        count = _generate_and_store_exam(
+            title, exam_type, source_texts, [], num_q, emphasis, source_material)
+    except Exception as exc:
+        flask.flash(f"Error generating exam via AI: {exc}")
+        return flask.redirect(flask.url_for(url_for_prefix + "create_folio"))
+
+    flask.flash(f"Exam created from “{materials['book']['title']}” with {count} questions.")
+    return flask.redirect(flask.url_for(url_for_prefix + "index"))
 
 
 def _create_rote(title):
