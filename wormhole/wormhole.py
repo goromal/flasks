@@ -14,9 +14,11 @@ and quote the remote-side paths with shlex.quote. Remote file names
 containing newlines are not supported (the listing is parsed line-wise).
 """
 
+import argparse
 import os
 import shlex
 import subprocess
+import sys
 
 _SSH_OPTS = ("-o", "BatchMode=yes", "-o", "ConnectTimeout=5")
 _TIMEOUT_SECS = 60
@@ -50,7 +52,7 @@ def _run(argv, input_bytes=None):
     return proc.stdout
 
 
-def _resolve_host(host):
+def resolve_host(host):
     """Map an mDNS name to a direct LAN IP when a hint file exists.
 
     For "<name>.local", if ~/secrets/<name>/i.txt holds an IP, return it
@@ -72,7 +74,7 @@ def _resolve_host(host):
 
 
 def _ssh(host, remote_cmd, input_bytes=None):
-    return _run(["ssh", *_SSH_OPTS, "--", _resolve_host(host), remote_cmd], input_bytes)
+    return _run(["ssh", *_SSH_OPTS, "--", resolve_host(host), remote_cmd], input_bytes)
 
 
 def home(host):
@@ -158,3 +160,48 @@ def delete_file(host, path):
             raise WormholeError(str(e))
     else:
         _ssh(host, "rm -- " + shlex.quote(path))
+
+
+# --- Command-line interface -------------------------------------------------
+#
+# Currently a single `resolve` subcommand, kept under an argparse subparser so
+# wormhole's file operations can be surfaced later without breaking the CLI.
+# Each future subcommand would take a "host:path" address (empty host = local)
+# and reuse resolve_host() for the .local -> LAN IP mapping:
+#
+#     wormhole ls   <host>:<path>   -> list_dir / list_files
+#     wormhole cat  <host>:<path>   -> read_file  (to stdout)
+#     wormhole put  <host>:<path>   -> write_file (from stdin)
+#     wormhole rm   <host>:<path>   -> delete_file
+
+
+def _cli_resolve(args):
+    """`wormhole resolve <host>`: print the resolved LAN IP, or echo <host>."""
+    print(resolve_host(args.host))
+    return 0
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="wormhole",
+        description="Local-or-remote (ssh) file operations over the LAN/VPN.")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_resolve = sub.add_parser(
+        "resolve",
+        help="Resolve <name>.local to its LAN IP via ~/secrets/<name>/i.txt, "
+             "or echo the host back unchanged.")
+    p_resolve.add_argument(
+        "host", help="host to resolve, e.g. jetson-orin-nx.local")
+    p_resolve.set_defaults(func=_cli_resolve)
+
+    args = parser.parse_args(argv)
+    try:
+        return args.func(args)
+    except WormholeError as e:
+        print("wormhole: " + str(e), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

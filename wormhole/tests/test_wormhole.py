@@ -131,30 +131,30 @@ class ResolveHost(unittest.TestCase):
 
     def test_local_with_hint_resolves_to_ip(self):
         self._write_hint("box", "192.168.50.86\n")
-        self.assertEqual(wormhole._resolve_host("box.local"), "192.168.50.86")
+        self.assertEqual(wormhole.resolve_host("box.local"), "192.168.50.86")
 
     def test_local_without_hint_unchanged(self):
-        self.assertEqual(wormhole._resolve_host("box.local"), "box.local")
+        self.assertEqual(wormhole.resolve_host("box.local"), "box.local")
 
     def test_empty_hint_falls_back(self):
         self._write_hint("box", "\n")
-        self.assertEqual(wormhole._resolve_host("box.local"), "box.local")
+        self.assertEqual(wormhole.resolve_host("box.local"), "box.local")
 
     def test_multiline_hint_uses_first_line(self):
         self._write_hint("box", "192.168.50.86\n# comment\n")
-        self.assertEqual(wormhole._resolve_host("box.local"), "192.168.50.86")
+        self.assertEqual(wormhole.resolve_host("box.local"), "192.168.50.86")
 
     def test_non_local_host_untouched(self):
         self._write_hint("box", "192.168.50.86\n")
-        self.assertEqual(wormhole._resolve_host("box"), "box")
-        self.assertEqual(wormhole._resolve_host("10.0.0.5"), "10.0.0.5")
+        self.assertEqual(wormhole.resolve_host("box"), "box")
+        self.assertEqual(wormhole.resolve_host("10.0.0.5"), "10.0.0.5")
 
     def test_empty_and_none_host_untouched(self):
-        self.assertEqual(wormhole._resolve_host(""), "")
-        self.assertIsNone(wormhole._resolve_host(None))
+        self.assertEqual(wormhole.resolve_host(""), "")
+        self.assertIsNone(wormhole.resolve_host(None))
 
     def test_bare_suffix_untouched(self):
-        self.assertEqual(wormhole._resolve_host(".local"), ".local")
+        self.assertEqual(wormhole.resolve_host(".local"), ".local")
 
     def test_ssh_argv_carries_resolved_ip(self):
         self._write_hint("box", "192.168.50.86\n")
@@ -163,6 +163,39 @@ class ResolveHost(unittest.TestCase):
         run.assert_called_once_with(
             ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
              "--", "192.168.50.86", "pwd"], None)
+
+
+class Cli(unittest.TestCase):
+    """`wormhole resolve` prints the resolved host and exits 0."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        patcher = mock.patch.object(wormhole, "_SECRETS_DIR", self._tmp.name)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _run_cli(self, argv):
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = wormhole.main(argv)
+        return rc, buf.getvalue().strip()
+
+    def test_resolve_with_hint_prints_ip(self):
+        d = os.path.join(self._tmp.name, "box")
+        os.mkdir(d)
+        with open(os.path.join(d, "i.txt"), "w") as f:
+            f.write("192.168.50.86\n")
+        self.assertEqual(self._run_cli(["resolve", "box.local"]), (0, "192.168.50.86"))
+
+    def test_resolve_without_hint_echoes_host(self):
+        self.assertEqual(self._run_cli(["resolve", "box.local"]), (0, "box.local"))
+
+    def test_no_subcommand_errors(self):
+        with self.assertRaises(SystemExit):
+            wormhole.main([])
 
 
 if __name__ == "__main__":
