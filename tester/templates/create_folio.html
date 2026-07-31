@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Tester — Exam from a Book{% endblock %}
+{% block extra_head %}
+<style>
+    .hint { font-size: 0.82em; color: #888; margin: -8px 0 14px; }
+    .browser { border: 1px solid #ddd; border-radius: 6px; padding: 10px;
+        max-height: 220px; overflow-y: auto; margin-bottom: 10px; background: #fafafa; }
+    .browser .entry { padding: 4px 6px; cursor: pointer; border-radius: 4px; }
+    .browser .entry:hover { background: #eef; }
+    .browser .dir::before { content: "📁 "; }
+    .browser .db::before { content: "📗 "; }
+    .chips label { display: inline-block; margin: 2px 8px 2px 0; font-weight: normal; }
+    #chapters { margin: 6px 0 12px; }
+    .muted { color: #888; }
+</style>
+{% endblock %}
+{% block content %}
+<h1>Create Exam from a Book</h1>
+<div class="card">
+  <form method="post" action="{{ urlroot }}create-folio" id="folio-form">
+    <label for="host">Host <span class="muted">(blank = this machine)</span></label>
+    <input type="text" id="host" name="host" placeholder="e.g. blank for local, or myhost.local">
+
+    <label>folio database</label>
+    <div class="hint">Browse to a <code>folio.db</code> (e.g. <code>~/data/folio/&lt;hostname&gt;/folio.db</code>).</div>
+    <div class="browser" id="browser"></div>
+    <input type="hidden" name="path" id="path">
+    <div id="selected-db" class="muted">No database selected.</div>
+
+    <label for="book_id" style="margin-top:14px;">Book</label>
+    <select id="book_id" name="book_id" disabled><option value="">— pick a database first —</option></select>
+
+    <label style="margin-top:14px;">Chapters <span class="muted">(none checked = whole book)</span></label>
+    <div id="chapters" class="chips muted">—</div>
+
+    <label class="chips"><input type="checkbox" name="include_chapter_text"> Include raw chapter text</label>
+
+    <hr style="margin:16px 0;">
+    <label for="title">Exam Title</label>
+    <input type="text" id="title" name="title" placeholder="e.g. Chapter 3 Key Concepts" required>
+
+    <div style="display:flex; gap:16px;">
+      <div style="flex:1;">
+        <label for="exam_type">Exam Type</label>
+        <select id="exam_type" name="exam_type">
+          <option value="multiple_choice">Multiple Choice</option>
+          <option value="short_answer">Short Answer</option>
+        </select>
+      </div>
+      <div style="flex:1;">
+        <label for="num_questions">Number of Questions</label>
+        <input type="number" id="num_questions" name="num_questions" value="10" min="1" max="30">
+      </div>
+    </div>
+
+    <label for="emphasis">Points of Emphasis (optional)</label>
+    <textarea id="emphasis" name="emphasis" rows="2" placeholder="e.g. Focus on the core arguments."></textarea>
+
+    <button type="submit" class="btn btn-success" style="margin-top:10px;">Create Exam</button>
+    <a href="{{ urlroot }}create" class="btn btn-secondary" style="margin-left:8px;">Back</a>
+  </form>
+</div>
+
+<script>
+const R = "{{ urlroot }}";
+let curPath = "";
+function host() { return document.getElementById('host').value.trim(); }
+
+async function browse(path) {
+  const r = await fetch(`${R}api/folio/browse?host=${encodeURIComponent(host())}&path=${encodeURIComponent(path||"")}`);
+  const d = await r.json();
+  if (d.error) { document.getElementById('browser').innerHTML = `<div class="muted">${d.error}</div>`; return; }
+  curPath = d.path;
+  const parent = d.path.replace(/\/[^/]+\/?$/, "") || "/";
+  let html = `<div class="entry dir" data-p="${parent}">..</div>`;
+  d.dirs.forEach(n => { html += `<div class="entry dir" data-p="${d.path.replace(/\/$/,'')}/${n}">${n}</div>`; });
+  d.files.forEach(n => { html += `<div class="entry db" data-f="${d.path.replace(/\/$/,'')}/${n}">${n}</div>`; });
+  document.getElementById('browser').innerHTML = html;
+  document.querySelectorAll('#browser .dir').forEach(e => e.onclick = () => browse(e.dataset.p));
+  document.querySelectorAll('#browser .db').forEach(e => e.onclick = () => selectDb(e.dataset.f));
+}
+
+async function selectDb(path) {
+  document.getElementById('path').value = path;
+  document.getElementById('selected-db').textContent = "Selected: " + path;
+  const r = await fetch(`${R}api/folio/books`, {method:"POST", headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({host: host(), path})});
+  const d = await r.json();
+  const sel = document.getElementById('book_id');
+  if (d.error) { sel.innerHTML = `<option value="">${d.error}</option>`; return; }
+  sel.disabled = false;
+  sel.innerHTML = '<option value="">— select a book —</option>' +
+    d.books.map(b => `<option value="${b.id}">${b.title}${b.author ? " — "+b.author : ""}</option>`).join("");
+  document.getElementById('chapters').innerHTML = "—";
+}
+
+document.getElementById('book_id').onchange = async function() {
+  const box = document.getElementById('chapters');
+  if (!this.value) { box.innerHTML = "—"; return; }
+  const r = await fetch(`${R}api/folio/chapters`, {method:"POST", headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({host: host(), path: document.getElementById('path').value, book_id: parseInt(this.value)})});
+  const d = await r.json();
+  if (d.error || !d.chapters.length) { box.innerHTML = '<span class="muted">Whole book (no chapters listed).</span>'; return; }
+  box.innerHTML = d.chapters.map(c =>
+    `<label><input type="checkbox" name="chapter_ids" value="${c.id}"> ${c.title}</label>`).join("");
+};
+
+browse("");
+</script>
+{% endblock %}
