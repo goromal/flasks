@@ -806,6 +806,10 @@
         <div class="edit-points-section" id="editPointsSection">
             <h4>Edit Points (sorted by time)</h4>
             <ol class="edit-points-list" id="editPointsList"></ol>
+            <div style="display:flex; align-items:center; gap:10px; margin:10px 0;">
+                <input type="checkbox" id="preserveTrimOriginal" checked style="width:auto; margin:0; cursor:pointer;">
+                <label for="preserveTrimOriginal" style="margin:0; font-weight:500; color:#495057; cursor:pointer;">Preserve original (save trimmed clip as a new file)</label>
+            </div>
             <button class="btn btn-danger" id="applyEditsBtn" onclick="applyEdits()"
                     style="display: none; flex: none; min-width: 180px; width: auto;">Apply Edits</button>
         </div>
@@ -1584,21 +1588,26 @@
             const filename = getCurrentFilename();
             if (!filename) { showStatus('Error: Could not determine filename', true); return; }
             if (!editPoints.length) { showStatus('Error: No edit points defined', true); return; }
+            const preserveOriginal = document.getElementById('preserveTrimOriginal').checked;
             showLoading('Applying edits...');
             fetch('{{ urlroot }}api/trim-video', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename, edit_points: editPoints.map(p => ({ type: p.type, time: p.time })) })
+                body: JSON.stringify({ filename, preserve_original: preserveOriginal, edit_points: editPoints.map(p => ({ type: p.type, time: p.time })) })
             })
             .then(r => r.json())
             .then(data => {
                 hideLoading();
                 if (data.success) {
                     editPoints = []; renderEditPoints();
-                    showStatus('Edits applied successfully!');
-                    const v = document.getElementById('currentVideo');
-                    const source = v.querySelector('source');
-                    source.src = source.src.split('?')[0].split('#')[0] + '?t=' + Date.now() + '#t=0.001';
-                    v.load();
+                    if (data.new_filename) {
+                        showStatus('Saved trimmed clip as ' + data.new_filename);
+                    } else {
+                        showStatus('Edits applied successfully!');
+                        const v = document.getElementById('currentVideo');
+                        const source = v.querySelector('source');
+                        source.src = source.src.split('?')[0].split('#')[0] + '?t=' + Date.now() + '#t=0.001';
+                        v.load();
+                    }
                 } else { showStatus('Error: ' + (data.error || 'Unknown error'), true); }
             })
             .catch(err => { hideLoading(); showStatus('Error: ' + err.message, true); });
