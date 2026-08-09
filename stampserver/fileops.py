@@ -1,6 +1,30 @@
 import os
 
 
+def validate_stamp_name(text):
+    """Validate a user-supplied stamp name.
+
+    Stamps are embedded verbatim into filenames as the middle field of
+    ``stamped.{stamp}.{basename}``. Two characters therefore cannot appear in a
+    stamp: ``.`` (the field delimiter the parsers split on) and ``/`` (a path
+    separator, which cannot exist inside a single filename). Every other keyboard
+    character, spaces included, is allowed.
+
+    Returns ``(True, cleaned)`` with surrounding whitespace stripped when the name
+    is usable, or ``(False, message)`` describing why it was rejected.
+    """
+    cleaned = text.strip()
+    if cleaned == "":
+        return (False, "Stamp name is empty.")
+    if "." in cleaned:
+        return (False, "Stamp names may not contain a period ('.').")
+    if "/" in cleaned:
+        return (False, "Stamp names may not contain a slash ('/').")
+    if any(ord(ch) < 32 for ch in cleaned):
+        return (False, "Stamp names may not contain control characters.")
+    return (True, cleaned)
+
+
 def unique_suffixed_name(res_dir, filename, suffix):
     """Return a filename (not a path) that inserts `suffix` before the extension
     of `filename` and is guaranteed not to collide with an existing file in

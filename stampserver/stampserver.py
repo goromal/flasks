@@ -14,8 +14,9 @@ from random import shuffle
 from datetime import timedelta
 from PIL import Image
 import cv2
+from urllib.parse import quote
 from imageops import pad_image, fill_white_rect
-from fileops import unique_suffixed_name
+from fileops import unique_suffixed_name, validate_stamp_name
 
 STAMP_RE = re.compile(r"stamped\.(.*?)\.")
 
@@ -234,14 +235,19 @@ def index():
     global stampserver
     global urlroot
     if flask.request.method == "POST":
-        if flask.request.form["text"] != "":
-            stampserver.stamp(flask.request.form["text"])
+        text = flask.request.form["text"]
+        if text != "":
+            ok, result = validate_stamp_name(text)
+            if not ok:
+                flask.flash(result)
+            else:
+                stampserver.stamp(result)
     res, msg = stampserver.load()
     stamps = stampserver.getstamps()
     if not res:
         return flask.render_template("index.html", urlroot=urlroot, err=True, msg=msg, file="", ftype="", root="", nleft="?", datadir=SHORT_RESDIR, stamps=stamps)
     file, ftype, numleft = stampserver.getfile()
-    file = urlroot + file
+    file = urlroot + quote(file)
     return flask.render_template("index.html", urlroot=urlroot, err=False, msg="", file=file, ftype=ftype, root="", nleft=str(numleft), datadir=SHORT_RESDIR, stamps=stamps)
 
 @bp.route("/restamp/", methods=["GET","POST"])
@@ -255,20 +261,29 @@ def stamped(stamp=""):
         new_stamp_text = flask.request.form["text"]
         apply_all = flask.request.form.get("apply_all") == "on"
         preserve = flask.request.form.get("preserve_originals") == "on"
+        proceed = True
         if new_stamp_text == "":
             new_stamp = stamp
         else:
-            new_stamp = new_stamp_text
-        if apply_all and new_stamp_text != "":
-            stampserver.replace_stamp_all(stamp, new_stamp, copy=preserve)
-        else:
-            stampserver.replace_stamp(stamp, new_stamp, copy=preserve)
+            ok, result = validate_stamp_name(new_stamp_text)
+            if not ok:
+                flask.flash(result)
+                proceed = False
+                new_stamp = stamp
+            else:
+                new_stamp = result
+        if proceed:
+            if apply_all and new_stamp_text != "":
+                stampserver.replace_stamp_all(stamp, new_stamp, copy=preserve)
+            else:
+                stampserver.replace_stamp(stamp, new_stamp, copy=preserve)
     res, msg = stampserver.load_stamped(stamp)
+    root = f"restamp/{quote(stamp)}"
     if not res:
-        return flask.render_template("index.html", urlroot=urlroot, err=True, msg=msg, file="", ftype="", root=f"restamp/{stamp}", nleft="?", datadir=SHORT_RESDIR, stamps={})
+        return flask.render_template("index.html", urlroot=urlroot, err=True, msg=msg, file="", ftype="", root=root, nleft="?", datadir=SHORT_RESDIR, stamps={})
     file, ftype, numleft = stampserver.getfile()
-    file = urlroot + file
-    return flask.render_template("index.html", urlroot=urlroot, err=False, msg="", file=file, ftype=ftype, root=f"restamp/{stamp}", nleft=str(numleft), datadir=SHORT_RESDIR, stamps={})
+    file = urlroot + quote(file)
+    return flask.render_template("index.html", urlroot=urlroot, err=False, msg="", file=file, ftype=ftype, root=root, nleft=str(numleft), datadir=SHORT_RESDIR, stamps={})
 
 @bp.route("/zzz", methods=["GET","POST"])
 @flask_login.login_required

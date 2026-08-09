@@ -678,6 +678,12 @@
 
         <div id="statusMessage" class="status-message"></div>
 
+        {% with messages = get_flashed_messages() %}
+        {% if messages %}
+        <div class="status-message status-error" style="display: block;">{{ messages[0] }}</div>
+        {% endif %}
+        {% endwith %}
+
         {% if root.startswith('restamp/') %}
         <div class="autoplay-bar">
             <label>
@@ -882,7 +888,7 @@
             <ul id="stampListUl">
                 {% for stamp, nstamps in stamps.items() %}
                 <li data-stamp="{{ stamp }}">
-                    <a href="{{ urlroot }}restamp/{{ stamp }}">
+                    <a href="{{ urlroot }}restamp/{{ stamp | urlencode }}">
                         <span>{% if stamp %}{{ stamp }}{% else %}<em style="color:#adb5bd;">(empty)</em>{% endif %}</span>
                         <span class="stamp-count">{{ nstamps }}</span>
                     </a>
@@ -951,14 +957,45 @@
         function getCurrentFilename() {
             const img = document.getElementById('currentImage');
             const video = document.getElementById('currentVideo');
-            if (img) return img.src.substring(img.src.lastIndexOf('/') + 1).split('?')[0];
-            if (video) {
+            let raw = null;
+            if (img) {
+                raw = img.src.substring(img.src.lastIndexOf('/') + 1).split('?')[0];
+            } else if (video) {
                 const src = video.querySelector('source').src;
                 // Strip both the cache-bust query and the "#t=" poster hint fragment.
-                return src.substring(src.lastIndexOf('/') + 1).split('?')[0].split('#')[0];
+                raw = src.substring(src.lastIndexOf('/') + 1).split('?')[0].split('#')[0];
             }
-            return null;
+            if (raw === null) return null;
+            // .src is a resolved URL, so characters like spaces come back
+            // percent-encoded (e.g. "%20"). Decode to the real on-disk filename
+            // before handing it to the file-operation APIs.
+            try {
+                return decodeURIComponent(raw);
+            } catch (e) {
+                return raw;
+            }
         }
+
+        // ===== STAMP INPUT VALIDATION =====
+        // A stamp becomes the middle '.'-delimited field of the filename and must
+        // be a single path segment, so a literal '.' or '/' corrupts the naming
+        // scheme. Reject them here for instant feedback; the server enforces the
+        // same rule. An empty submit means "skip this file" and is always allowed.
+        // (Auto-play advances via form.submit(), which does not fire this event.)
+        (function() {
+            const form = document.getElementById('stampForm');
+            if (!form) return;
+            form.addEventListener('submit', function(e) {
+                const ta = document.getElementById('text');
+                if (!ta) return;
+                const val = ta.value.trim();
+                if (val === '') return;
+                if (val.indexOf('.') !== -1 || val.indexOf('/') !== -1) {
+                    e.preventDefault();
+                    showStatus("Stamp names may not contain '.' or '/'.", true);
+                }
+            });
+        })();
 
         // ===== IMAGE ROTATE =====
 
