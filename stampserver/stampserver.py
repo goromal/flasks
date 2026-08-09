@@ -15,6 +15,7 @@ from datetime import timedelta
 from PIL import Image
 import cv2
 from imageops import pad_image, fill_white_rect
+from fileops import unique_suffixed_name
 
 STAMP_RE = re.compile(r"stamped\.(.*?)\.")
 
@@ -802,6 +803,7 @@ def trim_video_api():
         data = flask.request.get_json()
         filename = data.get('filename')
         edit_points = data.get('edit_points', [])
+        preserve_original = data.get('preserve_original', True)
 
         if not filename:
             return flask.jsonify({'success': False, 'error': 'Missing filename parameter'}), 400
@@ -886,6 +888,11 @@ def trim_video_api():
             if os.path.exists(temp_path):
                 os.remove(temp_path)
             return flask.jsonify({'success': False, 'error': f'ffmpeg error: {result.stderr[-500:]}'}), 500
+
+        if preserve_original:
+            new_filename = unique_suffixed_name(RES_DIR, filename, "_trimmed")
+            os.replace(temp_path, os.path.join(RES_DIR, new_filename))
+            return flask.jsonify({'success': True, 'new_filename': new_filename})
 
         os.replace(temp_path, file_path)
         return flask.jsonify({'success': True})
