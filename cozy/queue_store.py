@@ -308,6 +308,10 @@ class Scheduler:
         composited = crop.composite(source_path, rect, img)
         with open(self.store.image_path(job_id), "wb") as f:
             f.write(composited)
+        # See JobStore._write_outputs: the composite must reach the output dir
+        # to be re-feedable, since SaveImage only ever saw the crop.
+        if self.output_dir:
+            crop.save_composite(self.output_dir, source_path, composited)
 
     def _run_job(self, job):
         staged_path = None

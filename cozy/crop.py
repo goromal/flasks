@@ -14,7 +14,9 @@ Pure image work: no Flask, no ComfyUI, no picker semantics.
 """
 import io
 import os
+import re
 import uuid
+from datetime import datetime
 
 from PIL import Image
 
@@ -25,6 +27,11 @@ SNAP = 8
 # Below this, a crop carries too little context for an edit model to do anything
 # sensible with it. Capped by the image's own size for small inputs.
 MIN_SIDE = 64
+
+# Composite filenames are derived from the source image, so a conservative slug
+# keeps anything odd in a source name (or a wormhole-staged path) from producing
+# a file the picker cannot round-trip.
+_SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def _snap_down(v):
@@ -120,3 +127,29 @@ def composite(src_path, rect, edited_bytes):
     buf = io.BytesIO()
     base.save(buf, "PNG")
     return buf.getvalue()
+
+
+def _slug(name):
+    return _SLUG_RE.sub("_", name).strip("._") or "image"
+
+
+def save_composite(output_dir, source_path, data):
+    """Persist composite bytes in the output dir; return the relative filename.
+
+    ComfyUI's SaveImage node only ever sees the crop, so for a cropped run the
+    composite would exist nowhere durable -- and re-feeding a prior generation
+    as the next edit's input is exactly what the output dir is for. The name is
+    derived from the source image so it is obvious what it came from, with a
+    timestamp for ordering and a counter for the case of two runs landing in
+    the same second.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    stem = _slug(os.path.splitext(os.path.basename(source_path))[0])
+    base = "%s-edit-%s" % (stem, datetime.now().strftime("%Y%m%d-%H%M%S"))
+    rel, n = base + ".png", 2
+    while os.path.exists(os.path.join(output_dir, rel)):
+        rel = "%s-%d.png" % (base, n)
+        n += 1
+    with open(os.path.join(output_dir, rel), "wb") as f:
+        f.write(data)
+    return rel

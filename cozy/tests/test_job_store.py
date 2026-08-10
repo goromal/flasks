@@ -290,6 +290,39 @@ def test_rect_run_writes_composite_and_crop(tmp_path):
         assert im.getpixel((63, 32)) == (10, 20, 30)
 
 
+def test_cropped_run_saves_the_composite_to_the_output_dir(tmp_path):
+    # The composite must land somewhere durable and re-feedable; output.png is
+    # display-only and is deleted at the start of the next run.
+    src = _src_image(tmp_path)
+    outdir = tmp_path / "out"
+    store = job_store.JobStore(str(tmp_path / "state"),
+                               _done_client(_png_bytes((64, 64), (200, 100, 50))),
+                               output_dir=str(outdir))
+    store.start("imggen", _fixture_path(), "p", 400, 800, image="crop/abc.png",
+                source_path=src, rect={"x": 64, "y": 32, "w": 64, "h": 64})
+    st = _wait_idle(store)
+    assert st["job"]["status"] == "success"
+    saved = list(outdir.iterdir())
+    assert len(saved) == 1
+    assert saved[0].name.startswith("src-edit-")
+    # It is the composite, not the crop: full size, region replaced.
+    with Image.open(str(saved[0])) as im:
+        assert im.size == (200, 160)
+        assert im.getpixel((64, 32)) == (200, 100, 50)
+        assert im.getpixel((63, 32)) == (10, 20, 30)
+
+
+def test_uncropped_run_saves_nothing_to_the_output_dir(tmp_path):
+    # ComfyUI's SaveImage already handles the whole-image case; cozy must not
+    # write a duplicate.
+    outdir = tmp_path / "out"
+    store = job_store.JobStore(str(tmp_path / "state"), _done_client(b"IMG"),
+                               output_dir=str(outdir))
+    store.start("imggen", _fixture_path(), "p", 400, 800)
+    assert _wait_idle(store)["job"]["status"] == "success"
+    assert not outdir.exists() or list(outdir.iterdir()) == []
+
+
 def test_run_without_rect_writes_only_the_primary(tmp_path):
     store = job_store.JobStore(str(tmp_path / "state"), _done_client(b"IMG"))
     assert store.start("imggen", _fixture_path(), "p", 400, 800)

@@ -134,3 +134,28 @@ def test_composite_resizes_a_differently_sized_model_output(tmp_path):
         assert im.getpixel((0, 0)) == (200, 100, 50)
         assert im.getpixel((63, 63)) == (200, 100, 50)
         assert im.getpixel((64, 64)) == (10, 20, 30)
+
+
+def test_save_composite_names_from_the_source(tmp_path):
+    outdir = tmp_path / "out"
+    rel = crop.save_composite(str(outdir), "/some/where/photo.png", _png((8, 8), (1, 2, 3)))
+    assert rel.startswith("photo-edit-")
+    assert rel.endswith(".png")
+    with Image.open(str(outdir / rel)) as im:
+        assert im.size == (8, 8)
+
+
+def test_save_composite_does_not_collide(tmp_path):
+    outdir = tmp_path / "out"
+    data = _png((8, 8), (1, 2, 3))
+    names = {crop.save_composite(str(outdir), "/x/photo.png", data) for _ in range(3)}
+    # Three runs inside the same second must still produce three files.
+    assert len(names) == 3
+    assert len(list(outdir.iterdir())) == 3
+
+
+def test_save_composite_slugs_awkward_source_names(tmp_path):
+    outdir = tmp_path / "out"
+    rel = crop.save_composite(str(outdir), "/x/we ird:name!.png", _png((8, 8), (1, 2, 3)))
+    assert rel.startswith("we_ird_name")
+    assert "/" not in rel and ":" not in rel and "!" not in rel

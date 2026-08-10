@@ -46,13 +46,14 @@ class JobStore:
     (temp + os.replace). Modeled on anix-upgrade-ui/run_store.py.
     """
 
-    def __init__(self, state_dir, client, run_lock=None):
+    def __init__(self, state_dir, client, run_lock=None, output_dir=None):
         os.makedirs(state_dir, exist_ok=True)
         self.state_dir = state_dir
         self.state_path = os.path.join(state_dir, "state.json")
         self.image_path = os.path.join(state_dir, "output.png")
         self.crop_image_path = os.path.join(state_dir, "output-crop.png")
         self.client = client
+        self.output_dir = output_dir
         self._lock = threading.RLock()
         self._thread = None
         self._run_lock = run_lock or runner.RunLock()
@@ -241,6 +242,11 @@ class JobStore:
         composited = crop.composite(source_path, rect, img)
         with open(self.image_path, "wb") as f:
             f.write(composited)
+        # output.png is display-only and is deleted at the start of the next
+        # run. ComfyUI's SaveImage only ever saw the crop, so without this the
+        # composite would never reach the output dir and could not be re-fed.
+        if self.output_dir:
+            crop.save_composite(self.output_dir, source_path, composited)
 
     def _run(self, graph, client_id, source_path=None, rect=None,
              staged_path=None):

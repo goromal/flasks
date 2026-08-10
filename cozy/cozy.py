@@ -629,7 +629,8 @@ def run():
         for n in names if os.path.exists(os.path.join(workflow_dir, n + ".api.json"))
     }
     run_lock = runner.RunLock()
-    store = JobStore(state_dir, ComfyUIClient(args.comfyui_url), run_lock=run_lock)
+    store = JobStore(state_dir, ComfyUIClient(args.comfyui_url), run_lock=run_lock,
+                     output_dir=output_dir)
     qstore = queue_store.QueueStore(state_dir)
     scheduler = queue_store.Scheduler(
         qstore, ComfyUIClient(args.comfyui_url), workflow_dir, workflow_kinds,

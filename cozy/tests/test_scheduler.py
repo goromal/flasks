@@ -172,3 +172,21 @@ def test_cropped_queue_job_records_rect_area_as_eta_pixels(tmp_path):
     _drain(sched)
     hist = eta.load_history(str(tmp_path))
     assert hist[-1]["pixels"] == 64 * 64
+
+
+def test_queue_cropped_job_saves_the_composite_to_the_output_dir(tmp_path):
+    src = tmp_path / "a.png"
+    src.write_bytes(_png((200, 160), (10, 20, 30)))
+
+    def execute(client, graph, cid, on_progress=None, on_prompt_id=None):
+        return _png((64, 64), (200, 100, 50))
+
+    store, sched = _make(tmp_path, execute, [])
+    store.add_job({"workflow": "imggen", "kind": "edit", "image": "a.png",
+                   "rect": {"x": 64, "y": 32, "w": 64, "h": 64}})
+    _drain(sched)
+    saved = [p for p in tmp_path.iterdir() if p.name.startswith("a-edit-")]
+    assert len(saved) == 1
+    with Image.open(str(saved[0])) as im:
+        assert im.size == (200, 160)
+        assert im.getpixel((64, 32)) == (200, 100, 50)
