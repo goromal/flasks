@@ -756,3 +756,35 @@ def test_image_kind_crop(tmp_path, monkeypatch):
 def test_status_reports_has_crop(tmp_path, monkeypatch):
     c, _ = _edit_client(tmp_path, monkeypatch)
     assert c.get("/cozy/api/status").get_json()["has_crop"] is False
+
+
+def test_queue_image_kind_crop(tmp_path, monkeypatch):
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    qs = queue_store.QueueStore(str(tmp_path))
+    sched = queue_store.Scheduler(
+        qs, client=object(), workflow_dir=str(tmp_path), workflow_kinds={},
+        input_dir=str(tmp_path), output_dir=str(tmp_path),
+        run_lock=runner.RunLock(), rest_gap=0,
+        execute=lambda *a, **k: b"X", sleep=lambda s: None,
+        load_patch=lambda *a, **k: ({}, 400, 800))
+    app = cozy.create_app(store=FakeStore(), workflows=["imggen"],
+                          workflow_dir=str(tmp_path), subdomain="/cozy",
+                          queue_store=qs, scheduler=sched)
+    app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
+    c = app.test_client()
+    _login(c)
+
+    qs.add_job({"workflow": "imggen"})
+    jid = qs.pop_next()["id"]
+    open(qs.image_path(jid), "wb").write(b"COMPOSITE")
+    qs.finish_current("success")
+
+    # The crop does not exist until a cropped job produces one.
+    assert c.get("/cozy/api/queue/image?id=%s&kind=crop" % jid).status_code == 404
+    open(qs.crop_image_path(jid), "wb").write(b"RAWCROP")
+    assert c.get("/cozy/api/queue/image?id=%s&kind=crop" % jid).data == b"RAWCROP"
+    # No kind, and an unknown kind, both mean the primary composite.
+    assert c.get("/cozy/api/queue/image?id=%s" % jid).data == b"COMPOSITE"
+    assert c.get("/cozy/api/queue/image?id=%s&kind=bogus" % jid).data == b"COMPOSITE"
+    assert c.get("/cozy/api/queue/image").status_code == 404

@@ -1,3 +1,8 @@
+import io
+import os
+
+from PIL import Image
+
 import eta
 import queue_store
 import runner
@@ -108,3 +113,47 @@ def test_remote_edit_job_staged_by_default(tmp_path, monkeypatch):
     sched._loop()
     assert seen["image"] == "wormhole/h/staged.png"
     assert store.read()["results"][0]["status"] == "success"
+
+
+def _png(size, color):
+    buf = io.BytesIO()
+    Image.new("RGB", size, color).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_cropped_queue_job_writes_composite_and_crop(tmp_path):
+    src = tmp_path / "a.png"
+    src.write_bytes(_png((200, 160), (10, 20, 30)))
+
+    def execute(client, graph, cid, on_progress=None, on_prompt_id=None):
+        return _png((64, 64), (200, 100, 50))
+
+    store, sched = _make(tmp_path, execute, [])
+    store.add_job({"workflow": "imggen", "kind": "edit", "image": "a.png",
+                   "rect": {"x": 64, "y": 32, "w": 64, "h": 64},
+                   "eta_pixels": 200 * 160})
+    _drain(sched)
+    res = store.read()["results"][0]
+    assert res["status"] == "success"
+    with Image.open(store.crop_image_path(res["id"])) as im:
+        assert im.size == (64, 64)
+    with Image.open(store.image_path(res["id"])) as im:
+        assert im.size == (200, 160)
+        assert im.getpixel((64, 32)) == (200, 100, 50)
+        assert im.getpixel((63, 32)) == (10, 20, 30)
+
+
+def test_cropped_queue_job_records_rect_area_as_eta_pixels(tmp_path):
+    src = tmp_path / "a.png"
+    src.write_bytes(_png((200, 160), (10, 20, 30)))
+
+    def execute(client, graph, cid, on_progress=None, on_prompt_id=None):
+        return _png((64, 64), (1, 2, 3))
+
+    store, sched = _make(tmp_path, execute, [])
+    store.add_job({"workflow": "imggen", "kind": "edit", "image": "a.png",
+                   "rect": {"x": 0, "y": 0, "w": 64, "h": 64},
+                   "eta_pixels": 200 * 160})
+    _drain(sched)
+    hist = eta.load_history(str(tmp_path))
+    assert hist[-1]["pixels"] == 64 * 64

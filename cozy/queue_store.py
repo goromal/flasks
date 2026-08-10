@@ -10,7 +10,9 @@ import os
 import threading
 import uuid
 
+import crop
 import eta
+import image_refs
 import image_size
 import runner
 import workflows
@@ -72,6 +74,11 @@ class QueueStore:
     def image_path(self, job_id):
         return os.path.join(self.images_dir, job_id + ".png")
 
+    def crop_image_path(self, job_id):
+        """The raw model output of a cropped edit; image_path holds the
+        composite that is shown as the job's primary result."""
+        return os.path.join(self.images_dir, job_id + "-crop.png")
+
     # -- queue editing -------------------------------------------------------
 
     def add_job(self, spec):
@@ -94,10 +101,11 @@ class QueueStore:
         with self._lock:
             data = self._read()
             for j in data["results"]:
-                try:
-                    os.remove(self.image_path(j["id"]))
-                except OSError:
-                    pass
+                for path in (self.image_path(j["id"]), self.crop_image_path(j["id"])):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
             data["results"] = []
             self._write(data)
 
@@ -198,7 +206,8 @@ class QueueStore:
         results = [{"id": j["id"], "workflow": j.get("workflow"),
                     "prompt": j.get("prompt", ""), "status": j.get("status"),
                     "error": j.get("error"), "duration": j.get("duration"),
-                    "has_image": os.path.exists(self.image_path(j["id"]))}
+                    "has_image": os.path.exists(self.image_path(j["id"])),
+                    "has_crop": os.path.exists(self.crop_image_path(j["id"]))}
                    for j in data["results"]]
         return {"active": data["active"], "gap_until": data["gap_until"],
                 "jobs": jobs, "current": current, "results": results}
@@ -280,6 +289,26 @@ class Scheduler:
             self.store.clear_current()
             self.run_lock.release()
 
+    def _write_outputs(self, job_id, img, source_path, rect):
+        """Model output first, then the composite: a composite failure must not
+        cost the result the GPU actually produced.
+
+        The composite is computed BEFORE the primary file is opened. Opening it
+        first would truncate it, so a failure in composite() would leave a
+        zero-byte file behind -- and snapshot() reports has_image from the
+        file's mere existence, which would put a broken thumbnail in the
+        results gallery for a job that failed.
+        """
+        if not rect:
+            with open(self.store.image_path(job_id), "wb") as f:
+                f.write(img)
+            return
+        with open(self.store.crop_image_path(job_id), "wb") as f:
+            f.write(img)
+        composited = crop.composite(source_path, rect, img)
+        with open(self.store.image_path(job_id), "wb") as f:
+            f.write(composited)
+
     def _run_job(self, job):
         try:
             image = job.get("image") or ""
@@ -291,6 +320,23 @@ class Scheduler:
                 image = stager(remote.get("host") or "", remote.get("path") or "")
                 dims = image_size.image_size(os.path.join(self.input_dir, image))
                 eta_pixels = dims[0] * dims[1] if dims else 0
+            # The rect is normalised here rather than only at add time: a remote
+            # image's dimensions are unknown until it has been staged, just
+            # above. Normalising is idempotent, so re-running it over a rect
+            # that /api/queue/add already normalised is a no-op.
+            rect = job.get("rect")
+            source_path = None
+            if rect:
+                source_path = image_refs.resolve(self.input_dir, self.output_dir, image)
+                if not source_path:
+                    raise ValueError("valid input image required")
+                dims = image_size.image_size(source_path)
+                if dims is None:
+                    raise ValueError("cannot read input image")
+                rect = crop.normalize_rect(rect, dims[0], dims[1])
+            if rect:
+                eta_pixels = rect["w"] * rect["h"]
+                image = crop.stage(self.input_dir, source_path, rect)
             path = os.path.join(self.workflow_dir, job["workflow"] + ".api.json")
             graph, width, height = self._load_patch(
                 path, job.get("prompt", ""), job.get("width", 400),
@@ -300,8 +346,7 @@ class Scheduler:
             img = self._execute(self.client, graph, client_id,
                                 on_progress=self.store.set_current_progress,
                                 on_prompt_id=self.store.set_current_prompt_id)
-            with open(self.store.image_path(job["id"]), "wb") as f:
-                f.write(img)
+            self._write_outputs(job["id"], img, source_path, rect)
             dur = self.store.finish_current(
                 "success", output="queue/" + job["id"] + ".png")
             if dur is not None:

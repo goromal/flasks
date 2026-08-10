@@ -1,3 +1,5 @@
+import os
+
 import queue_store
 
 
@@ -54,3 +56,26 @@ def test_clear_results_removes_images(tmp_path):
     assert s.read()["results"] == []
     import os
     assert not os.path.exists(s.image_path(jid))
+
+
+def test_snapshot_reports_has_crop(tmp_path):
+    s = _store(tmp_path)
+    s.add_job({"workflow": "imggen"})
+    job = s.pop_next()
+    open(s.image_path(job["id"]), "wb").write(b"IMG")
+    s.finish_current("success")
+    assert s.snapshot([])["results"][0]["has_crop"] is False
+    open(s.crop_image_path(job["id"]), "wb").write(b"CROP")
+    assert s.snapshot([])["results"][0]["has_crop"] is True
+
+
+def test_clear_results_removes_both_files(tmp_path):
+    s = _store(tmp_path)
+    s.add_job({"workflow": "imggen"})
+    job = s.pop_next()
+    open(s.image_path(job["id"]), "wb").write(b"IMG")
+    open(s.crop_image_path(job["id"]), "wb").write(b"CROP")
+    s.finish_current("success")
+    s.clear_results()
+    assert not os.path.exists(s.image_path(job["id"]))
+    assert not os.path.exists(s.crop_image_path(job["id"]))

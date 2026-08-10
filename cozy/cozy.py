@@ -393,25 +393,40 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
             return None, (flask.jsonify({"error": "invalid dimensions"}), 400)
         image = data.get("image", "") or ""
         remote = data.get("remote_image") or None
+        rect = None
         eta_pixels = None
         kind = workflow_kinds.get(wf)
         if kind == "edit":
             if remote:
                 # Remote images are staged (and their pixels measured) when the
-                # job runs; validate only that the path names an image here.
+                # job runs; validate only that the path names an image here. The
+                # rect rides along raw for the same reason -- normalising it
+                # needs dimensions that do not exist yet -- and _run_job
+                # normalises whatever it finds.
                 if not (remote.get("path") or "").lower().endswith(image_refs.IMAGE_EXTS):
                     return None, (flask.jsonify({"error": "valid input image required"}), 400)
+                rect = data.get("rect") or None
             else:
                 full = image_refs.resolve(input_dir, output_dir, image)
                 if not full:
                     return None, (flask.jsonify({"error": "valid input image required"}), 400)
                 dims = image_size.image_size(full)
-                eta_pixels = dims[0] * dims[1] if dims else 0
+                if data.get("rect"):
+                    if dims is None:
+                        return None, (flask.jsonify({"error": "cannot read input image"}), 400)
+                    try:
+                        rect = crop.normalize_rect(data["rect"], dims[0], dims[1])
+                    except ValueError:
+                        return None, (flask.jsonify({"error": "invalid crop region"}), 400)
+                if rect:
+                    eta_pixels = rect["w"] * rect["h"]
+                else:
+                    eta_pixels = dims[0] * dims[1] if dims else 0
         else:
             eta_pixels = width * height
         return {"workflow": wf, "kind": kind, "prompt": data.get("prompt", ""),
                 "width": width, "height": height, "image": image,
-                "remote_image": remote, "eta_pixels": eta_pixels}, None
+                "remote_image": remote, "rect": rect, "eta_pixels": eta_pixels}, None
 
     @bp.route("/api/queue/add", methods=["POST"])
     @flask_login.login_required
@@ -492,8 +507,12 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         if err:
             return err
         job_id = flask.request.args.get("id", "")
-        path = queue_store.image_path(job_id) if job_id else ""
-        if not path or not os.path.exists(path):
+        if not job_id:
+            return flask.jsonify({"error": "no image"}), 404
+        path = (queue_store.crop_image_path(job_id)
+                if flask.request.args.get("kind") == "crop"
+                else queue_store.image_path(job_id))
+        if not os.path.exists(path):
             return flask.jsonify({"error": "no image"}), 404
         # Per-job result files are immutable (unique id-based path), so let the
         # browser cache them hard: the queue view re-renders on each poll and
