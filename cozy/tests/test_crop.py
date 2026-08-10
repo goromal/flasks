@@ -1,4 +1,8 @@
+import io
+import os
+
 import pytest
+from PIL import Image
 
 import crop
 
@@ -68,3 +72,63 @@ def test_malformed_rect_raises():
                 {"x": None, "y": 0, "w": 10, "h": 10}):
         with pytest.raises(ValueError):
             crop.normalize_rect(bad, 100, 100)
+
+
+def _png(size, color):
+    buf = io.BytesIO()
+    Image.new("RGB", size, color).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _src(tmp_path, size=(200, 160), color=(10, 20, 30)):
+    p = tmp_path / "src.png"
+    p.write_bytes(_png(size, color))
+    return str(p)
+
+
+def test_stage_writes_the_region_under_input_dir(tmp_path):
+    src = _src(tmp_path)
+    indir = tmp_path / "input"
+    indir.mkdir()
+    rel = crop.stage(str(indir), src, {"x": 8, "y": 16, "w": 64, "h": 96})
+    assert rel.startswith("crop" + os.sep) or rel.startswith("crop/")
+    assert rel.endswith(".png")
+    with Image.open(str(indir / rel)) as im:
+        assert im.size == (64, 96)
+
+
+def test_stage_names_are_unique(tmp_path):
+    src = _src(tmp_path)
+    indir = tmp_path / "input"
+    indir.mkdir()
+    rect = {"x": 0, "y": 0, "w": 64, "h": 64}
+    assert crop.stage(str(indir), src, rect) != crop.stage(str(indir), src, rect)
+
+
+def test_composite_replaces_only_the_region(tmp_path):
+    src = _src(tmp_path, (200, 160), (10, 20, 30))
+    rect = {"x": 64, "y": 32, "w": 64, "h": 64}
+    out = crop.composite(src, rect, _png((64, 64), (200, 100, 50)))
+    with Image.open(io.BytesIO(out)) as im:
+        assert im.size == (200, 160)
+        # Inside the box: the edited pixels.
+        assert im.getpixel((64, 32)) == (200, 100, 50)
+        assert im.getpixel((127, 95)) == (200, 100, 50)
+        # One pixel outside each edge: untouched original.
+        assert im.getpixel((63, 32)) == (10, 20, 30)
+        assert im.getpixel((128, 95)) == (10, 20, 30)
+        assert im.getpixel((64, 31)) == (10, 20, 30)
+        assert im.getpixel((64, 96)) == (10, 20, 30)
+
+
+def test_composite_resizes_a_differently_sized_model_output(tmp_path):
+    # Edit models normalise their input and hand back their own resolution, so
+    # the output almost never matches the rect exactly.
+    src = _src(tmp_path, (200, 160), (10, 20, 30))
+    rect = {"x": 0, "y": 0, "w": 64, "h": 64}
+    out = crop.composite(src, rect, _png((1024, 1024), (200, 100, 50)))
+    with Image.open(io.BytesIO(out)) as im:
+        assert im.size == (200, 160)
+        assert im.getpixel((0, 0)) == (200, 100, 50)
+        assert im.getpixel((63, 63)) == (200, 100, 50)
+        assert im.getpixel((64, 64)) == (10, 20, 30)
