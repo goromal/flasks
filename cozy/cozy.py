@@ -1,5 +1,4 @@
 import argparse
-import hashlib
 import io
 import json
 import mimetypes
@@ -21,6 +20,7 @@ import wormhole
 from comfyui_client import ComfyUIClient
 from job_store import JobStore, job_duration
 import eta
+import image_refs
 import image_size
 import queue_store
 from queue_store import stage_remote_image
@@ -47,15 +47,6 @@ def _check_password(password):
     return check_password_hash(_PW_HASH, password)
 
 
-_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
-
-# ComfyUI's LoadImage resolves an `image` value ending in this suffix against
-# its output directory instead of the input directory (folder_paths
-# .annotated_filepath). cozy uses the same suffix as the picker option value for
-# output-dir files, so the same string is the LoadImage input, the persisted
-# selection, and the preview key -- no conversion anywhere.
-_OUTPUT_SUFFIX = " [output]"
-
 # Prompt-database entries are bare <name>.txt files in the selected directory.
 # Names are constrained to a conservative slug: no leading dot, no path
 # separators, so a name can never escape the database directory.
@@ -65,51 +56,6 @@ _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]*$")
 # Guard against accidentally selecting a huge remote file: previews and edit
 # staging are synchronous transfers, fine on a LAN but not unbounded.
 _MAX_REMOTE_IMAGE_BYTES = 50 * 1024 * 1024
-
-
-def _list_dir_images(directory):
-    """Sorted relative paths of image files under directory (empty if unset)."""
-    out = []
-    if not directory:
-        return out
-    for root, _dirs, files in os.walk(directory):
-        for f in files:
-            if f.lower().endswith(_IMAGE_EXTS):
-                out.append(os.path.relpath(os.path.join(root, f), directory))
-    return sorted(out)
-
-
-def _list_images(input_dir, output_dir):
-    """Picker options spanning the input and output dirs. Each option's `value`
-    is what gets sent to ComfyUI's LoadImage `image` input: a bare relative path
-    for input-dir files, suffixed with ' [output]' for output-dir files (so a
-    prior generation can be re-fed as the edit input). `label` is the bare path
-    for display; `source` groups the two in the UI."""
-    items = [{"value": r, "label": r, "source": "input"}
-             for r in _list_dir_images(input_dir)]
-    items += [{"value": r + _OUTPUT_SUFFIX, "label": r, "source": "output"}
-              for r in _list_dir_images(output_dir)]
-    return items
-
-
-def _resolve_image_ref(input_dir, output_dir, value):
-    """Map a picker value to an on-disk path, or None if it is not a valid image
-    within the directory it names. Output-dir files carry the ' [output]'
-    annotation; everything else resolves under the input dir. Rejects traversal
-    out of the chosen base via realpath containment."""
-    if not value:
-        return None
-    if value.endswith(_OUTPUT_SUFFIX):
-        base, rel = output_dir, value[:-len(_OUTPUT_SUFFIX)]
-    else:
-        base, rel = input_dir, value
-    if not base or not rel.lower().endswith(_IMAGE_EXTS):
-        return None
-    full = os.path.realpath(os.path.join(base, rel))
-    root = os.path.realpath(base)
-    if os.path.commonpath([full, root]) != root or not os.path.isfile(full):
-        return None
-    return full
 
 
 class LoginForm(flask_wtf.FlaskForm):
@@ -199,14 +145,14 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
             if remote:
                 rhost = (remote.get("host") or "").strip()
                 rpath = remote.get("path") or ""
-                if not rpath.lower().endswith(_IMAGE_EXTS):
+                if not rpath.lower().endswith(image_refs.IMAGE_EXTS):
                     return flask.jsonify({"error": "valid input image required"}), 400
                 try:
                     image = _stage_remote_image(rhost, rpath)
                 except (wormhole.WormholeError, OSError) as e:
                     return flask.jsonify({"error": str(e)}), 502
                 store.set_image_src(rhost, os.path.dirname(rpath))
-            if not _resolve_image_ref(input_dir, output_dir, image):
+            if not image_refs.resolve(input_dir, output_dir, image):
                 return flask.jsonify({"error": "valid input image required"}), 400
         try:
             width = int(data.get("width", 400))
@@ -215,7 +161,7 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
             return flask.jsonify({"error": "invalid dimensions"}), 400
         eta_pixels = None
         if workflow_kinds.get(wf) == "edit":
-            full = _resolve_image_ref(input_dir, output_dir, image)
+            full = image_refs.resolve(input_dir, output_dir, image)
             dims = image_size.image_size(full) if full else None
             eta_pixels = dims[0] * dims[1] if dims else 0
         path = os.path.join(workflow_dir, wf + ".api.json")
@@ -257,12 +203,12 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
     @bp.route("/api/input-images", methods=["GET"])
     @flask_login.login_required
     def input_images():
-        return flask.jsonify({"images": _list_images(input_dir, output_dir)})
+        return flask.jsonify({"images": image_refs.list_images(input_dir, output_dir)})
 
     @bp.route("/api/input-image", methods=["GET"])
     @flask_login.login_required
     def input_image():
-        full = _resolve_image_ref(input_dir, output_dir, flask.request.args.get("name", ""))
+        full = image_refs.resolve(input_dir, output_dir, flask.request.args.get("name", ""))
         if not full:
             return flask.jsonify({"error": "not found"}), 404
         return flask.send_file(full)
@@ -287,7 +233,7 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
     def remote_image():
         host = (flask.request.args.get("host") or "").strip()
         path = flask.request.args.get("path") or ""
-        if not path.lower().endswith(_IMAGE_EXTS):
+        if not path.lower().endswith(image_refs.IMAGE_EXTS):
             return flask.jsonify({"error": "not an image"}), 404
         try:
             data = wormhole.read_file(host, path,
@@ -313,7 +259,7 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         if flask.request.args.get("files") == "img":
             resp["files"] = [e["name"] for e in entries
                              if not e["is_dir"]
-                             and e["name"].lower().endswith(_IMAGE_EXTS)]
+                             and e["name"].lower().endswith(image_refs.IMAGE_EXTS)]
         return flask.jsonify(resp)
 
     @bp.route("/api/pdb/select", methods=["POST"])
@@ -427,10 +373,10 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
             if remote:
                 # Remote images are staged (and their pixels measured) when the
                 # job runs; validate only that the path names an image here.
-                if not (remote.get("path") or "").lower().endswith(_IMAGE_EXTS):
+                if not (remote.get("path") or "").lower().endswith(image_refs.IMAGE_EXTS):
                     return None, (flask.jsonify({"error": "valid input image required"}), 400)
             else:
-                full = _resolve_image_ref(input_dir, output_dir, image)
+                full = image_refs.resolve(input_dir, output_dir, image)
                 if not full:
                     return None, (flask.jsonify({"error": "valid input image required"}), 400)
                 dims = image_size.image_size(full)
