@@ -302,12 +302,13 @@
         }
 
         function renderCropRect() {
-            if (!cropRect || !preview.naturalWidth) {
+            const shown = preview.getBoundingClientRect().width;
+            if (!cropRect || !preview.naturalWidth || !shown) {
                 cropRectEl.style.display = "none";
                 cropLabel.textContent = "Drag on the image to edit only part of it.";
                 return;
             }
-            const scale = preview.getBoundingClientRect().width / preview.naturalWidth;
+            const scale = shown / preview.naturalWidth;
             cropRectEl.style.left = (cropRect.x * scale) + "px";
             cropRectEl.style.top = (cropRect.y * scale) + "px";
             cropRectEl.style.width = (cropRect.w * scale) + "px";
@@ -352,6 +353,9 @@
             cropRect = cropRect ? normalizeRect(cropRect) : null;
             renderCropRect();
         });
+        // A cancelled gesture never fires pointerup; without this the drag stays
+        // latched and the rect keeps following the pointer.
+        previewStage.addEventListener("pointercancel", () => { dragFrom = null; });
         document.getElementById("crop-clear").addEventListener("click", clearCropRect);
         // naturalWidth is only meaningful once the image has decoded.
         preview.addEventListener("load", renderCropRect);
@@ -390,6 +394,7 @@
             dimsRow.style.display = edit ? "none" : "flex";
             promptLabel.textContent = edit ? "Edit instruction" : "Prompt";
             if (edit && !imageSelect.options.length) loadInputImages();
+            if (edit) renderCropRect();
         }
 
         workflowSel.addEventListener("change", applyKind);
@@ -441,11 +446,22 @@
             output.innerHTML = '<img src="' + root + 'api/image?t=' + Date.now() + '" alt="output" />';
             if (hasCrop) {
                 cropOutputImg.src = root + "api/image?kind=crop&t=" + Date.now();
+                cropOutput.querySelector("figcaption").textContent = "model output";
                 cropOutput.style.display = "block";
             } else {
                 cropOutputImg.removeAttribute("src");
                 cropOutput.style.display = "none";
             }
+        }
+
+        // The composite failed but the model's output survived (see
+        // JobStore._write_outputs). Show it, labelled so the state is obvious.
+        function showCropOnly() {
+            output.innerHTML = "";
+            cropOutputImg.src = root + "api/image?kind=crop&t=" + Date.now();
+            cropOutput.querySelector("figcaption").textContent =
+                "model output (compositing failed)";
+            cropOutput.style.display = "block";
         }
 
         async function poll() {
@@ -462,6 +478,9 @@
                 if (s.status === "failed") showError(s.error || "generation failed");
                 else showError("");
                 if (s.has_image) { showImage(s.has_crop); showDuration(s.duration); }
+                // A composite that failed still leaves the model's own output on
+                // disk; surface it rather than showing nothing.
+                else if (s.has_crop) { showCropOnly(); }
             }
         }
 
@@ -831,7 +850,9 @@
             const hasImage = {{ (state.output) | tojson }};
             if (st.status === "running") { startPolling(); }
             else if (st.status === "failed") { showError(st.error || "generation failed"); }
-            if (hasImage) { showImage({{ state.crop_output | tojson }}); showDuration(st.duration); }
+            const hasCrop = {{ state.crop_output | tojson }};
+            if (hasImage) { showImage(hasCrop); showDuration(st.duration); }
+            else if (hasCrop) { showCropOnly(); }
             applyKind();
         })();
 

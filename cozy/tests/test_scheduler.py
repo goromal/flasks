@@ -143,6 +143,21 @@ def test_cropped_queue_job_writes_composite_and_crop(tmp_path):
         assert im.getpixel((63, 32)) == (10, 20, 30)
 
 
+def test_staged_crop_is_deleted_after_the_job(tmp_path):
+    src = tmp_path / "a.png"
+    src.write_bytes(_png((200, 160), (10, 20, 30)))
+
+    def execute(client, graph, cid, on_progress=None, on_prompt_id=None):
+        return _png((64, 64), (1, 2, 3))
+
+    store, sched = _make(tmp_path, execute, [])
+    store.add_job({"workflow": "imggen", "kind": "edit", "image": "a.png",
+                   "rect": {"x": 0, "y": 0, "w": 64, "h": 64}})
+    _drain(sched)
+    crop_dir = tmp_path / "crop"
+    assert not crop_dir.exists() or list(crop_dir.iterdir()) == []
+
+
 def test_cropped_queue_job_records_rect_area_as_eta_pixels(tmp_path):
     src = tmp_path / "a.png"
     src.write_bytes(_png((200, 160), (10, 20, 30)))

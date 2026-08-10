@@ -2,6 +2,7 @@ import io
 import json
 import os
 
+import crop
 import eta as eta_mod
 import job_store
 import runner as runner_mod
@@ -344,10 +345,10 @@ def test_crash_recovery_composites(tmp_path):
                                _done_client(_png_bytes((64, 64), (200, 100, 50))))
     rect = {"x": 64, "y": 32, "w": 64, "h": 64}
     store._write_state({**store._default_state(), "rect": rect,
+                        "source_path": src,
                         "job": {"status": "running", "prompt_id": "pid-1",
                                 "progress": 50, "started_at": None,
-                                "finished_at": None, "error": None,
-                                "source_path": src}})
+                                "finished_at": None, "error": None}})
     st = store.read_state()
     assert st["job"]["status"] == "success"
     assert st["crop_output"] is True
@@ -355,6 +356,39 @@ def test_crash_recovery_composites(tmp_path):
         assert im.size == (200, 160)
         assert im.getpixel((64, 32)) == (200, 100, 50)
         assert im.getpixel((63, 32)) == (10, 20, 30)
+
+
+def test_staged_crop_is_deleted_after_the_run(tmp_path):
+    # The staged crop is a consumed intermediate: JobStore._run must delete it
+    # once ComfyUI has read it, rather than letting input/crop/ grow forever.
+    src = _src_image(tmp_path)
+    indir = tmp_path / "input"
+    indir.mkdir()
+    staged_rel = crop.stage(str(indir), src, {"x": 0, "y": 0, "w": 64, "h": 64})
+    staged_abs = str(indir / staged_rel)
+    assert os.path.exists(staged_abs)
+    store = job_store.JobStore(str(tmp_path / "state"),
+                               _done_client(_png_bytes((64, 64), (1, 2, 3))))
+    assert store.start("imggen", _fixture_path(), "p", 400, 800,
+                       image=staged_rel, source_path=src,
+                       rect={"x": 0, "y": 0, "w": 64, "h": 64},
+                       staged_path=staged_abs)
+    st = _wait_idle(store)
+    assert st["job"]["status"] == "success"
+    assert not os.path.exists(staged_abs)
+
+
+def test_source_path_is_not_inside_the_job_dict(tmp_path):
+    # index.html serialises state["job"] into the page; a server filesystem
+    # path must not ride along.
+    src = _src_image(tmp_path)
+    store = job_store.JobStore(str(tmp_path / "state"),
+                               _done_client(_png_bytes((64, 64), (1, 2, 3))))
+    store.start("imggen", _fixture_path(), "p", 400, 800, image="crop/abc.png",
+                source_path=src, rect={"x": 0, "y": 0, "w": 64, "h": 64})
+    st = _wait_idle(store)
+    assert "source_path" not in st["job"]
+    assert st["source_path"] == src
 
 
 def test_old_state_file_without_rect_still_loads(tmp_path):

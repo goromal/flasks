@@ -69,7 +69,9 @@ def test_malformed_rect_raises():
                 {"x": 0, "y": 0, "w": -5, "h": 10},
                 {"x": 0, "y": 0, "w": 10},
                 {"x": "a", "y": 0, "w": 10, "h": 10},
-                {"x": None, "y": 0, "w": 10, "h": 10}):
+                {"x": None, "y": 0, "w": 10, "h": 10},
+                {"x": float("inf"), "y": 0, "w": 10, "h": 10},
+                {"x": 0, "y": 0, "w": float("nan"), "h": 10}):
         with pytest.raises(ValueError):
             crop.normalize_rect(bad, 100, 100)
 

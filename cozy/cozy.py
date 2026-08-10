@@ -54,6 +54,10 @@ def _check_password(password):
 _PROMPT_EXT = ".txt"
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]*$")
 
+# Queue job ids are uuid4().hex. Validating the shape keeps a crafted id from
+# walking out of the queue directory via the bare join in QueueStore.image_path.
+_JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+
 # Guard against accidentally selecting a huge remote file: previews and edit
 # staging are synchronous transfers, fine on a LAN but not unbounded.
 _MAX_REMOTE_IMAGE_BYTES = 50 * 1024 * 1024
@@ -145,6 +149,7 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         rect = None
         eta_pixels = None
         source_path = None
+        staged_path = None
         if workflow_kinds.get(wf) == "edit":
             if remote:
                 rhost = (remote.get("host") or "").strip()
@@ -172,10 +177,6 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
                 # should be keyed on -- otherwise cropped runs would drag the
                 # whole-image estimates for this workflow down with them.
                 eta_pixels = rect["w"] * rect["h"]
-                try:
-                    image = crop.stage(input_dir, source_path, rect)
-                except OSError:
-                    return flask.jsonify({"error": "cannot read input image"}), 400
             else:
                 eta_pixels = dims[0] * dims[1] if dims else 0
         try:
@@ -186,9 +187,23 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         path = os.path.join(workflow_dir, wf + ".api.json")
         if not os.path.exists(path):
             return flask.jsonify({"error": "workflow file missing"}), 400
+        if rect:
+            # Staged only now: everything above this point can still reject the
+            # request, and a rejected request must not leave an orphaned crop.
+            try:
+                image = crop.stage(input_dir, source_path, rect)
+            except OSError:
+                return flask.jsonify({"error": "cannot read input image"}), 400
+            staged_path = os.path.join(input_dir, image)
         if not store.start(wf, path, prompt, width, height, image,
                            eta_pixels=eta_pixels, source_path=source_path,
-                           rect=rect):
+                           rect=rect, staged_path=staged_path):
+            # Nothing will consume the crop we just staged.
+            if staged_path:
+                try:
+                    os.remove(staged_path)
+                except OSError:
+                    pass
             return flask.jsonify({"error": "already running"}), 409
         return flask.jsonify({"ok": True})
 
@@ -507,7 +522,7 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         if err:
             return err
         job_id = flask.request.args.get("id", "")
-        if not job_id:
+        if not _JOB_ID_RE.match(job_id):
             return flask.jsonify({"error": "no image"}), 404
         path = (queue_store.crop_image_path(job_id)
                 if flask.request.args.get("kind") == "crop"

@@ -310,6 +310,7 @@ class Scheduler:
             f.write(composited)
 
     def _run_job(self, job):
+        staged_path = None
         try:
             image = job.get("image") or ""
             eta_pixels = job.get("eta_pixels")
@@ -337,6 +338,7 @@ class Scheduler:
             if rect:
                 eta_pixels = rect["w"] * rect["h"]
                 image = crop.stage(self.input_dir, source_path, rect)
+                staged_path = os.path.join(self.input_dir, image)
             path = os.path.join(self.workflow_dir, job["workflow"] + ".api.json")
             graph, width, height = self._load_patch(
                 path, job.get("prompt", ""), job.get("width", 400),
@@ -354,3 +356,10 @@ class Scheduler:
                                       record_pixels or 0, dur)
         except Exception as e:  # noqa: BLE001 - failure surfaces in results
             self.store.finish_current("failed", error=str(e))
+        finally:
+            # Consumed intermediate; see JobStore._run.
+            if staged_path:
+                try:
+                    os.remove(staged_path)
+                except OSError:
+                    pass

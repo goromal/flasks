@@ -63,7 +63,7 @@ class JobStore:
         return {"workflow": None, "prompt": "", "width": DEFAULT_W,
                 "height": DEFAULT_H, "image": "", "rect": None,
                 "job": _idle_job(), "prompt_db": None, "known_hosts": [],
-                "image_src": None,
+                "image_src": None, "source_path": None,
                 "output": os.path.exists(self.image_path),
                 "crop_output": os.path.exists(self.crop_image_path)}
 
@@ -106,7 +106,7 @@ class JobStore:
                     img = runner.fetch_image(self.client, pid)
                     if img is not None:
                         rect = state.get("rect")
-                        self._write_outputs(img, job.get("source_path"), rect)
+                        self._write_outputs(img, state.get("source_path"), rect)
                         state["job"].update(status="success", progress=100,
                                             finished_at=_now(), error=None)
                         state["output"] = True
@@ -160,7 +160,8 @@ class JobStore:
     # -- running -------------------------------------------------------------
 
     def start(self, workflow_name, workflow_path, prompt, width, height,
-              image="", eta_pixels=None, source_path=None, rect=None):
+              image="", eta_pixels=None, source_path=None, rect=None,
+              staged_path=None):
         with self._lock:
             if self._read_raw().get("job", {}).get("status") == "running":
                 return False
@@ -177,14 +178,11 @@ class JobStore:
             state = self._read_raw()
             state.update(workflow=workflow_name, prompt=prompt,
                          width=int(width), height=int(height), image=image,
-                         rect=rect)
+                         rect=rect, source_path=source_path)
             state["job"] = {"status": "running", "prompt_id": None, "progress": 0,
                             "started_at": _now(), "finished_at": None,
                             "error": None, "client_id": client_id,
-                            "record_pixels": int(record_pixels),
-                            # Kept so the crash-recovery branch of read_state()
-                            # can composite without the caller being present.
-                            "source_path": source_path}
+                            "record_pixels": int(record_pixels)}
             for path in (self.image_path, self.crop_image_path):
                 try:
                     os.remove(path)
@@ -194,7 +192,8 @@ class JobStore:
             state["crop_output"] = False
             self._write_state(state)
             self._thread = threading.Thread(
-                target=self._run, args=(graph, client_id, source_path, rect),
+                target=self._run,
+                args=(graph, client_id, source_path, rect, staged_path),
                 daemon=True)
             self._thread.start()
             return True
@@ -243,7 +242,8 @@ class JobStore:
         with open(self.image_path, "wb") as f:
             f.write(composited)
 
-    def _run(self, graph, client_id, source_path=None, rect=None):
+    def _run(self, graph, client_id, source_path=None, rect=None,
+             staged_path=None):
         try:
             img = runner.execute(self.client, graph, client_id,
                                  on_progress=self._set_progress,
@@ -264,6 +264,14 @@ class JobStore:
         except Exception as e:  # noqa: BLE001 - surface any failure to the UI
             self._fail(str(e))
         finally:
+            # The staged crop is a consumed intermediate: execute() only returns
+            # once ComfyUI has read it, so it has no further use. Deleting it
+            # here is what keeps input/crop/ from growing with every run.
+            if staged_path:
+                try:
+                    os.remove(staged_path)
+                except OSError:
+                    pass
             self._run_lock.release()
 
     # -- clear ---------------------------------------------------------------
@@ -279,6 +287,7 @@ class JobStore:
             state["prompt"] = ""
             state["image"] = ""
             state["rect"] = None
+            state["source_path"] = None
             # Clear resets the remote selections too (prompt DB and image
             # source) but keeps known_hosts: retyping hostnames is the pain
             # the history exists to avoid.

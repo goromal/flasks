@@ -15,6 +15,7 @@ class FakeStore:
         self.started = None
         self.started_rect = None
         self.started_source = None
+        self.started_staged_path = None
         self.image_path = "/nonexistent/output.png"
         self.crop_image_path = "/nonexistent/output-crop.png"
         self.state_dir = state_dir
@@ -41,13 +42,14 @@ class FakeStore:
         self.image_src = (host, path)
 
     def start(self, name, path, prompt, w, h, image="", eta_pixels=None,
-              source_path=None, rect=None):
+              source_path=None, rect=None, staged_path=None):
         if self._running:
             return False
         self._running = True
         self.started = (name, prompt, w, h, image, eta_pixels)
         self.started_rect = rect
         self.started_source = source_path
+        self.started_staged_path = staged_path
         return True
 
     def clear(self):
@@ -628,8 +630,9 @@ def test_queue_image_is_cacheable(queue_ctx):
     # never re-fetches a finished thumbnail.
     c, qs, sched, run_lock = queue_ctx
     _login(c)
-    open(qs.image_path("abc"), "wb").write(b"IMG")
-    r = c.get("/cozy/api/queue/image?id=abc")
+    jid = "a" * 32
+    open(qs.image_path(jid), "wb").write(b"IMG")
+    r = c.get("/cozy/api/queue/image?id=" + jid)
     assert r.status_code == 200
     assert "immutable" in r.headers.get("Cache-Control", "")
 
@@ -723,6 +726,19 @@ def test_malformed_rect_400(tmp_path, monkeypatch):
     assert r.get_json()["error"] == "invalid crop region"
 
 
+def test_rejected_request_leaves_no_staged_crop(tmp_path, monkeypatch):
+    c, indir = _edit_client(tmp_path, monkeypatch)
+    payload = {"workflow": "edit", "prompt": "x", "image": "a.png",
+               "rect": {"x": 0, "y": 0, "w": 64, "h": 64}}
+    assert c.post("/cozy/api/generate", json=payload).status_code == 200
+    staged = os.listdir(str(indir / "crop"))
+    assert len(staged) == 1
+    # FakeStore now reports busy, so this one is rejected -- and must not add
+    # a second orphaned crop.
+    assert c.post("/cozy/api/generate", json=payload).status_code == 409
+    assert os.listdir(str(indir / "crop")) == staged
+
+
 def test_rect_ignored_for_generate_workflows(tmp_path, monkeypatch):
     c, _ = _edit_client(tmp_path, monkeypatch)
     r = c.post("/cozy/api/generate", json={
@@ -788,3 +804,24 @@ def test_queue_image_kind_crop(tmp_path, monkeypatch):
     assert c.get("/cozy/api/queue/image?id=%s" % jid).data == b"COMPOSITE"
     assert c.get("/cozy/api/queue/image?id=%s&kind=bogus" % jid).data == b"COMPOSITE"
     assert c.get("/cozy/api/queue/image").status_code == 404
+
+
+def test_queue_image_rejects_traversal(tmp_path, monkeypatch):
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    qs = queue_store.QueueStore(str(tmp_path))
+    sched = queue_store.Scheduler(
+        qs, client=object(), workflow_dir=str(tmp_path), workflow_kinds={},
+        input_dir=str(tmp_path), output_dir=str(tmp_path),
+        run_lock=runner.RunLock(), rest_gap=0,
+        execute=lambda *a, **k: b"X", sleep=lambda s: None,
+        load_patch=lambda *a, **k: ({}, 400, 800))
+    app = cozy.create_app(store=FakeStore(), workflows=["imggen"],
+                          workflow_dir=str(tmp_path), subdomain="/cozy",
+                          queue_store=qs, scheduler=sched)
+    app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
+    c = app.test_client()
+    _login(c)
+    open(os.path.join(str(tmp_path), "output.png"), "wb").write(b"SECRET")
+    assert c.get("/cozy/api/queue/image?id=../output").status_code == 404
+    assert c.get("/cozy/api/queue/image?id=notahexid").status_code == 404

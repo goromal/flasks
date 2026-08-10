@@ -57,7 +57,7 @@ def normalize_rect(rect, img_w, img_h):
         return None
     try:
         x, y, w, h = (int(rect[k]) for k in ("x", "y", "w", "h"))
-    except (TypeError, KeyError, ValueError):
+    except (TypeError, KeyError, ValueError, OverflowError):
         raise ValueError("invalid crop region")
     if w <= 0 or h <= 0 or img_w <= 0 or img_h <= 0:
         raise ValueError("invalid crop region")
@@ -85,7 +85,9 @@ def stage(input_dir, src_path, rect):
     A fresh name per run rather than a content hash: cropping costs
     milliseconds, so caching buys nothing, and a stable name would have to
     account for the source changing underneath it -- which happens routinely,
-    since output.png is re-fed as the next edit's input.
+    since output.png is re-fed as the next edit's input. The run path deletes
+    the file once ComfyUI has consumed it; a crash mid-run leaks one file,
+    which api/flush clears.
 
     Because the crop always lands in the input dir, LoadImage receives a plain
     relative path: the ' [output]' annotation never reaches it.
