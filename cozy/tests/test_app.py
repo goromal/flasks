@@ -1,3 +1,4 @@
+import io
 import os
 
 import pytest
@@ -1011,3 +1012,112 @@ def test_index_has_fit_note_ui(tmp_path, monkeypatch):
     assert b"api/input-fit" in page
     # The pre-flight is debounced, never fired straight from pointermove.
     assert b"scheduleFitNote" in page
+
+
+# --- HEIC ---------------------------------------------------------------------
+
+def _heic_bytes(size=(640, 480)):
+    import io as _io
+
+    from PIL import Image as _Image
+    import fit as _fit  # noqa: F401 - registers the HEIF opener
+    buf = _io.BytesIO()
+    _Image.new("RGB", size, (10, 20, 30)).save(buf, "HEIF", quality=90)
+    return buf.getvalue()
+
+
+def _heic_client(tmp_path, monkeypatch, size=(640, 480)):
+    indir = tmp_path / "input"
+    indir.mkdir()
+    (indir / "phone.heic").write_bytes(_heic_bytes(size))
+    (indir / "a.png").write_bytes(_noisy_png((64, 64)))
+    open(os.path.join(str(tmp_path), "edit.api.json"), "w").write("{}")
+    store = FakeStore()
+    app = cozy.create_app(store=store, workflows=["edit"],
+                          workflow_dir=str(tmp_path), subdomain="/cozy",
+                          input_dir=str(indir), output_dir=str(tmp_path / "out"),
+                          workflow_kinds={"edit": "edit"})
+    app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
+    c = app.test_client()
+    c._store = store
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    _login(c)
+    return c, indir
+
+
+def test_heic_appears_in_the_picker(tmp_path, monkeypatch):
+    c, _ = _heic_client(tmp_path, monkeypatch)
+    items = c.get("/cozy/api/input-images").get_json()["images"]
+    assert "phone.heic" in [it["value"] for it in items]
+
+
+def test_heic_preview_is_transcoded_to_jpeg(tmp_path, monkeypatch):
+    from PIL import Image as _Image
+    c, _ = _heic_client(tmp_path, monkeypatch, (800, 600))
+    r = c.get("/cozy/api/input-image?name=phone.heic")
+    assert r.status_code == 200
+    assert r.mimetype == "image/jpeg"
+    with _Image.open(io.BytesIO(r.data)) as im:
+        assert im.format == "JPEG"
+        # Exactly the source's dimensions: the crop overlay is sized from this.
+        assert im.size == (800, 600)
+
+
+def test_non_heic_preview_is_still_the_raw_file(tmp_path, monkeypatch):
+    c, indir = _heic_client(tmp_path, monkeypatch)
+    r = c.get("/cozy/api/input-image?name=a.png")
+    assert r.status_code == 200
+    assert r.data == (indir / "a.png").read_bytes()
+
+
+def test_heic_generate_stages_something_comfyui_can_read(tmp_path, monkeypatch):
+    from PIL import Image as _Image
+    c, indir = _heic_client(tmp_path, monkeypatch)
+    r = c.post("/cozy/api/generate", json={
+        "workflow": "edit", "prompt": "x", "image": "phone.heic"})
+    assert r.status_code == 200
+    staged = c._store.started[4]
+    assert staged != "phone.heic", "the HEIC itself must never reach LoadImage"
+    with _Image.open(str(indir / staged)) as im:
+        assert im.format in ("PNG", "JPEG")
+
+
+def test_heic_crop_rect_normalises_against_real_dimensions(tmp_path, monkeypatch):
+    c, _ = _heic_client(tmp_path, monkeypatch, (800, 600))
+    r = c.post("/cozy/api/generate", json={
+        "workflow": "edit", "prompt": "x", "image": "phone.heic",
+        "rect": {"x": 13, "y": 27, "w": 100, "h": 100}})
+    assert r.status_code == 200
+    # Snapped the same way any other format would be -- proof that image_size
+    # resolved the HEIC rather than returning None and 400ing.
+    assert c._store.started_rect == {"x": 8, "y": 24, "w": 104, "h": 104}
+
+
+def test_heic_input_fit_works(tmp_path, monkeypatch):
+    c, _ = _heic_client(tmp_path, monkeypatch, (800, 600))
+    d = c.get("/cozy/api/input-fit?name=phone.heic").get_json()
+    assert d["from"] == [800, 600]
+
+
+def test_heic_preview_dimensions_match_what_the_crop_is_normalised_against(
+        tmp_path, monkeypatch):
+    """The alignment invariant, end to end.
+
+    The browser measures the preview and sends a rect in those pixels; the
+    server normalises that rect against image_size and composites onto a base
+    opened with Pillow. If any of the three disagreed, every HEIC crop would
+    land somewhere other than where it was drawn.
+    """
+    from PIL import Image as _Image
+    import image_size as _isz
+    c, indir = _heic_client(tmp_path, monkeypatch, (800, 600))
+
+    r = c.get("/cozy/api/input-image?name=phone.heic")
+    with _Image.open(io.BytesIO(r.data)) as im:
+        preview_dims = im.size
+    server_dims = _isz.image_size(str(indir / "phone.heic"))
+    with _Image.open(str(indir / "phone.heic")) as im:
+        composite_dims = im.size
+
+    assert preview_dims == server_dims == composite_dims == (800, 600)

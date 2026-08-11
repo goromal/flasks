@@ -154,3 +154,81 @@ def test_stage_whole_never_decodes_a_file_that_fits(tmp_path):
     src.write_bytes(b"\x89PNG\r\n")
     rel, res = fit.stage_whole(str(indir), str(src), 1024 * 1024)
     assert (rel, res) == (None, None)
+
+
+# --- HEIC / HEIF -------------------------------------------------------------
+# ComfyUI's Pillow has no HEIF plugin, so LoadImage cannot open a .heic at any
+# size. cozy reads them and stages something ComfyUI can read instead.
+
+def _heic(tmp_path, size=(640, 480), name="p.heic"):
+    p = tmp_path / name
+    buf = io.BytesIO()
+    Image.new("RGB", size, (10, 20, 30)).save(buf, "HEIF", quality=90)
+    p.write_bytes(buf.getvalue())
+    return p
+
+
+def test_importing_fit_registers_the_heif_opener(tmp_path):
+    p = _heic(tmp_path)
+    with Image.open(str(p)) as im:
+        assert im.format == "HEIF"
+        assert im.size == (640, 480)
+
+
+def test_needs_transcode_only_for_heif():
+    assert fit.needs_transcode("/x/photo.heic")
+    assert fit.needs_transcode("/x/photo.HEIF")
+    assert not fit.needs_transcode("/x/photo.png")
+    assert not fit.needs_transcode("/x/photo.jpg")
+
+
+def test_heic_under_the_ceiling_is_still_staged(tmp_path):
+    # The trap this guards: HEIC compresses well enough that a real photo often
+    # lands under the byte ceiling, so a size check alone would pass exactly the
+    # common case straight through to a LoadImage that cannot open it.
+    indir = tmp_path / "input"
+    indir.mkdir()
+    src = _heic(tmp_path)
+    assert os.path.getsize(str(src)) < 1024 * 1024   # comfortably under
+    rel, res = fit.stage_whole(str(indir), str(src), 1024 * 1024)
+    assert rel is not None, "a HEIC must be staged however small it is"
+    assert res is not None
+    with Image.open(os.path.join(str(indir), rel)) as im:
+        assert im.format in ("PNG", "JPEG")
+        assert im.size == (640, 480)
+
+
+def test_heic_is_staged_even_with_the_ceiling_disabled(tmp_path):
+    indir = tmp_path / "input"
+    indir.mkdir()
+    src = _heic(tmp_path)
+    rel, res = fit.stage_whole(str(indir), str(src), 0)
+    assert rel is not None
+    with Image.open(os.path.join(str(indir), rel)) as im:
+        assert im.format in ("PNG", "JPEG")
+
+
+def test_preview_jpeg_preserves_dimensions_exactly(tmp_path):
+    # Load-bearing: the browser sizes the crop overlay from the preview's
+    # naturalWidth and sends the rect in source pixels, so any rescale here
+    # would silently misplace every crop.
+    src = _heic(tmp_path, (800, 600))
+    data = fit.preview_jpeg(str(src))
+    with Image.open(io.BytesIO(data)) as im:
+        assert im.format == "JPEG"
+        assert im.size == (800, 600)
+
+
+def test_preview_jpeg_accepts_a_file_like(tmp_path):
+    src = _heic(tmp_path, (320, 240))
+    data = fit.preview_jpeg(io.BytesIO(src.read_bytes()))
+    with Image.open(io.BytesIO(data)) as im:
+        assert im.size == (320, 240)
+
+
+def test_non_heif_still_passes_through_untouched(tmp_path):
+    indir = tmp_path / "input"
+    indir.mkdir()
+    src = tmp_path / "a.png"
+    src.write_bytes(_png_bytes(_flat((200, 160))))
+    assert fit.stage_whole(str(indir), str(src), 1024 * 1024) == (None, None)

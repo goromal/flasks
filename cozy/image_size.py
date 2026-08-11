@@ -1,8 +1,20 @@
-"""Read (width, height) from common image headers without Pillow.
+"""Read (width, height) from common image headers.
 
 cozy needs an image's pixel dimensions to key edit-workflow ETA history by
-size. Only the header is parsed; unrecognized or unreadable input returns None
-so callers fall back to a workflow-only average.
+size, and -- more sharply -- to normalise a crop rect against. The common
+formats are parsed straight from their headers, which is cheap and keeps this
+module readable.
+
+Anything else falls back to Pillow. That fallback is what makes HEIC croppable:
+its dimensions live in a nested ISOBMFF box that is real work to parse by hand,
+and Pillow's open is lazy, so it reads little more than the header anyway. It
+also matters that the fallback goes through the same Image.open every other
+path uses (preview, staging, composite) -- pillow_heif normalises EXIF
+orientation there, so all four agree on the dimensions and a crop rect lands
+where the user drew it.
+
+Unreadable or unrecognized input still returns None, so callers keep their
+workflow-only-average fallback.
 """
 import struct
 
@@ -20,8 +32,28 @@ def image_size(path):
     except OSError:
         return None
     try:
-        return _parse(data)
+        size = _parse(data)
     except (struct.error, IndexError, ValueError):
+        size = None
+    return size if size else _pillow_size(path)
+
+
+def _pillow_size(path):
+    """Dimensions for anything _parse does not recognise, via Pillow.
+
+    Imported lazily and inside the try: this module is the cheap path for the
+    formats it knows, and a Pillow failure here means the same thing an
+    unrecognised header does -- no dimensions -- not an error worth raising.
+
+    Importing fit registers the HEIF opener as a side effect, which is the
+    whole reason HEIC resolves here.
+    """
+    try:
+        import fit  # noqa: F401 - registers the HEIF opener
+        from PIL import Image
+        with Image.open(path) as im:
+            return im.size
+    except Exception:  # noqa: BLE001 - any decode failure means "unknown"
         return None
 
 

@@ -19,7 +19,25 @@ import os
 import uuid
 from collections import namedtuple
 
+import pillow_heif
 from PIL import Image
+
+# HEIC is what phones produce, but ComfyUI's Pillow has no HEIF plugin, so
+# LoadImage cannot open one at any size. Registering the opener here -- the
+# module every image-handling path already imports -- lets cozy read them and
+# hand ComfyUI a staged PNG/JPEG instead. pillow_heif also normalises EXIF
+# orientation on open, which is what keeps a crop rect aligned: every path
+# (preview, image_size, staging, composite) goes through Image.open and so
+# agrees on the dimensions.
+pillow_heif.register_heif_opener()
+
+# Formats ComfyUI cannot read, which must therefore always be staged as
+# something it can -- never passed through, however small.
+TRANSCODE_EXTS = (".heic", ".heif")
+
+# Previews are for looking at and dragging a rect on, not for the model, so a
+# lower quality than JPEG_QUALITY is fine. Dimensions are what must be exact.
+PREVIEW_QUALITY = 85
 
 # 1 MiB. Also the argparse and NixOS default, so the three cannot drift.
 DEFAULT_MAX_BYTES = 1024 * 1024
@@ -119,6 +137,33 @@ def fit(img, max_bytes):
     return FitResult(best[0], ".jpg", best[1], best[2], True)
 
 
+def needs_transcode(path):
+    """True when ComfyUI (and the browser) cannot read this file's format.
+
+    Keyed on the extension rather than the content because the picker already
+    admits files by extension, and both callers -- staging and the preview
+    endpoint -- have a path in hand before any decode.
+    """
+    return str(path).lower().endswith(TRANSCODE_EXTS)
+
+
+def preview_jpeg(src):
+    """Transcode an image the browser cannot display into JPEG bytes.
+
+    `src` is a path or a file-like, so the same call serves a local pick and a
+    remote one held in memory.
+
+    The dimensions are deliberately preserved. The browser sizes the crop
+    overlay from the preview's naturalWidth and sends the rect in source
+    pixels, so a preview at anything other than the source's own size would
+    silently misplace every crop.
+    """
+    with Image.open(src) as im:
+        buf = io.BytesIO()
+        im.convert("RGB").save(buf, "JPEG", quality=PREVIEW_QUALITY)
+        return buf.getvalue()
+
+
 def _fits_file(path, max_bytes):
     if max_bytes <= 0:
         return True
@@ -175,8 +220,14 @@ def stage_whole(input_dir, src_path, max_bytes):
     never opened at all. That is not just an optimisation: cozy hands LoadImage
     whatever the picker resolved, and it is not this function's business to
     decide an input is undecodable when nothing needs decoding.
+
+    A format ComfyUI cannot read is the exception: it is staged whatever its
+    size, because passing it through would hand LoadImage a file it cannot
+    open. HEIC makes this concrete -- it is efficient enough that a phone photo
+    routinely lands under the ceiling, so the size check alone would let
+    exactly the common case through unconverted.
     """
-    if _fits_file(src_path, max_bytes):
+    if _fits_file(src_path, max_bytes) and not needs_transcode(src_path):
         return None, None
     with Image.open(src_path) as src:
         res = fit(src, max_bytes)

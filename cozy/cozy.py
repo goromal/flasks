@@ -274,6 +274,15 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         full = image_refs.resolve(input_dir, output_dir, flask.request.args.get("name", ""))
         if not full:
             return flask.jsonify({"error": "not found"}), 404
+        # HEIC renders in almost no browser, and a preview that does not render
+        # is not merely ugly: the crop overlay sizes itself from the image's
+        # naturalWidth, so without this the region cannot be drawn at all.
+        if fit.needs_transcode(full):
+            try:
+                data = fit.preview_jpeg(full)
+            except OSError:
+                return flask.jsonify({"error": "cannot read input image"}), 400
+            return flask.send_file(io.BytesIO(data), mimetype="image/jpeg")
         return flask.send_file(full)
 
     @bp.route("/api/input-fit", methods=["GET"])
@@ -347,6 +356,14 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
                                       max_bytes=_MAX_REMOTE_IMAGE_BYTES)
         except wormhole.WormholeError as e:
             return flask.jsonify({"error": str(e)}), 502
+        # Same reason as /api/input-image, one step earlier: the bytes are in
+        # memory rather than on disk, so transcode from the buffer.
+        if fit.needs_transcode(path):
+            try:
+                data = fit.preview_jpeg(io.BytesIO(data))
+            except OSError:
+                return flask.jsonify({"error": "cannot read remote image"}), 400
+            return flask.send_file(io.BytesIO(data), mimetype="image/jpeg")
         mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
         return flask.send_file(io.BytesIO(data), mimetype=mime)
 

@@ -13,7 +13,10 @@ need to resolve a picker value to a real file.
 """
 import os
 
-IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
+# .heic/.heif are offered even though ComfyUI cannot read them: cozy always
+# stages those as PNG/JPEG (see fit.needs_transcode), so LoadImage never sees
+# one, and the picker previews them transcoded.
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".heic", ".heif")
 
 OUTPUT_SUFFIX = " [output]"
 

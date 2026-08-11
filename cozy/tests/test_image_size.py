@@ -1,6 +1,8 @@
 import struct
 import zlib
 
+import pytest
+
 import image_size
 
 
@@ -64,3 +66,39 @@ def test_unrecognized_returns_none(tmp_path):
 
 def test_missing_file_returns_none(tmp_path):
     assert image_size.image_size(str(tmp_path / "nope.png")) is None
+
+
+def _heic_bytes(size):
+    import io as _io
+
+    from PIL import Image as _Image
+    buf = _io.BytesIO()
+    _Image.new("RGB", size, (1, 2, 3)).save(buf, "HEIF", quality=90)
+    return buf.getvalue()
+
+
+def test_heic_dimensions_via_the_pillow_fallback(tmp_path):
+    p = tmp_path / "p.heic"
+    p.write_bytes(_heic_bytes((800, 600)))
+    assert image_size.image_size(str(p)) == (800, 600)
+
+
+def test_header_formats_do_not_touch_pillow(tmp_path, monkeypatch):
+    # The fallback is for formats _parse does not know. If a PNG reached it,
+    # the cheap path would have silently stopped working.
+    import io as _io
+
+    from PIL import Image as _Image
+    p = tmp_path / "a.png"
+    buf = _io.BytesIO()
+    _Image.new("RGB", (123, 45), (1, 2, 3)).save(buf, "PNG")
+    p.write_bytes(buf.getvalue())
+    monkeypatch.setattr(image_size, "_pillow_size",
+                        lambda path: pytest.fail("PNG must not reach the Pillow fallback"))
+    assert image_size.image_size(str(p)) == (123, 45)
+
+
+def test_garbage_still_returns_none(tmp_path):
+    p = tmp_path / "x.heic"
+    p.write_bytes(b"not an image at all")
+    assert image_size.image_size(str(p)) is None
