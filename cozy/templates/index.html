@@ -59,6 +59,9 @@
            the stage clips it to the image. */
         #crop-rect { position:absolute; border:2px solid #4e73df; box-shadow:0 0 0 9999px rgba(0,0,0,0.45); pointer-events:none; display:none; }
         #crop-label { font-size:0.85rem; color:#495057; margin-top:6px; }
+        /* Advisory, not an error: amber rather than the red .error treatment. */
+        #fit-note { font-size:0.85rem; color:#8a6d3b; margin-top:4px; display:none; }
+        #fit-result { color:#8a6d3b; }
         #crop-output { margin:16px 0 0; text-align:center; display:none; }
         #crop-output img { max-width:200px; border-radius:6px; cursor:pointer; }
         #crop-output figcaption { font-size:0.8rem; color:#6c757d; margin-top:4px; }
@@ -133,6 +136,7 @@
                         <div id="crop-rect"></div>
                     </div>
                     <div id="crop-label"></div>
+                    <div id="fit-note"></div>
                     <div class="prompt-actions">
                         <button type="button" class="secondary" id="crop-clear">Clear region</button>
                     </div>
@@ -179,6 +183,7 @@
         <div class="eta" id="eta"></div>
         <div class="error" id="error"></div>
         <div class="duration" id="duration"></div>
+        <div class="duration" id="fit-result"></div>
 
         <div id="output"></div>
         <figure id="crop-output">
@@ -318,7 +323,7 @@
                 " at (" + cropRect.x + ", " + cropRect.y + ")";
         }
 
-        function clearCropRect() { cropRect = null; renderCropRect(); }
+        function clearCropRect() { cropRect = null; renderCropRect(); scheduleFitNote(); }
 
         // Recomputed per event, so a resize between drags cannot skew the maths.
         function toNatural(ev) {
@@ -352,6 +357,7 @@
             // A tap with no drag normalises to null, which clears the region.
             cropRect = cropRect ? normalizeRect(cropRect) : null;
             renderCropRect();
+            scheduleFitNote();
         });
         // A cancelled gesture never fires pointerup; without this the drag stays
         // latched and the rect keeps following the pointer.
@@ -360,6 +366,58 @@
         // naturalWidth is only meaningful once the image has decoded.
         preview.addEventListener("load", renderCropRect);
         window.addEventListener("resize", renderCropRect);
+
+        // --- Input size ceiling ---
+        // Byte size is only knowable by encoding, so the browser cannot work
+        // this out itself the way it mirrors normalize_rect above. Ask the
+        // server, which runs the very fit the job will run. Debounced because
+        // it fires on every finished drag.
+        const fitNote = document.getElementById("fit-note");
+        let fitTimer = null;
+
+        function setFitNote(text) {
+            fitNote.textContent = text || "";
+            fitNote.style.display = text ? "block" : "none";
+        }
+
+        function formatBytes(n) {
+            return n >= 1048576 ? (n / 1048576).toFixed(1) + " MB"
+                                : Math.round(n / 1024) + " KB";
+        }
+
+        async function refreshFitNote() {
+            if (currentKind() !== "edit") return setFitNote("");
+            // A remote image is not on disk until the job stages it; fetching
+            // it over SSH on every pick would make the picker unusable.
+            if (remoteImage) {
+                return setFitNote("Remote image size is checked when the job runs.");
+            }
+            if (!imageSelect.value) return setFitNote("");
+            let q = "name=" + encodeURIComponent(imageSelect.value);
+            if (cropRect) {
+                q += "&x=" + cropRect.x + "&y=" + cropRect.y +
+                     "&w=" + cropRect.w + "&h=" + cropRect.h;
+            }
+            try {
+                const r = await fetch(root + "api/input-fit?" + q);
+                if (!r.ok) return setFitNote("");
+                const d = await r.json();
+                if (!d.resized) return setFitNote("");
+                setFitNote((cropRect ? "Selection" : "Image") + " is " +
+                           d.from[0] + "×" + d.from[1] + " — will be resized to " +
+                           d.to[0] + "×" + d.to[1] + " to fit the " +
+                           formatBytes(d.limit) + " limit.");
+            } catch (e) {
+                // Advisory only. The server fits authoritatively at run time,
+                // so a failed preview must never block Generate.
+                setFitNote("");
+            }
+        }
+
+        function scheduleFitNote() {
+            clearTimeout(fitTimer);
+            fitTimer = setTimeout(refreshFitNote, 250);
+        }
 
         function escAttr(s) {
             return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
@@ -395,6 +453,7 @@
             promptLabel.textContent = edit ? "Edit instruction" : "Prompt";
             if (edit && !imageSelect.options.length) loadInputImages();
             if (edit) renderCropRect();
+            scheduleFitNote();
         }
 
         workflowSel.addEventListener("change", applyKind);
@@ -429,6 +488,15 @@
             const t = formatDuration(secs);
             durationBox.textContent = t ? "Generated in " + t : "";
             durationBox.style.display = t ? "block" : "none";
+        }
+
+        // Covers the case the pre-flight note cannot: a remote input, whose
+        // size is only knowable once the job has staged it.
+        function showFitResult(f) {
+            const el = document.getElementById("fit-result");
+            el.textContent = f ? ("Input was resized to " + f.to[0] + "×" +
+                                  f.to[1] + " to fit the input-size limit.") : "";
+            el.style.display = f ? "block" : "none";
         }
 
         function showEta(secs) {
@@ -477,6 +545,7 @@
                 if (polling) { clearInterval(polling); polling = null; }
                 if (s.status === "failed") showError(s.error || "generation failed");
                 else showError("");
+                showFitResult(s.fit);
                 if (s.has_image) { showImage(s.has_crop); showDuration(s.duration); }
                 // A composite that failed still leaves the model's own output on
                 // disk; surface it rather than showing nothing.
@@ -492,6 +561,7 @@
         document.getElementById("generate").addEventListener("click", async () => {
             showError("");
             showDuration(null);
+            showFitResult(null);
             output.innerHTML = "";
             cropOutput.style.display = "none";
             const payload = currentJobPayload();
@@ -508,7 +578,7 @@
             document.getElementById("prompt").value = "";
             imageSelect.value = ""; clearRemoteImage(); clearCropRect(); updatePreview();
             IMAGE_SRC = null;  // Clear also forgets the remembered remote source dir
-            output.innerHTML = ""; cropOutput.style.display = "none"; showError(""); showDuration(null); bar.style.width = "0%";
+            output.innerHTML = ""; cropOutput.style.display = "none"; showError(""); showDuration(null); showFitResult(null); bar.style.width = "0%";
             // The server reset the prompt-DB selection too; re-sync the
             // library panel if it has been opened.
             if (pdbLoaded) { pdbHost = ""; refreshPdb(); }
@@ -813,6 +883,7 @@
             remoteImage = null;
             remoteImageLabel.textContent = "";
             remoteImageLabel.style.display = "none";
+            scheduleFitNote();
         }
 
         function setRemoteImage(host, path) {
@@ -825,6 +896,7 @@
             preview.src = root + "api/remote-image?host=" + encodeURIComponent(host) +
                 "&path=" + encodeURIComponent(path) + "&t=" + Date.now();
             previewWrap.style.display = "block";
+            scheduleFitNote();
         }
 
         // Remember the host + source directory a remote image was picked from,
@@ -944,7 +1016,8 @@
         let lastResultsSig = null;
         function renderResults(results) {
             const sig = results.map(j => j.id + ":" + (j.has_image ? 1 : 0) + ":" +
-                                    (j.has_crop ? 1 : 0) + ":" + j.status).join(",");
+                                    (j.has_crop ? 1 : 0) + ":" + j.status + ":" +
+                                    (j.fit ? j.fit.to.join("x") : "")).join(",");
             if (sig === lastResultsSig) return;
             lastResultsSig = sig;
             const res = document.getElementById("q-results");
@@ -975,6 +1048,12 @@
                     cap.textContent = j.workflow + "  " + formatDuration(j.duration);
                 }
                 fig.appendChild(cap);
+                if (j.fit) {
+                    const fc = document.createElement("div");
+                    fc.style.color = "#8a6d3b";
+                    fc.textContent = "resized to " + j.fit.to[0] + "×" + j.fit.to[1];
+                    fig.appendChild(fc);
+                }
                 res.appendChild(fig);
             });
         }

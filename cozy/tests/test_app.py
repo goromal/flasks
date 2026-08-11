@@ -1001,3 +1001,13 @@ def test_input_fit_malformed_rect_400(tmp_path, monkeypatch):
     r = c.get("/cozy/api/input-fit?name=big.png&x=0&y=0&w=0&h=10")
     assert r.status_code == 400
     assert r.get_json()["error"] == "invalid crop region"
+
+
+def test_index_has_fit_note_ui(tmp_path, monkeypatch):
+    c, _ = _edit_client(tmp_path, monkeypatch)
+    page = c.get("/cozy/").data
+    assert b'id="fit-note"' in page
+    assert b'id="fit-result"' in page
+    assert b"api/input-fit" in page
+    # The pre-flight is debounced, never fired straight from pointermove.
+    assert b"scheduleFitNote" in page
