@@ -166,9 +166,18 @@ def stage(input_dir, res, subdir=SUBDIR):
 
 
 def stage_whole(input_dir, src_path, max_bytes):
-    """plan() plus stage(). Returns (input-relative path or None, FitResult);
-    a None path means the source file itself is what LoadImage should read."""
-    res = plan(src_path, max_bytes)
-    if res.data is None:
-        return None, res
+    """Stage a fitted copy of a whole image, or nothing if it already fits.
+
+    Returns (input-relative path, FitResult), or (None, None) when the source
+    file is within budget and LoadImage should read it directly.
+
+    The size check short-circuits before any decode, so a file that fits is
+    never opened at all. That is not just an optimisation: cozy hands LoadImage
+    whatever the picker resolved, and it is not this function's business to
+    decide an input is undecodable when nothing needs decoding.
+    """
+    if _fits_file(src_path, max_bytes):
+        return None, None
+    with Image.open(src_path) as src:
+        res = fit(src, max_bytes)
     return stage(input_dir, res), res

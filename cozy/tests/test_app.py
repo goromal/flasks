@@ -16,6 +16,8 @@ class FakeStore:
         self.started_rect = None
         self.started_source = None
         self.started_staged_path = None
+        self.started_fit = None
+        self.state_fit = None
         self.image_path = "/nonexistent/output.png"
         self.crop_image_path = "/nonexistent/output-crop.png"
         self.state_dir = state_dir
@@ -24,7 +26,7 @@ class FakeStore:
 
     def read_state(self):
         return {"workflow": "imggen", "prompt": "p", "width": 400, "height": 800,
-                "image": "", "rect": None,
+                "image": "", "rect": None, "fit": self.state_fit,
                 "prompt_db": None, "known_hosts": [], "image_src": None,
                 "job": {"status": "running" if self._running else "idle",
                         "progress": 42, "error": None, "record_pixels": 320000,
@@ -42,7 +44,7 @@ class FakeStore:
         self.image_src = (host, path)
 
     def start(self, name, path, prompt, w, h, image="", eta_pixels=None,
-              source_path=None, rect=None, staged_path=None):
+              source_path=None, rect=None, staged_path=None, fit=None):
         if self._running:
             return False
         self._running = True
@@ -50,6 +52,7 @@ class FakeStore:
         self.started_rect = rect
         self.started_source = source_path
         self.started_staged_path = staged_path
+        self.started_fit = fit
         return True
 
     def clear(self):
@@ -825,3 +828,107 @@ def test_queue_image_rejects_traversal(tmp_path, monkeypatch):
     open(os.path.join(str(tmp_path), "output.png"), "wb").write(b"SECRET")
     assert c.get("/cozy/api/queue/image?id=../output").status_code == 404
     assert c.get("/cozy/api/queue/image?id=notahexid").status_code == 404
+
+
+def _noisy_png(size):
+    """A PNG that does not compress, so the byte budget actually bites."""
+    import io as _io
+    import random
+
+    from PIL import Image as _Image
+    rnd = random.Random(7)
+    im = _Image.new("RGB", size)
+    im.putdata([(rnd.randrange(256), rnd.randrange(256), rnd.randrange(256))
+                for _ in range(size[0] * size[1])])
+    buf = _io.BytesIO()
+    im.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _fit_client(tmp_path, monkeypatch, max_bytes):
+    """An edit client holding one large, incompressible PNG ('big.png') and one
+    small one ('a.png'), under a caller-chosen budget."""
+    indir = tmp_path / "input"
+    indir.mkdir()
+    (indir / "big.png").write_bytes(_noisy_png((600, 600)))
+    (indir / "a.png").write_bytes(_noisy_png((64, 64)))
+    open(os.path.join(str(tmp_path), "edit.api.json"), "w").write("{}")
+    store = FakeStore()
+    app = cozy.create_app(store=store, workflows=["edit"],
+                          workflow_dir=str(tmp_path), subdomain="/cozy",
+                          input_dir=str(indir), output_dir=str(tmp_path / "out"),
+                          workflow_kinds={"edit": "edit"},
+                          max_input_bytes=max_bytes)
+    app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
+    c = app.test_client()
+    c._store = store
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    _login(c)
+    return c, indir
+
+
+def test_oversize_whole_image_is_staged_under_fit(tmp_path, monkeypatch):
+    c, indir = _fit_client(tmp_path, monkeypatch, 20 * 1024)
+    r = c.post("/cozy/api/generate", json={
+        "workflow": "edit", "prompt": "x", "image": "big.png"})
+    assert r.status_code == 200
+    staged = c._store.started[4]
+    assert staged.startswith("fit" + os.sep)
+    assert os.path.getsize(str(indir / staged)) <= 20 * 1024
+    # It is a consumed intermediate, so the run path must be told to reap it.
+    assert c._store.started_staged_path == os.path.join(str(indir), staged)
+    assert c._store.started_fit["to"] != [600, 600]
+
+
+def test_whole_image_within_budget_is_passed_through(tmp_path, monkeypatch):
+    c, indir = _fit_client(tmp_path, monkeypatch, 1024 * 1024)
+    r = c.post("/cozy/api/generate", json={
+        "workflow": "edit", "prompt": "x", "image": "a.png"})
+    assert r.status_code == 200
+    assert c._store.started[4] == "a.png"
+    assert c._store.started_staged_path is None
+    assert c._store.started_fit is None
+    assert not (indir / "fit").exists()
+
+
+def test_oversize_crop_is_shrunk_and_recorded(tmp_path, monkeypatch):
+    c, indir = _fit_client(tmp_path, monkeypatch, 20 * 1024)
+    r = c.post("/cozy/api/generate", json={
+        "workflow": "edit", "prompt": "x", "image": "big.png",
+        "rect": {"x": 0, "y": 0, "w": 512, "h": 512}})
+    assert r.status_code == 200
+    st = c._store
+    assert st.started_rect == {"x": 0, "y": 0, "w": 512, "h": 512}
+    fit_info = st.started_fit
+    assert fit_info["from"] == [512, 512]
+    assert fit_info["to"][0] < 512
+    assert 0 < fit_info["scale"] < 1
+    staged = st.started[4]
+    assert os.path.getsize(str(indir / staged)) <= 20 * 1024
+    # ETA is keyed on what the model sees, which is now the resized crop.
+    assert st.started[5] == fit_info["to"][0] * fit_info["to"][1]
+
+
+def test_small_crop_of_a_large_image_is_not_resized(tmp_path, monkeypatch):
+    c, _ = _fit_client(tmp_path, monkeypatch, 60 * 1024)
+    r = c.post("/cozy/api/generate", json={
+        "workflow": "edit", "prompt": "x", "image": "big.png",
+        "rect": {"x": 0, "y": 0, "w": 64, "h": 64}})
+    assert r.status_code == 200
+    assert c._store.started_fit is None
+
+
+def test_status_reports_fit(tmp_path, monkeypatch):
+    c, _ = _edit_client(tmp_path, monkeypatch)
+    c._store.state_fit = {"scale": 0.5, "from": [800, 600], "to": [400, 300]}
+    assert c.get("/cozy/api/status").get_json()["fit"]["to"] == [400, 300]
+
+
+def test_flush_removes_the_fit_subdir(tmp_path, monkeypatch):
+    c, indir = _fit_client(tmp_path, monkeypatch, 20 * 1024)
+    c.post("/cozy/api/generate", json={
+        "workflow": "edit", "prompt": "x", "image": "big.png"})
+    assert (indir / "fit").exists()
+    assert c.post("/cozy/api/flush").status_code == 200
+    assert not (indir / "fit").exists()

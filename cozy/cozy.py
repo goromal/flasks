@@ -21,6 +21,7 @@ from comfyui_client import ComfyUIClient
 from job_store import JobStore, job_duration
 import crop
 import eta
+import fit
 import image_refs
 import image_size
 import queue_store
@@ -77,7 +78,8 @@ class User(flask_login.UserMixin):
 def create_app(store, workflows, workflow_dir, subdomain="/cozy",
                input_dir=None, output_dir=None, workflow_kinds=None,
                secret_key=None, password_hash=None, restart_cmd=None,
-               prompt_db_dir=None, queue_store=None, scheduler=None):
+               prompt_db_dir=None, queue_store=None, scheduler=None,
+               max_input_bytes=fit.DEFAULT_MAX_BYTES):
     global _PW_HASH
     if password_hash is not None:
         _PW_HASH = password_hash
@@ -187,18 +189,37 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         path = os.path.join(workflow_dir, wf + ".api.json")
         if not os.path.exists(path):
             return flask.jsonify({"error": "workflow file missing"}), 400
-        if rect:
-            # Staged only now: everything above this point can still reject the
-            # request, and a rejected request must not leave an orphaned crop.
-            try:
-                image, _res = crop.stage(input_dir, source_path, rect)
-            except OSError:
-                return flask.jsonify({"error": "cannot read input image"}), 400
-            staged_path = os.path.join(input_dir, image)
+        # Staged only now: everything above this point can still reject the
+        # request, and a rejected request must not leave an orphaned file.
+        fit_info = None
+        res = None
+        try:
+            if rect:
+                image, res = crop.stage(input_dir, source_path, rect,
+                                        max_input_bytes)
+                staged_path = os.path.join(input_dir, image)
+                fit_from = [rect["w"], rect["h"]]
+            elif source_path:
+                rel, res = fit.stage_whole(input_dir, source_path,
+                                           max_input_bytes)
+                if rel:
+                    image = rel
+                    staged_path = os.path.join(input_dir, rel)
+                fit_from = list(dims) if dims else None
+        except OSError:
+            return flask.jsonify({"error": "cannot read input image"}), 400
+        if res is not None and res.resized:
+            fit_info = {"scale": res.scale, "to": list(res.size),
+                        "from": fit_from or list(res.size)}
+            # ETA history is keyed on what the model actually sees -- the same
+            # reason a crop is measured instead of its source. A resized input
+            # is fewer pixels, so recording the pre-resize count would drag
+            # this workflow's estimates the wrong way.
+            eta_pixels = res.size[0] * res.size[1]
         if not store.start(wf, path, prompt, width, height, image,
                            eta_pixels=eta_pixels, source_path=source_path,
-                           rect=rect, staged_path=staged_path):
-            # Nothing will consume the crop we just staged.
+                           rect=rect, staged_path=staged_path, fit=fit_info):
+            # Nothing will consume the file we just staged.
             if staged_path:
                 try:
                     os.remove(staged_path)
@@ -225,6 +246,7 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
             "error": job.get("error"),
             "has_image": bool(state.get("output")),
             "has_crop": bool(state.get("crop_output")),
+            "fit": state.get("fit"),
             "duration": job_duration(job),
             "eta": eta_secs,
         })
@@ -556,7 +578,7 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         # Staged remote images and staged crops are cozy's own artifacts; remove
         # them here rather than assuming the admin flush.sh scripts recurse into
         # subdirectories.
-        for sub in ("wormhole", crop.CROP_SUBDIR):
+        for sub in ("wormhole", crop.CROP_SUBDIR, fit.SUBDIR):
             shutil.rmtree(os.path.join(input_dir, sub), ignore_errors=True)
         # Run a flush.sh (if present) in the input and output dirs. The scripts
         # are placed there out-of-band by the admin; a missing one is a no-op, so
@@ -616,6 +638,11 @@ def run():
                              "'systemctl restart comfyui.service'); empty hides the restart button")
     parser.add_argument("--rest-gap", type=int, default=30,
                         help="Seconds to rest between queued jobs")
+    parser.add_argument("--max-input-bytes", type=int,
+                        default=fit.DEFAULT_MAX_BYTES,
+                        help="Byte ceiling on the image an edit workflow hands "
+                             "to ComfyUI; larger inputs are resized down. "
+                             "0 disables the ceiling")
     args = parser.parse_args()
 
     state_dir = args.state_dir or os.path.join(os.getcwd(), "cozy-state")
@@ -646,7 +673,8 @@ def run():
                      password_hash=secrets["password_hash"],
                      restart_cmd=restart_cmd,
                      prompt_db_dir=args.prompt_db_dir or os.path.join(state_dir, "prompts"),
-                     queue_store=qstore, scheduler=scheduler)
+                     queue_store=qstore, scheduler=scheduler,
+                     max_input_bytes=args.max_input_bytes)
     app.run(host="0.0.0.0", port=args.port)
 
 

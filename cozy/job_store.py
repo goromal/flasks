@@ -39,6 +39,16 @@ def job_duration(job):
     return secs if secs >= 0 else None
 
 
+def _fit_scale(fit):
+    """The linear factor a fitted input was shrunk by, or 1.0.
+
+    Lives here because three call sites need it -- start(), the run thread, and
+    read_state()'s recovery path -- and every one of them may be reading a dict
+    written before the field existed.
+    """
+    return (fit or {}).get("scale", 1.0)
+
+
 class JobStore:
     """Owns the on-disk state of the single cozy generation job.
 
@@ -62,7 +72,7 @@ class JobStore:
 
     def _default_state(self):
         return {"workflow": None, "prompt": "", "width": DEFAULT_W,
-                "height": DEFAULT_H, "image": "", "rect": None,
+                "height": DEFAULT_H, "image": "", "rect": None, "fit": None,
                 "job": _idle_job(), "prompt_db": None, "known_hosts": [],
                 "image_src": None, "source_path": None,
                 "output": os.path.exists(self.image_path),
@@ -107,7 +117,8 @@ class JobStore:
                     img = runner.fetch_image(self.client, pid)
                     if img is not None:
                         rect = state.get("rect")
-                        self._write_outputs(img, state.get("source_path"), rect)
+                        self._write_outputs(img, state.get("source_path"), rect,
+                                            _fit_scale(state.get("fit")))
                         state["job"].update(status="success", progress=100,
                                             finished_at=_now(), error=None)
                         state["output"] = True
@@ -162,7 +173,7 @@ class JobStore:
 
     def start(self, workflow_name, workflow_path, prompt, width, height,
               image="", eta_pixels=None, source_path=None, rect=None,
-              staged_path=None):
+              staged_path=None, fit=None):
         with self._lock:
             if self._read_raw().get("job", {}).get("status") == "running":
                 return False
@@ -179,7 +190,7 @@ class JobStore:
             state = self._read_raw()
             state.update(workflow=workflow_name, prompt=prompt,
                          width=int(width), height=int(height), image=image,
-                         rect=rect, source_path=source_path)
+                         rect=rect, source_path=source_path, fit=fit)
             state["job"] = {"status": "running", "prompt_id": None, "progress": 0,
                             "started_at": _now(), "finished_at": None,
                             "error": None, "client_id": client_id,
@@ -194,7 +205,8 @@ class JobStore:
             self._write_state(state)
             self._thread = threading.Thread(
                 target=self._run,
-                args=(graph, client_id, source_path, rect, staged_path),
+                args=(graph, client_id, source_path, rect, staged_path,
+                      _fit_scale(fit)),
                 daemon=True)
             self._thread.start()
             return True
@@ -219,7 +231,7 @@ class JobStore:
             state["job"].update(status="failed", finished_at=_now(), error=error)
             self._write_state(state)
 
-    def _write_outputs(self, img, source_path, rect):
+    def _write_outputs(self, img, source_path, rect, scale=1.0):
         """Persist a finished job's images.
 
         With a rect, the model's own output is written FIRST and the composite
@@ -239,7 +251,7 @@ class JobStore:
             return
         with open(self.crop_image_path, "wb") as f:
             f.write(img)
-        composited = crop.composite(source_path, rect, img)
+        composited = crop.composite(source_path, rect, img, scale)
         with open(self.image_path, "wb") as f:
             f.write(composited)
         # output.png is display-only and is deleted at the start of the next
@@ -249,13 +261,13 @@ class JobStore:
             crop.save_composite(self.output_dir, source_path, composited)
 
     def _run(self, graph, client_id, source_path=None, rect=None,
-             staged_path=None):
+             staged_path=None, scale=1.0):
         try:
             img = runner.execute(self.client, graph, client_id,
                                  on_progress=self._set_progress,
                                  on_prompt_id=self._set_prompt_id)
             with self._lock:
-                self._write_outputs(img, source_path, rect)
+                self._write_outputs(img, source_path, rect, scale)
                 state = self._read_raw()
                 state["job"].update(status="success", progress=100,
                                     finished_at=_now(), error=None)
@@ -293,6 +305,7 @@ class JobStore:
             state["prompt"] = ""
             state["image"] = ""
             state["rect"] = None
+            state["fit"] = None
             state["source_path"] = None
             # Clear resets the remote selections too (prompt DB and image
             # source) but keeps known_hosts: retyping hostnames is the pain

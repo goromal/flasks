@@ -140,5 +140,17 @@ def test_stage_whole_stages_nothing_when_the_file_fits(tmp_path):
     src.write_bytes(_png_bytes(_flat((200, 160))))
     rel, res = fit.stage_whole(str(indir), str(src), 1024 * 1024)
     assert rel is None
-    assert res.resized is False
+    assert res is None
     assert not (indir / fit.SUBDIR).exists()
+
+
+def test_stage_whole_never_decodes_a_file_that_fits(tmp_path):
+    # cozy hands LoadImage whatever the picker resolved; a file within budget
+    # must pass through without this module forming an opinion on whether it
+    # decodes. Guards the fake-PNG fixtures the app tests rely on.
+    indir = tmp_path / "input"
+    indir.mkdir()
+    src = tmp_path / "fake.png"
+    src.write_bytes(b"\x89PNG\r\n")
+    rel, res = fit.stage_whole(str(indir), str(src), 1024 * 1024)
+    assert (rel, res) == (None, None)
