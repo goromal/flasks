@@ -96,7 +96,10 @@ def plan(src_path, rect, max_bytes):
     picker shows is computed by the code that will run.
     """
     x, y = rect["x"], rect["y"]
-    with Image.open(src_path) as src:
+    # open_source, not Image.open: the rect arrives in the browser's display
+    # coordinates, so the crop must be taken from the display orientation or it
+    # lands somewhere unrelated to what the user drew.
+    with fit.open_source(src_path) as src:
         patch = src.convert("RGB").crop((x, y, x + rect["w"], y + rect["h"]))
     return fit.fit(patch, max_bytes)
 
@@ -154,7 +157,7 @@ def composite(src_path, rect, edited_bytes, scale=1.0):
     rather than staging a resized copy keeps the original as the only source of
     truth, which is what makes JobStore's crash recovery still work.
     """
-    with Image.open(src_path) as src:
+    with fit.open_source(src_path) as src:
         base = src.convert("RGB")
         if scale != 1.0:
             base = base.resize((max(int(round(base.width * scale)), 1),

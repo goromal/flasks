@@ -1,66 +1,56 @@
-import struct
-import zlib
+"""image_size reads the dimensions an image is *displayed* at.
 
-import pytest
+These used to drive hand-written header parsers with synthetic fixtures -- a
+PNG carrying an IHDR and nothing else, a BMP truncated after its size field.
+The parsers are gone (see image_size's docstring: one orientation-aware
+implementation beats five that each need their own), and with them that
+tolerance: dimensions now require a file Pillow can open.
+
+That is a deliberate narrowing, and it costs nothing real. Every caller reads a
+complete file off disk, and a half-written one has no business being fed to
+ComfyUI regardless. What it buys is that a rect normalises against the same
+coordinates the browser drew it in -- see test_orientation.py.
+"""
+import io
+
+from PIL import Image
 
 import image_size
 
 
-def _png(path, w, h):
-    sig = b"\x89PNG\r\n\x1a\n"
-    ihdr = struct.pack(">II", w, h) + b"\x08\x06\x00\x00\x00"
-    chunk = struct.pack(">I", len(ihdr)) + b"IHDR" + ihdr
-    chunk += struct.pack(">I", zlib.crc32(b"IHDR" + ihdr) & 0xFFFFFFFF)
-    path.write_bytes(sig + chunk)
-
-
-def _gif(path, w, h):
-    path.write_bytes(b"GIF89a" + struct.pack("<HH", w, h) + b"\x00" * 4)
-
-
-def _bmp(path, w, h):
-    header = b"BM" + b"\x00" * 16 + struct.pack("<ii", w, h)
-    path.write_bytes(header)
-
-
-def _jpeg(path, w, h):
-    sof0 = b"\xff\xc0" + struct.pack(">H", 17) + b"\x08" + struct.pack(">HH", h, w) + b"\x03" + b"\x00" * 9
-    path.write_bytes(b"\xff\xd8" + b"\xff\xe0\x00\x04ab" + sof0)
-
-
-def _webp_vp8x(path, w, h):
-    body = b"VP8X" + struct.pack("<I", 10) + b"\x00\x00\x00\x00"
-    body += struct.pack("<I", w - 1)[:3] + struct.pack("<I", h - 1)[:3]
-    path.write_bytes(b"RIFF" + struct.pack("<I", len(body) + 4) + b"WEBP" + body)
+def _write(path, size, fmt, **kw):
+    Image.new("RGB", size, (10, 20, 30)).save(str(path), fmt, **kw)
+    return str(path)
 
 
 def test_png(tmp_path):
-    p = tmp_path / "a.png"; _png(p, 400, 800)
-    assert image_size.image_size(str(p)) == (400, 800)
+    assert image_size.image_size(_write(tmp_path / "a.png", (400, 800), "PNG")) == (400, 800)
 
 
 def test_gif(tmp_path):
-    p = tmp_path / "a.gif"; _gif(p, 12, 34)
-    assert image_size.image_size(str(p)) == (12, 34)
+    assert image_size.image_size(_write(tmp_path / "a.gif", (12, 34), "GIF")) == (12, 34)
 
 
 def test_bmp(tmp_path):
-    p = tmp_path / "a.bmp"; _bmp(p, 640, 480)
-    assert image_size.image_size(str(p)) == (640, 480)
+    assert image_size.image_size(_write(tmp_path / "a.bmp", (640, 480), "BMP")) == (640, 480)
 
 
 def test_jpeg(tmp_path):
-    p = tmp_path / "a.jpg"; _jpeg(p, 111, 222)
-    assert image_size.image_size(str(p)) == (111, 222)
+    assert image_size.image_size(_write(tmp_path / "a.jpg", (111, 222), "JPEG")) == (111, 222)
 
 
-def test_webp_vp8x(tmp_path):
-    p = tmp_path / "a.webp"; _webp_vp8x(p, 1024, 768)
-    assert image_size.image_size(str(p)) == (1024, 768)
+def test_webp(tmp_path):
+    assert image_size.image_size(_write(tmp_path / "a.webp", (1024, 768), "WEBP")) == (1024, 768)
+
+
+def test_heic(tmp_path):
+    # Reachable only because importing fit registers the HEIF opener.
+    assert image_size.image_size(_write(tmp_path / "p.heic", (800, 600), "HEIF")) == (800, 600)
 
 
 def test_unrecognized_returns_none(tmp_path):
-    p = tmp_path / "a.bin"; p.write_bytes(b"not an image")
+    p = tmp_path / "a.bin"
+    p.write_bytes(b"not an image")
     assert image_size.image_size(str(p)) is None
 
 
@@ -68,37 +58,19 @@ def test_missing_file_returns_none(tmp_path):
     assert image_size.image_size(str(tmp_path / "nope.png")) is None
 
 
-def _heic_bytes(size):
-    import io as _io
+def test_truncated_file_returns_none(tmp_path):
+    """The narrowing, stated outright: a partial file no longer yields dimensions.
 
-    from PIL import Image as _Image
-    buf = _io.BytesIO()
-    _Image.new("RGB", size, (1, 2, 3)).save(buf, "HEIF", quality=90)
-    return buf.getvalue()
-
-
-def test_heic_dimensions_via_the_pillow_fallback(tmp_path):
-    p = tmp_path / "p.heic"
-    p.write_bytes(_heic_bytes((800, 600)))
-    assert image_size.image_size(str(p)) == (800, 600)
-
-
-def test_header_formats_do_not_touch_pillow(tmp_path, monkeypatch):
-    # The fallback is for formats _parse does not know. If a PNG reached it,
-    # the cheap path would have silently stopped working.
-    import io as _io
-
-    from PIL import Image as _Image
-    p = tmp_path / "a.png"
-    buf = _io.BytesIO()
-    _Image.new("RGB", (123, 45), (1, 2, 3)).save(buf, "PNG")
-    p.write_bytes(buf.getvalue())
-    monkeypatch.setattr(image_size, "_pillow_size",
-                        lambda path: pytest.fail("PNG must not reach the Pillow fallback"))
-    assert image_size.image_size(str(p)) == (123, 45)
-
-
-def test_garbage_still_returns_none(tmp_path):
-    p = tmp_path / "x.heic"
-    p.write_bytes(b"not an image at all")
+    Callers already treat None as "unknown" -- ETA falls back to a
+    workflow-only average, and a cropped run rejects the request rather than
+    guessing -- so this degrades in the direction that was already handled.
+    """
+    buf = io.BytesIO()
+    Image.new("RGB", (400, 300), (1, 2, 3)).save(buf, "PNG")
+    p = tmp_path / "half.png"
+    p.write_bytes(buf.getvalue()[:40])   # header present, pixel data missing
     assert image_size.image_size(str(p)) is None
+
+
+def test_a_directory_returns_none(tmp_path):
+    assert image_size.image_size(str(tmp_path)) is None

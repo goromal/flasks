@@ -20,7 +20,7 @@ import uuid
 from collections import namedtuple
 
 import pillow_heif
-from PIL import Image
+from PIL import Image, ImageOps
 
 # HEIC is what phones produce, but ComfyUI's Pillow has no HEIF plugin, so
 # LoadImage cannot open one at any size. Registering the opener here -- the
@@ -137,6 +137,24 @@ def fit(img, max_bytes):
     return FitResult(best[0], ".jpg", best[1], best[2], True)
 
 
+def open_source(src):
+    """Open an image the way the rest of the world sees it.
+
+    `src` is a path or a file-like. EXIF Orientation 5-8 swaps the axes, and
+    both ends of cozy honour it: browsers apply it when rendering, and
+    ComfyUI's LoadImage calls ImageOps.exif_transpose. Only cozy used to work
+    in stored coordinates, which put a crop drawn in the browser somewhere
+    unrelated to the selection, and left a staged file unrotated with its EXIF
+    dropped -- so an edit came back sideways.
+
+    Applying the transpose at every point cozy opens a source makes the display
+    orientation canonical. A staged file is then physically correct and carries
+    no orientation tag, so ComfyUI's own transpose is a no-op and agrees. This
+    is what pillow_heif already does for HEIF; here it is for everything else.
+    """
+    return ImageOps.exif_transpose(Image.open(src))
+
+
 def needs_transcode(path):
     """True when ComfyUI (and the browser) cannot read this file's format.
 
@@ -158,7 +176,7 @@ def preview_jpeg(src):
     pixels, so a preview at anything other than the source's own size would
     silently misplace every crop.
     """
-    with Image.open(src) as im:
+    with open_source(src) as im:
         buf = io.BytesIO()
         im.convert("RGB").save(buf, "JPEG", quality=PREVIEW_QUALITY)
         return buf.getvalue()
@@ -186,9 +204,9 @@ def plan(src_path, max_bytes):
     is computed by exactly the code that will run.
     """
     if _fits_file(src_path, max_bytes):
-        with Image.open(src_path) as src:
+        with open_source(src_path) as src:
             return FitResult(None, "", src.size, 1.0, False)
-    with Image.open(src_path) as src:
+    with open_source(src_path) as src:
         return fit(src, max_bytes)
 
 
@@ -229,6 +247,6 @@ def stage_whole(input_dir, src_path, max_bytes):
     """
     if _fits_file(src_path, max_bytes) and not needs_transcode(src_path):
         return None, None
-    with Image.open(src_path) as src:
+    with open_source(src_path) as src:
         res = fit(src, max_bytes)
     return stage(input_dir, res), res
