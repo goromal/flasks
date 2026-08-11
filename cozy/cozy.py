@@ -276,6 +276,50 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
             return flask.jsonify({"error": "not found"}), 404
         return flask.send_file(full)
 
+    @bp.route("/api/input-fit", methods=["GET"])
+    @flask_login.login_required
+    def input_fit():
+        """What the input-size ceiling will do to the current selection.
+
+        The browser cannot answer this itself the way it mirrors
+        normalize_rect: byte size is only knowable by encoding, so replaying
+        the server's own fit is the only honest preview. The rect is normalised
+        first, so the reported source size is the size the run will actually
+        crop -- otherwise the note would quote a number the user never sees
+        again.
+
+        Remote images are deliberately not supported: they do not exist on disk
+        until a job stages them, and fetching one over SSH on every pick would
+        make the picker unusable. Their resize is reported after the fact
+        instead, via the `fit` field on /api/status and on queue results.
+        """
+        args = flask.request.args
+        full = image_refs.resolve(input_dir, output_dir, args.get("name", ""))
+        if not full:
+            return flask.jsonify({"error": "not found"}), 404
+        dims = image_size.image_size(full)
+        if dims is None:
+            return flask.jsonify({"error": "cannot read input image"}), 400
+        rect = None
+        if all(args.get(k) is not None for k in ("x", "y", "w", "h")):
+            try:
+                rect = crop.normalize_rect(
+                    {k: args.get(k) for k in ("x", "y", "w", "h")},
+                    dims[0], dims[1])
+            except ValueError:
+                return flask.jsonify({"error": "invalid crop region"}), 400
+        try:
+            if rect:
+                res = crop.plan(full, rect, max_input_bytes)
+                src = [rect["w"], rect["h"]]
+            else:
+                res = fit.plan(full, max_input_bytes)
+                src = list(dims)
+        except OSError:
+            return flask.jsonify({"error": "cannot read input image"}), 400
+        return flask.jsonify({"resized": res.resized, "from": src,
+                              "to": list(res.size), "limit": max_input_bytes})
+
     def _stage_remote_image(host, rpath):
         """Fetch a remote image into the input dir; return the input-relative
         path handed to ComfyUI's LoadImage. Shared with the queue Scheduler so

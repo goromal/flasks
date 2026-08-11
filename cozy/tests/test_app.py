@@ -932,3 +932,72 @@ def test_flush_removes_the_fit_subdir(tmp_path, monkeypatch):
     assert (indir / "fit").exists()
     assert c.post("/cozy/api/flush").status_code == 200
     assert not (indir / "fit").exists()
+
+
+def test_input_fit_requires_login(tmp_path, monkeypatch):
+    c, _ = _fit_client(tmp_path, monkeypatch, 20 * 1024)
+    c.get("/cozy/logout")
+    r = c.get("/cozy/api/input-fit?name=a.png", follow_redirects=False)
+    assert r.status_code in (301, 302, 401)
+
+
+def test_input_fit_reports_no_resize_for_a_small_image(tmp_path, monkeypatch):
+    c, _ = _fit_client(tmp_path, monkeypatch, 1024 * 1024)
+    d = c.get("/cozy/api/input-fit?name=a.png").get_json()
+    assert d["resized"] is False
+    assert d["from"] == [64, 64]
+    assert d["to"] == [64, 64]
+    assert d["limit"] == 1024 * 1024
+
+
+def test_input_fit_reports_a_resize(tmp_path, monkeypatch):
+    c, _ = _fit_client(tmp_path, monkeypatch, 20 * 1024)
+    d = c.get("/cozy/api/input-fit?name=big.png").get_json()
+    assert d["resized"] is True
+    assert d["from"] == [600, 600]
+    assert d["to"][0] < 600
+
+
+def test_input_fit_measures_the_crop_not_the_source(tmp_path, monkeypatch):
+    c, _ = _fit_client(tmp_path, monkeypatch, 60 * 1024)
+    d = c.get("/cozy/api/input-fit?name=big.png&x=0&y=0&w=64&h=64").get_json()
+    assert d["resized"] is False
+    assert d["from"] == [64, 64]
+
+
+def test_input_fit_reports_the_normalised_rect(tmp_path, monkeypatch):
+    # 100 snaps up to 104, which is the size the run will actually crop.
+    c, _ = _fit_client(tmp_path, monkeypatch, 1024 * 1024)
+    d = c.get("/cozy/api/input-fit?name=big.png&x=13&y=27&w=100&h=100").get_json()
+    assert d["from"] == [104, 104]
+
+
+def test_input_fit_agrees_with_what_generate_stages(tmp_path, monkeypatch):
+    # The whole point of the endpoint: its answer must be the run's answer.
+    c, indir = _fit_client(tmp_path, monkeypatch, 20 * 1024)
+    d = c.get("/cozy/api/input-fit?name=big.png&x=0&y=0&w=512&h=512").get_json()
+    r = c.post("/cozy/api/generate", json={
+        "workflow": "edit", "prompt": "x", "image": "big.png",
+        "rect": {"x": 0, "y": 0, "w": 512, "h": 512}})
+    assert r.status_code == 200
+    assert c._store.started_fit["to"] == d["to"]
+
+
+def test_input_fit_whole_image_rect_falls_back_to_the_whole_image(tmp_path, monkeypatch):
+    # A rect covering everything normalises to None, the same as no rect at all.
+    c, _ = _fit_client(tmp_path, monkeypatch, 20 * 1024)
+    d = c.get("/cozy/api/input-fit?name=big.png&x=0&y=0&w=600&h=600").get_json()
+    assert d["from"] == [600, 600]
+    assert d["resized"] is True
+
+
+def test_input_fit_unknown_name_404(tmp_path, monkeypatch):
+    c, _ = _fit_client(tmp_path, monkeypatch, 20 * 1024)
+    assert c.get("/cozy/api/input-fit?name=nope.png").status_code == 404
+
+
+def test_input_fit_malformed_rect_400(tmp_path, monkeypatch):
+    c, _ = _fit_client(tmp_path, monkeypatch, 20 * 1024)
+    r = c.get("/cozy/api/input-fit?name=big.png&x=0&y=0&w=0&h=10")
+    assert r.status_code == 400
+    assert r.get_json()["error"] == "invalid crop region"
