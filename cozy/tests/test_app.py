@@ -13,20 +13,24 @@ class FakeStore:
         self._running = False
         self.cleared = False
         self.started = None
+        self.started_rect = None
+        self.started_source = None
+        self.started_staged_path = None
         self.image_path = "/nonexistent/output.png"
+        self.crop_image_path = "/nonexistent/output-crop.png"
         self.state_dir = state_dir
         self.prompt_db = None
         self.image_src = None
 
     def read_state(self):
         return {"workflow": "imggen", "prompt": "p", "width": 400, "height": 800,
-                "image": "",
+                "image": "", "rect": None,
                 "prompt_db": None, "known_hosts": [], "image_src": None,
                 "job": {"status": "running" if self._running else "idle",
                         "progress": 42, "error": None, "record_pixels": 320000,
                         "started_at": "2026-06-23T10:00:00-06:00",
                         "finished_at": "2026-06-23T10:00:30-06:00"},
-                "output": False}
+                "output": False, "crop_output": False}
 
     def set_inputs(self, **kw):
         pass
@@ -37,11 +41,15 @@ class FakeStore:
     def set_image_src(self, host, path):
         self.image_src = (host, path)
 
-    def start(self, name, path, prompt, w, h, image="", eta_pixels=None):
+    def start(self, name, path, prompt, w, h, image="", eta_pixels=None,
+              source_path=None, rect=None, staged_path=None):
         if self._running:
             return False
         self._running = True
         self.started = (name, prompt, w, h, image, eta_pixels)
+        self.started_rect = rect
+        self.started_source = source_path
+        self.started_staged_path = staged_path
         return True
 
     def clear(self):
@@ -622,8 +630,9 @@ def test_queue_image_is_cacheable(queue_ctx):
     # never re-fetches a finished thumbnail.
     c, qs, sched, run_lock = queue_ctx
     _login(c)
-    open(qs.image_path("abc"), "wb").write(b"IMG")
-    r = c.get("/cozy/api/queue/image?id=abc")
+    jid = "a" * 32
+    open(qs.image_path(jid), "wb").write(b"IMG")
+    r = c.get("/cozy/api/queue/image?id=" + jid)
     assert r.status_code == 200
     assert "immutable" in r.headers.get("Cache-Control", "")
 
@@ -648,3 +657,171 @@ def test_image_src_remembered_on_selection(client, monkeypatch):
     r = client.post("/cozy/api/image-src", json={"host": "box", "path": "/pics/cats"})
     assert r.status_code == 200
     assert client._store.image_src == ("box", "/pics/cats")
+
+
+def _edit_client(tmp_path, monkeypatch, size=(200, 160)):
+    """A logged-in client whose 'edit' workflow has one real PNG to select."""
+    import io as _io
+
+    from PIL import Image as _Image
+    indir = tmp_path / "input"
+    indir.mkdir()
+    buf = _io.BytesIO()
+    _Image.new("RGB", size, (10, 20, 30)).save(buf, "PNG")
+    (indir / "a.png").write_bytes(buf.getvalue())
+    open(os.path.join(str(tmp_path), "edit.api.json"), "w").write("{}")
+    open(os.path.join(str(tmp_path), "imggen.api.json"), "w").write("{}")
+    store = FakeStore()
+    app = cozy.create_app(store=store, workflows=["edit", "imggen"],
+                          workflow_dir=str(tmp_path), subdomain="/cozy",
+                          input_dir=str(indir), output_dir=str(tmp_path / "out"),
+                          workflow_kinds={"edit": "edit"})
+    app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
+    c = app.test_client()
+    c._store = store
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    _login(c)
+    return c, indir
+
+
+def test_rect_is_normalised_staged_and_drives_eta(tmp_path, monkeypatch):
+    c, indir = _edit_client(tmp_path, monkeypatch)
+    r = c.post("/cozy/api/generate", json={
+        "workflow": "edit", "prompt": "x", "image": "a.png",
+        "rect": {"x": 13, "y": 27, "w": 100, "h": 100}})
+    assert r.status_code == 200
+    st = c._store
+    # Snapped: origin down, size up.
+    assert st.started_rect == {"x": 8, "y": 24, "w": 104, "h": 104}
+    # ETA is keyed on what the model actually sees, not the whole image.
+    assert st.started[5] == 104 * 104
+    # LoadImage points at the staged crop, and it exists at the rect's size.
+    staged = st.started[4]
+    assert staged.startswith("crop")
+    from PIL import Image as _Image
+    with _Image.open(str(indir / staged)) as im:
+        assert im.size == (104, 104)
+    # source_path is the ORIGINAL, which is what the composite needs.
+    assert st.started_source.endswith("a.png")
+
+
+def test_whole_image_rect_falls_back_to_no_rect(tmp_path, monkeypatch):
+    c, _ = _edit_client(tmp_path, monkeypatch)
+    r = c.post("/cozy/api/generate", json={
+        "workflow": "edit", "prompt": "x", "image": "a.png",
+        "rect": {"x": 0, "y": 0, "w": 200, "h": 160}})
+    assert r.status_code == 200
+    assert c._store.started_rect is None
+    assert c._store.started[4] == "a.png"
+    assert c._store.started[5] == 200 * 160
+
+
+def test_malformed_rect_400(tmp_path, monkeypatch):
+    c, _ = _edit_client(tmp_path, monkeypatch)
+    r = c.post("/cozy/api/generate", json={
+        "workflow": "edit", "prompt": "x", "image": "a.png",
+        "rect": {"x": 0, "y": 0, "w": 0, "h": 10}})
+    assert r.status_code == 400
+    assert r.get_json()["error"] == "invalid crop region"
+
+
+def test_rejected_request_leaves_no_staged_crop(tmp_path, monkeypatch):
+    c, indir = _edit_client(tmp_path, monkeypatch)
+    payload = {"workflow": "edit", "prompt": "x", "image": "a.png",
+               "rect": {"x": 0, "y": 0, "w": 64, "h": 64}}
+    assert c.post("/cozy/api/generate", json=payload).status_code == 200
+    staged = os.listdir(str(indir / "crop"))
+    assert len(staged) == 1
+    # FakeStore now reports busy, so this one is rejected -- and must not add
+    # a second orphaned crop.
+    assert c.post("/cozy/api/generate", json=payload).status_code == 409
+    assert os.listdir(str(indir / "crop")) == staged
+
+
+def test_rect_ignored_for_generate_workflows(tmp_path, monkeypatch):
+    c, _ = _edit_client(tmp_path, monkeypatch)
+    r = c.post("/cozy/api/generate", json={
+        "workflow": "imggen", "prompt": "x", "width": 400, "height": 800,
+        "rect": {"x": 0, "y": 0, "w": 64, "h": 64}})
+    assert r.status_code == 200
+    assert c._store.started_rect is None
+
+
+def test_image_kind_crop(tmp_path, monkeypatch):
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    store = FakeStore()
+    store.image_path = str(tmp_path / "output.png")
+    store.crop_image_path = str(tmp_path / "output-crop.png")
+    open(store.image_path, "wb").write(b"PRIMARY")
+    app = cozy.create_app(store=store, workflows=["imggen"],
+                          workflow_dir=str(tmp_path), subdomain="/cozy")
+    app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
+    c = app.test_client()
+    _login(c)
+    # Absent crop 404s...
+    assert c.get("/cozy/api/image?kind=crop").status_code == 404
+    open(store.crop_image_path, "wb").write(b"CROP")
+    assert c.get("/cozy/api/image?kind=crop").data == b"CROP"
+    # ...and an unknown kind degrades to the primary rather than erroring.
+    assert c.get("/cozy/api/image?kind=bogus").data == b"PRIMARY"
+    assert c.get("/cozy/api/image").data == b"PRIMARY"
+
+
+def test_status_reports_has_crop(tmp_path, monkeypatch):
+    c, _ = _edit_client(tmp_path, monkeypatch)
+    assert c.get("/cozy/api/status").get_json()["has_crop"] is False
+
+
+def test_queue_image_kind_crop(tmp_path, monkeypatch):
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    qs = queue_store.QueueStore(str(tmp_path))
+    sched = queue_store.Scheduler(
+        qs, client=object(), workflow_dir=str(tmp_path), workflow_kinds={},
+        input_dir=str(tmp_path), output_dir=str(tmp_path),
+        run_lock=runner.RunLock(), rest_gap=0,
+        execute=lambda *a, **k: b"X", sleep=lambda s: None,
+        load_patch=lambda *a, **k: ({}, 400, 800))
+    app = cozy.create_app(store=FakeStore(), workflows=["imggen"],
+                          workflow_dir=str(tmp_path), subdomain="/cozy",
+                          queue_store=qs, scheduler=sched)
+    app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
+    c = app.test_client()
+    _login(c)
+
+    qs.add_job({"workflow": "imggen"})
+    jid = qs.pop_next()["id"]
+    open(qs.image_path(jid), "wb").write(b"COMPOSITE")
+    qs.finish_current("success")
+
+    # The crop does not exist until a cropped job produces one.
+    assert c.get("/cozy/api/queue/image?id=%s&kind=crop" % jid).status_code == 404
+    open(qs.crop_image_path(jid), "wb").write(b"RAWCROP")
+    assert c.get("/cozy/api/queue/image?id=%s&kind=crop" % jid).data == b"RAWCROP"
+    # No kind, and an unknown kind, both mean the primary composite.
+    assert c.get("/cozy/api/queue/image?id=%s" % jid).data == b"COMPOSITE"
+    assert c.get("/cozy/api/queue/image?id=%s&kind=bogus" % jid).data == b"COMPOSITE"
+    assert c.get("/cozy/api/queue/image").status_code == 404
+
+
+def test_queue_image_rejects_traversal(tmp_path, monkeypatch):
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    qs = queue_store.QueueStore(str(tmp_path))
+    sched = queue_store.Scheduler(
+        qs, client=object(), workflow_dir=str(tmp_path), workflow_kinds={},
+        input_dir=str(tmp_path), output_dir=str(tmp_path),
+        run_lock=runner.RunLock(), rest_gap=0,
+        execute=lambda *a, **k: b"X", sleep=lambda s: None,
+        load_patch=lambda *a, **k: ({}, 400, 800))
+    app = cozy.create_app(store=FakeStore(), workflows=["imggen"],
+                          workflow_dir=str(tmp_path), subdomain="/cozy",
+                          queue_store=qs, scheduler=sched)
+    app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
+    c = app.test_client()
+    _login(c)
+    open(os.path.join(str(tmp_path), "output.png"), "wb").write(b"SECRET")
+    assert c.get("/cozy/api/queue/image?id=../output").status_code == 404
+    assert c.get("/cozy/api/queue/image?id=notahexid").status_code == 404

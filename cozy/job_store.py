@@ -4,6 +4,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 
+import crop
 import eta
 import runner
 import workflows
@@ -45,12 +46,14 @@ class JobStore:
     (temp + os.replace). Modeled on anix-upgrade-ui/run_store.py.
     """
 
-    def __init__(self, state_dir, client, run_lock=None):
+    def __init__(self, state_dir, client, run_lock=None, output_dir=None):
         os.makedirs(state_dir, exist_ok=True)
         self.state_dir = state_dir
         self.state_path = os.path.join(state_dir, "state.json")
         self.image_path = os.path.join(state_dir, "output.png")
+        self.crop_image_path = os.path.join(state_dir, "output-crop.png")
         self.client = client
+        self.output_dir = output_dir
         self._lock = threading.RLock()
         self._thread = None
         self._run_lock = run_lock or runner.RunLock()
@@ -59,9 +62,11 @@ class JobStore:
 
     def _default_state(self):
         return {"workflow": None, "prompt": "", "width": DEFAULT_W,
-                "height": DEFAULT_H, "image": "", "job": _idle_job(),
-                "prompt_db": None, "known_hosts": [], "image_src": None,
-                "output": os.path.exists(self.image_path)}
+                "height": DEFAULT_H, "image": "", "rect": None,
+                "job": _idle_job(), "prompt_db": None, "known_hosts": [],
+                "image_src": None, "source_path": None,
+                "output": os.path.exists(self.image_path),
+                "crop_output": os.path.exists(self.crop_image_path)}
 
     def _read_raw(self):
         try:
@@ -82,6 +87,7 @@ class JobStore:
     def read_state(self):
         state = self._read_raw()
         state["output"] = os.path.exists(self.image_path)
+        state["crop_output"] = os.path.exists(self.crop_image_path)
         job = state.get("job", _idle_job())
         if job.get("status") != "running":
             return state
@@ -92,6 +98,7 @@ class JobStore:
             job = state.get("job", _idle_job())
             if job.get("status") != "running":
                 state["output"] = os.path.exists(self.image_path)
+                state["crop_output"] = os.path.exists(self.crop_image_path)
                 return state
             finalized = False
             pid = job.get("prompt_id")
@@ -99,11 +106,12 @@ class JobStore:
                 try:
                     img = runner.fetch_image(self.client, pid)
                     if img is not None:
-                        with open(self.image_path, "wb") as f:
-                            f.write(img)
+                        rect = state.get("rect")
+                        self._write_outputs(img, state.get("source_path"), rect)
                         state["job"].update(status="success", progress=100,
                                             finished_at=_now(), error=None)
                         state["output"] = True
+                        state["crop_output"] = bool(rect)
                         finalized = True
                 except Exception:
                     finalized = False
@@ -112,6 +120,7 @@ class JobStore:
                 state["job"] = job
             self._write_state(state)
             state["output"] = os.path.exists(self.image_path)
+            state["crop_output"] = os.path.exists(self.crop_image_path)
             return state
 
     # -- inputs --------------------------------------------------------------
@@ -152,7 +161,8 @@ class JobStore:
     # -- running -------------------------------------------------------------
 
     def start(self, workflow_name, workflow_path, prompt, width, height,
-              image="", eta_pixels=None):
+              image="", eta_pixels=None, source_path=None, rect=None,
+              staged_path=None):
         with self._lock:
             if self._read_raw().get("job", {}).get("status") == "running":
                 return False
@@ -168,19 +178,24 @@ class JobStore:
             client_id = uuid.uuid4().hex
             state = self._read_raw()
             state.update(workflow=workflow_name, prompt=prompt,
-                         width=int(width), height=int(height), image=image)
+                         width=int(width), height=int(height), image=image,
+                         rect=rect, source_path=source_path)
             state["job"] = {"status": "running", "prompt_id": None, "progress": 0,
                             "started_at": _now(), "finished_at": None,
                             "error": None, "client_id": client_id,
                             "record_pixels": int(record_pixels)}
-            try:
-                os.remove(self.image_path)
-            except OSError:
-                pass
+            for path in (self.image_path, self.crop_image_path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
             state["output"] = False
+            state["crop_output"] = False
             self._write_state(state)
             self._thread = threading.Thread(
-                target=self._run, args=(graph, client_id), daemon=True)
+                target=self._run,
+                args=(graph, client_id, source_path, rect, staged_path),
+                daemon=True)
             self._thread.start()
             return True
 
@@ -204,18 +219,48 @@ class JobStore:
             state["job"].update(status="failed", finished_at=_now(), error=error)
             self._write_state(state)
 
-    def _run(self, graph, client_id):
+    def _write_outputs(self, img, source_path, rect):
+        """Persist a finished job's images.
+
+        With a rect, the model's own output is written FIRST and the composite
+        second: if compositing throws, the result the GPU actually produced is
+        still on disk and inspectable, rather than being lost to a failure in
+        the cheap step that follows it.
+
+        The composite is computed BEFORE output.png is opened. Opening it first
+        would truncate it, so a failure in composite() would leave a zero-byte
+        file behind -- and read_state() reports `output` from the file's mere
+        existence, which would tell the UI to render a broken image for a job
+        that failed.
+        """
+        if not rect:
+            with open(self.image_path, "wb") as f:
+                f.write(img)
+            return
+        with open(self.crop_image_path, "wb") as f:
+            f.write(img)
+        composited = crop.composite(source_path, rect, img)
+        with open(self.image_path, "wb") as f:
+            f.write(composited)
+        # output.png is display-only and is deleted at the start of the next
+        # run. ComfyUI's SaveImage only ever saw the crop, so without this the
+        # composite would never reach the output dir and could not be re-fed.
+        if self.output_dir:
+            crop.save_composite(self.output_dir, source_path, composited)
+
+    def _run(self, graph, client_id, source_path=None, rect=None,
+             staged_path=None):
         try:
             img = runner.execute(self.client, graph, client_id,
                                  on_progress=self._set_progress,
                                  on_prompt_id=self._set_prompt_id)
             with self._lock:
-                with open(self.image_path, "wb") as f:
-                    f.write(img)
+                self._write_outputs(img, source_path, rect)
                 state = self._read_raw()
                 state["job"].update(status="success", progress=100,
                                     finished_at=_now(), error=None)
                 state["output"] = True
+                state["crop_output"] = bool(rect)
                 self._write_state(state)
                 dur = job_duration(state["job"])
                 pixels = state["job"].get("record_pixels") or 0
@@ -225,19 +270,30 @@ class JobStore:
         except Exception as e:  # noqa: BLE001 - surface any failure to the UI
             self._fail(str(e))
         finally:
+            # The staged crop is a consumed intermediate: execute() only returns
+            # once ComfyUI has read it, so it has no further use. Deleting it
+            # here is what keeps input/crop/ from growing with every run.
+            if staged_path:
+                try:
+                    os.remove(staged_path)
+                except OSError:
+                    pass
             self._run_lock.release()
 
     # -- clear ---------------------------------------------------------------
 
     def clear(self):
         with self._lock:
-            try:
-                os.remove(self.image_path)
-            except OSError:
-                pass
+            for path in (self.image_path, self.crop_image_path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
             state = self._read_raw()
             state["prompt"] = ""
             state["image"] = ""
+            state["rect"] = None
+            state["source_path"] = None
             # Clear resets the remote selections too (prompt DB and image
             # source) but keeps known_hosts: retyping hostnames is the pain
             # the history exists to avoid.
@@ -245,4 +301,5 @@ class JobStore:
             state["image_src"] = None
             state["job"] = _idle_job()
             state["output"] = False
+            state["crop_output"] = False
             self._write_state(state)

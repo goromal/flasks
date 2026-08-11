@@ -1,5 +1,4 @@
 import argparse
-import hashlib
 import io
 import json
 import mimetypes
@@ -20,7 +19,9 @@ from wtforms import PasswordField, StringField, SubmitField
 import wormhole
 from comfyui_client import ComfyUIClient
 from job_store import JobStore, job_duration
+import crop
 import eta
+import image_refs
 import image_size
 import queue_store
 from queue_store import stage_remote_image
@@ -47,69 +48,19 @@ def _check_password(password):
     return check_password_hash(_PW_HASH, password)
 
 
-_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
-
-# ComfyUI's LoadImage resolves an `image` value ending in this suffix against
-# its output directory instead of the input directory (folder_paths
-# .annotated_filepath). cozy uses the same suffix as the picker option value for
-# output-dir files, so the same string is the LoadImage input, the persisted
-# selection, and the preview key -- no conversion anywhere.
-_OUTPUT_SUFFIX = " [output]"
-
 # Prompt-database entries are bare <name>.txt files in the selected directory.
 # Names are constrained to a conservative slug: no leading dot, no path
 # separators, so a name can never escape the database directory.
 _PROMPT_EXT = ".txt"
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]*$")
 
+# Queue job ids are uuid4().hex. Validating the shape keeps a crafted id from
+# walking out of the queue directory via the bare join in QueueStore.image_path.
+_JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+
 # Guard against accidentally selecting a huge remote file: previews and edit
 # staging are synchronous transfers, fine on a LAN but not unbounded.
 _MAX_REMOTE_IMAGE_BYTES = 50 * 1024 * 1024
-
-
-def _list_dir_images(directory):
-    """Sorted relative paths of image files under directory (empty if unset)."""
-    out = []
-    if not directory:
-        return out
-    for root, _dirs, files in os.walk(directory):
-        for f in files:
-            if f.lower().endswith(_IMAGE_EXTS):
-                out.append(os.path.relpath(os.path.join(root, f), directory))
-    return sorted(out)
-
-
-def _list_images(input_dir, output_dir):
-    """Picker options spanning the input and output dirs. Each option's `value`
-    is what gets sent to ComfyUI's LoadImage `image` input: a bare relative path
-    for input-dir files, suffixed with ' [output]' for output-dir files (so a
-    prior generation can be re-fed as the edit input). `label` is the bare path
-    for display; `source` groups the two in the UI."""
-    items = [{"value": r, "label": r, "source": "input"}
-             for r in _list_dir_images(input_dir)]
-    items += [{"value": r + _OUTPUT_SUFFIX, "label": r, "source": "output"}
-              for r in _list_dir_images(output_dir)]
-    return items
-
-
-def _resolve_image_ref(input_dir, output_dir, value):
-    """Map a picker value to an on-disk path, or None if it is not a valid image
-    within the directory it names. Output-dir files carry the ' [output]'
-    annotation; everything else resolves under the input dir. Rejects traversal
-    out of the chosen base via realpath containment."""
-    if not value:
-        return None
-    if value.endswith(_OUTPUT_SUFFIX):
-        base, rel = output_dir, value[:-len(_OUTPUT_SUFFIX)]
-    else:
-        base, rel = input_dir, value
-    if not base or not rel.lower().endswith(_IMAGE_EXTS):
-        return None
-    full = os.path.realpath(os.path.join(base, rel))
-    root = os.path.realpath(base)
-    if os.path.commonpath([full, root]) != root or not os.path.isfile(full):
-        return None
-    return full
 
 
 class LoginForm(flask_wtf.FlaskForm):
@@ -195,34 +146,64 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         prompt = data.get("prompt", "")
         image = data.get("image", "") or ""
         remote = data.get("remote_image") or None
+        rect = None
+        eta_pixels = None
+        source_path = None
+        staged_path = None
         if workflow_kinds.get(wf) == "edit":
             if remote:
                 rhost = (remote.get("host") or "").strip()
                 rpath = remote.get("path") or ""
-                if not rpath.lower().endswith(_IMAGE_EXTS):
+                if not rpath.lower().endswith(image_refs.IMAGE_EXTS):
                     return flask.jsonify({"error": "valid input image required"}), 400
                 try:
                     image = _stage_remote_image(rhost, rpath)
                 except (wormhole.WormholeError, OSError) as e:
                     return flask.jsonify({"error": str(e)}), 502
                 store.set_image_src(rhost, os.path.dirname(rpath))
-            if not _resolve_image_ref(input_dir, output_dir, image):
+            source_path = image_refs.resolve(input_dir, output_dir, image)
+            if not source_path:
                 return flask.jsonify({"error": "valid input image required"}), 400
+            dims = image_size.image_size(source_path)
+            if data.get("rect"):
+                if dims is None:
+                    return flask.jsonify({"error": "cannot read input image"}), 400
+                try:
+                    rect = crop.normalize_rect(data["rect"], dims[0], dims[1])
+                except ValueError:
+                    return flask.jsonify({"error": "invalid crop region"}), 400
+            if rect:
+                # The model sees only the crop, so it is also what ETA history
+                # should be keyed on -- otherwise cropped runs would drag the
+                # whole-image estimates for this workflow down with them.
+                eta_pixels = rect["w"] * rect["h"]
+            else:
+                eta_pixels = dims[0] * dims[1] if dims else 0
         try:
             width = int(data.get("width", 400))
             height = int(data.get("height", 800))
         except (TypeError, ValueError):
             return flask.jsonify({"error": "invalid dimensions"}), 400
-        eta_pixels = None
-        if workflow_kinds.get(wf) == "edit":
-            full = _resolve_image_ref(input_dir, output_dir, image)
-            dims = image_size.image_size(full) if full else None
-            eta_pixels = dims[0] * dims[1] if dims else 0
         path = os.path.join(workflow_dir, wf + ".api.json")
         if not os.path.exists(path):
             return flask.jsonify({"error": "workflow file missing"}), 400
+        if rect:
+            # Staged only now: everything above this point can still reject the
+            # request, and a rejected request must not leave an orphaned crop.
+            try:
+                image = crop.stage(input_dir, source_path, rect)
+            except OSError:
+                return flask.jsonify({"error": "cannot read input image"}), 400
+            staged_path = os.path.join(input_dir, image)
         if not store.start(wf, path, prompt, width, height, image,
-                           eta_pixels=eta_pixels):
+                           eta_pixels=eta_pixels, source_path=source_path,
+                           rect=rect, staged_path=staged_path):
+            # Nothing will consume the crop we just staged.
+            if staged_path:
+                try:
+                    os.remove(staged_path)
+                except OSError:
+                    pass
             return flask.jsonify({"error": "already running"}), 409
         return flask.jsonify({"ok": True})
 
@@ -243,6 +224,7 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
             "progress": job.get("progress", 0),
             "error": job.get("error"),
             "has_image": bool(state.get("output")),
+            "has_crop": bool(state.get("crop_output")),
             "duration": job_duration(job),
             "eta": eta_secs,
         })
@@ -250,19 +232,24 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
     @bp.route("/api/image", methods=["GET"])
     @flask_login.login_required
     def image():
-        if not os.path.exists(store.image_path):
+        # kind=crop asks for the raw model output of a cropped edit; anything
+        # else means the primary output. An unknown kind degrades rather than
+        # 400ing a request for an image that exists.
+        path = (store.crop_image_path if flask.request.args.get("kind") == "crop"
+                else store.image_path)
+        if not os.path.exists(path):
             return flask.jsonify({"error": "no image"}), 404
-        return flask.send_file(store.image_path, mimetype="image/png")
+        return flask.send_file(path, mimetype="image/png")
 
     @bp.route("/api/input-images", methods=["GET"])
     @flask_login.login_required
     def input_images():
-        return flask.jsonify({"images": _list_images(input_dir, output_dir)})
+        return flask.jsonify({"images": image_refs.list_images(input_dir, output_dir)})
 
     @bp.route("/api/input-image", methods=["GET"])
     @flask_login.login_required
     def input_image():
-        full = _resolve_image_ref(input_dir, output_dir, flask.request.args.get("name", ""))
+        full = image_refs.resolve(input_dir, output_dir, flask.request.args.get("name", ""))
         if not full:
             return flask.jsonify({"error": "not found"}), 404
         return flask.send_file(full)
@@ -287,7 +274,7 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
     def remote_image():
         host = (flask.request.args.get("host") or "").strip()
         path = flask.request.args.get("path") or ""
-        if not path.lower().endswith(_IMAGE_EXTS):
+        if not path.lower().endswith(image_refs.IMAGE_EXTS):
             return flask.jsonify({"error": "not an image"}), 404
         try:
             data = wormhole.read_file(host, path,
@@ -313,7 +300,7 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         if flask.request.args.get("files") == "img":
             resp["files"] = [e["name"] for e in entries
                              if not e["is_dir"]
-                             and e["name"].lower().endswith(_IMAGE_EXTS)]
+                             and e["name"].lower().endswith(image_refs.IMAGE_EXTS)]
         return flask.jsonify(resp)
 
     @bp.route("/api/pdb/select", methods=["POST"])
@@ -421,25 +408,40 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
             return None, (flask.jsonify({"error": "invalid dimensions"}), 400)
         image = data.get("image", "") or ""
         remote = data.get("remote_image") or None
+        rect = None
         eta_pixels = None
         kind = workflow_kinds.get(wf)
         if kind == "edit":
             if remote:
                 # Remote images are staged (and their pixels measured) when the
-                # job runs; validate only that the path names an image here.
-                if not (remote.get("path") or "").lower().endswith(_IMAGE_EXTS):
+                # job runs; validate only that the path names an image here. The
+                # rect rides along raw for the same reason -- normalising it
+                # needs dimensions that do not exist yet -- and _run_job
+                # normalises whatever it finds.
+                if not (remote.get("path") or "").lower().endswith(image_refs.IMAGE_EXTS):
                     return None, (flask.jsonify({"error": "valid input image required"}), 400)
+                rect = data.get("rect") or None
             else:
-                full = _resolve_image_ref(input_dir, output_dir, image)
+                full = image_refs.resolve(input_dir, output_dir, image)
                 if not full:
                     return None, (flask.jsonify({"error": "valid input image required"}), 400)
                 dims = image_size.image_size(full)
-                eta_pixels = dims[0] * dims[1] if dims else 0
+                if data.get("rect"):
+                    if dims is None:
+                        return None, (flask.jsonify({"error": "cannot read input image"}), 400)
+                    try:
+                        rect = crop.normalize_rect(data["rect"], dims[0], dims[1])
+                    except ValueError:
+                        return None, (flask.jsonify({"error": "invalid crop region"}), 400)
+                if rect:
+                    eta_pixels = rect["w"] * rect["h"]
+                else:
+                    eta_pixels = dims[0] * dims[1] if dims else 0
         else:
             eta_pixels = width * height
         return {"workflow": wf, "kind": kind, "prompt": data.get("prompt", ""),
                 "width": width, "height": height, "image": image,
-                "remote_image": remote, "eta_pixels": eta_pixels}, None
+                "remote_image": remote, "rect": rect, "eta_pixels": eta_pixels}, None
 
     @bp.route("/api/queue/add", methods=["POST"])
     @flask_login.login_required
@@ -520,8 +522,12 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         if err:
             return err
         job_id = flask.request.args.get("id", "")
-        path = queue_store.image_path(job_id) if job_id else ""
-        if not path or not os.path.exists(path):
+        if not _JOB_ID_RE.match(job_id):
+            return flask.jsonify({"error": "no image"}), 404
+        path = (queue_store.crop_image_path(job_id)
+                if flask.request.args.get("kind") == "crop"
+                else queue_store.image_path(job_id))
+        if not os.path.exists(path):
             return flask.jsonify({"error": "no image"}), 404
         # Per-job result files are immutable (unique id-based path), so let the
         # browser cache them hard: the queue view re-renders on each poll and
@@ -547,10 +553,11 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
     @bp.route("/api/flush", methods=["POST"])
     @flask_login.login_required
     def flush():
-        # Staged remote images are cozy's own artifacts; remove them here
-        # rather than assuming the admin flush.sh scripts recurse into
+        # Staged remote images and staged crops are cozy's own artifacts; remove
+        # them here rather than assuming the admin flush.sh scripts recurse into
         # subdirectories.
-        shutil.rmtree(os.path.join(input_dir, "wormhole"), ignore_errors=True)
+        for sub in ("wormhole", crop.CROP_SUBDIR):
+            shutil.rmtree(os.path.join(input_dir, sub), ignore_errors=True)
         # Run a flush.sh (if present) in the input and output dirs. The scripts
         # are placed there out-of-band by the admin; a missing one is a no-op, so
         # the button is always available and simply flushes whatever is wired up.
@@ -622,7 +629,8 @@ def run():
         for n in names if os.path.exists(os.path.join(workflow_dir, n + ".api.json"))
     }
     run_lock = runner.RunLock()
-    store = JobStore(state_dir, ComfyUIClient(args.comfyui_url), run_lock=run_lock)
+    store = JobStore(state_dir, ComfyUIClient(args.comfyui_url), run_lock=run_lock,
+                     output_dir=output_dir)
     qstore = queue_store.QueueStore(state_dir)
     scheduler = queue_store.Scheduler(
         qstore, ComfyUIClient(args.comfyui_url), workflow_dir, workflow_kinds,

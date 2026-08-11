@@ -53,6 +53,17 @@
         .duration { margin-top:16px; text-align:center; color:#495057; font-weight:600; display:none; }
         #output { margin-top:24px; text-align:center; }
         #output img { max-width:100%; border-radius:8px; }
+        #preview-stage { position:relative; display:inline-block; max-width:100%; line-height:0; overflow:hidden; border-radius:8px; touch-action:none; cursor:crosshair; }
+        #preview-stage img { max-width:100%; display:block; }
+        /* One huge spread paints the scrim outside the rect; overflow:hidden on
+           the stage clips it to the image. */
+        #crop-rect { position:absolute; border:2px solid #4e73df; box-shadow:0 0 0 9999px rgba(0,0,0,0.45); pointer-events:none; display:none; }
+        #crop-label { font-size:0.85rem; color:#495057; margin-top:6px; }
+        #crop-output { margin:16px 0 0; text-align:center; display:none; }
+        #crop-output img { max-width:200px; border-radius:6px; cursor:pointer; }
+        #crop-output figcaption { font-size:0.8rem; color:#6c757d; margin-top:4px; }
+        .q-results figure { position:relative; }
+        .q-results img.q-crop { position:absolute; top:4px; left:4px; width:44px; border:2px solid #fff; border-radius:4px; box-shadow:0 1px 4px rgba(0,0,0,0.4); }
         #hidden-inputs { display:none; }
         .modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center; z-index:10; }
         .modal { background:#fff; width:90%; max-width:520px; max-height:85vh; overflow:auto; border-radius:12px; padding:20px; }
@@ -117,7 +128,14 @@
                 </div>
                 <div class="pdb-path" id="remote-image-label" style="display:none;"></div>
                 <div id="preview-wrap" style="margin-top:12px; display:none;">
-                    <img id="preview" alt="input preview" style="max-width:100%; border-radius:8px;" />
+                    <div id="preview-stage">
+                        <img id="preview" alt="input preview" />
+                        <div id="crop-rect"></div>
+                    </div>
+                    <div id="crop-label"></div>
+                    <div class="prompt-actions">
+                        <button type="button" class="secondary" id="crop-clear">Clear region</button>
+                    </div>
                 </div>
             </div>
             <label for="prompt" id="prompt-label">Prompt</label>
@@ -163,6 +181,10 @@
         <div class="duration" id="duration"></div>
 
         <div id="output"></div>
+        <figure id="crop-output">
+            <img id="crop-output-img" alt="model output" />
+            <figcaption>model output</figcaption>
+        </figure>
         <button class="clear" id="clear">Clear</button>
 
         {% if can_restart %}
@@ -248,6 +270,97 @@
             }
         }
 
+        // --- Crop region (edit workflows) ---
+        // The rect is stored in SOURCE-IMAGE pixels, never display pixels, so a
+        // window resize or a zoom between drags cannot corrupt it.
+        const previewStage = document.getElementById("preview-stage");
+        const cropRectEl = document.getElementById("crop-rect");
+        const cropLabel = document.getElementById("crop-label");
+        const SNAP = 8, MIN_SIDE = 64;
+        let cropRect = {{ state.rect | tojson }};
+        let dragFrom = null;
+
+        function snapDown(v) { return Math.floor(v / SNAP) * SNAP; }
+        function snapUp(v) { return Math.ceil(v / SNAP) * SNAP; }
+
+        // Mirrors crop.normalize_rect on the server. The server re-runs it and
+        // its answer wins; applying it here just makes the box visibly settle
+        // onto what will actually be used.
+        function fitAxis(origin, size, limit) {
+            size = Math.min(Math.max(size, Math.min(MIN_SIDE, limit)), limit);
+            origin = Math.max(snapDown(Math.min(origin, limit - size)), 0);
+            return [origin, size];
+        }
+
+        function normalizeRect(r) {
+            const nw = preview.naturalWidth, nh = preview.naturalHeight;
+            if (!nw || !nh || r.w <= 0 || r.h <= 0) return null;
+            const [x, w] = fitAxis(snapDown(Math.max(r.x, 0)), snapUp(r.w), nw);
+            const [y, h] = fitAxis(snapDown(Math.max(r.y, 0)), snapUp(r.h), nh);
+            if (x === 0 && y === 0 && w === nw && h === nh) return null;
+            return { x: x, y: y, w: w, h: h };
+        }
+
+        function renderCropRect() {
+            const shown = preview.getBoundingClientRect().width;
+            if (!cropRect || !preview.naturalWidth || !shown) {
+                cropRectEl.style.display = "none";
+                cropLabel.textContent = "Drag on the image to edit only part of it.";
+                return;
+            }
+            const scale = shown / preview.naturalWidth;
+            cropRectEl.style.left = (cropRect.x * scale) + "px";
+            cropRectEl.style.top = (cropRect.y * scale) + "px";
+            cropRectEl.style.width = (cropRect.w * scale) + "px";
+            cropRectEl.style.height = (cropRect.h * scale) + "px";
+            cropRectEl.style.display = "block";
+            cropLabel.textContent = "Region: " + cropRect.w + "×" + cropRect.h +
+                " at (" + cropRect.x + ", " + cropRect.y + ")";
+        }
+
+        function clearCropRect() { cropRect = null; renderCropRect(); }
+
+        // Recomputed per event, so a resize between drags cannot skew the maths.
+        function toNatural(ev) {
+            const box = preview.getBoundingClientRect();
+            const scale = preview.naturalWidth / box.width;
+            return { x: (ev.clientX - box.left) * scale,
+                     y: (ev.clientY - box.top) * scale };
+        }
+
+        previewStage.addEventListener("pointerdown", (ev) => {
+            if (!preview.naturalWidth) return;
+            previewStage.setPointerCapture(ev.pointerId);
+            dragFrom = toNatural(ev);
+            ev.preventDefault();
+        });
+        previewStage.addEventListener("pointermove", (ev) => {
+            if (!dragFrom) return;
+            const to = toNatural(ev);
+            cropRect = {
+                x: Math.round(Math.min(dragFrom.x, to.x)),
+                y: Math.round(Math.min(dragFrom.y, to.y)),
+                w: Math.round(Math.abs(to.x - dragFrom.x)),
+                h: Math.round(Math.abs(to.y - dragFrom.y)),
+            };
+            renderCropRect();
+        });
+        previewStage.addEventListener("pointerup", (ev) => {
+            if (!dragFrom) return;
+            dragFrom = null;
+            previewStage.releasePointerCapture(ev.pointerId);
+            // A tap with no drag normalises to null, which clears the region.
+            cropRect = cropRect ? normalizeRect(cropRect) : null;
+            renderCropRect();
+        });
+        // A cancelled gesture never fires pointerup; without this the drag stays
+        // latched and the rect keeps following the pointer.
+        previewStage.addEventListener("pointercancel", () => { dragFrom = null; });
+        document.getElementById("crop-clear").addEventListener("click", clearCropRect);
+        // naturalWidth is only meaningful once the image has decoded.
+        preview.addEventListener("load", renderCropRect);
+        window.addEventListener("resize", renderCropRect);
+
         function escAttr(s) {
             return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
         }
@@ -281,11 +394,13 @@
             dimsRow.style.display = edit ? "none" : "flex";
             promptLabel.textContent = edit ? "Edit instruction" : "Prompt";
             if (edit && !imageSelect.options.length) loadInputImages();
+            if (edit) renderCropRect();
         }
 
         workflowSel.addEventListener("change", applyKind);
         imageSelect.addEventListener("change", () => {
             if (imageSelect.value) { clearRemoteImage(); }
+            clearCropRect();
             updatePreview();
         });
         const bar = document.getElementById("bar");
@@ -295,6 +410,8 @@
         const etaBox = document.getElementById("eta");
         const genBtn = document.getElementById("generate");
         const output = document.getElementById("output");
+        const cropOutput = document.getElementById("crop-output");
+        const cropOutputImg = document.getElementById("crop-output-img");
         let polling = null;
 
         function showError(msg) { errorBox.textContent = msg; errorBox.style.display = msg ? "block" : "none"; }
@@ -325,8 +442,26 @@
             progress.style.display = on ? "block" : "none";
         }
 
-        function showImage() {
+        function showImage(hasCrop) {
             output.innerHTML = '<img src="' + root + 'api/image?t=' + Date.now() + '" alt="output" />';
+            if (hasCrop) {
+                cropOutputImg.src = root + "api/image?kind=crop&t=" + Date.now();
+                cropOutput.querySelector("figcaption").textContent = "model output";
+                cropOutput.style.display = "block";
+            } else {
+                cropOutputImg.removeAttribute("src");
+                cropOutput.style.display = "none";
+            }
+        }
+
+        // The composite failed but the model's output survived (see
+        // JobStore._write_outputs). Show it, labelled so the state is obvious.
+        function showCropOnly() {
+            output.innerHTML = "";
+            cropOutputImg.src = root + "api/image?kind=crop&t=" + Date.now();
+            cropOutput.querySelector("figcaption").textContent =
+                "model output (compositing failed)";
+            cropOutput.style.display = "block";
         }
 
         async function poll() {
@@ -342,7 +477,10 @@
                 if (polling) { clearInterval(polling); polling = null; }
                 if (s.status === "failed") showError(s.error || "generation failed");
                 else showError("");
-                if (s.has_image) { showImage(); showDuration(s.duration); }
+                if (s.has_image) { showImage(s.has_crop); showDuration(s.duration); }
+                // A composite that failed still leaves the model's own output on
+                // disk; surface it rather than showing nothing.
+                else if (s.has_crop) { showCropOnly(); }
             }
         }
 
@@ -355,16 +493,8 @@
             showError("");
             showDuration(null);
             output.innerHTML = "";
-            const payload = {
-                workflow: document.getElementById("workflow").value,
-                prompt: document.getElementById("prompt").value,
-                width: parseInt(document.getElementById("width").value, 10),
-                height: parseInt(document.getElementById("height").value, 10),
-            };
-            if (currentKind() === "edit") {
-                if (remoteImage) payload.remote_image = remoteImage;
-                else payload.image = imageSelect.value;
-            }
+            cropOutput.style.display = "none";
+            const payload = currentJobPayload();
             const r = await fetch(root + "api/generate", {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload),
@@ -376,9 +506,9 @@
         document.getElementById("clear").addEventListener("click", async () => {
             await fetch(root + "api/clear", { method: "POST" });
             document.getElementById("prompt").value = "";
-            imageSelect.value = ""; clearRemoteImage(); updatePreview();
+            imageSelect.value = ""; clearRemoteImage(); clearCropRect(); updatePreview();
             IMAGE_SRC = null;  // Clear also forgets the remembered remote source dir
-            output.innerHTML = ""; showError(""); showDuration(null); bar.style.width = "0%";
+            output.innerHTML = ""; cropOutput.style.display = "none"; showError(""); showDuration(null); bar.style.width = "0%";
             // The server reset the prompt-DB selection too; re-sync the
             // library panel if it has been opened.
             if (pdbLoaded) { pdbHost = ""; refreshPdb(); }
@@ -686,6 +816,7 @@
         }
 
         function setRemoteImage(host, path) {
+            clearCropRect();
             if (!path) { clearRemoteImage(); updatePreview(); return; }
             remoteImage = { host: host, path: path };
             remoteImageLabel.textContent = (host ? host + ":" : "") + path;
@@ -719,7 +850,9 @@
             const hasImage = {{ (state.output) | tojson }};
             if (st.status === "running") { startPolling(); }
             else if (st.status === "failed") { showError(st.error || "generation failed"); }
-            if (hasImage) { showImage(); showDuration(st.duration); }
+            const hasCrop = {{ state.crop_output | tojson }};
+            if (hasImage) { showImage(hasCrop); showDuration(st.duration); }
+            else if (hasCrop) { showCropOnly(); }
             applyKind();
         })();
 
@@ -746,6 +879,7 @@
             if (currentKind() === "edit") {
                 if (remoteImage) payload.remote_image = remoteImage;
                 else payload.image = imageSelect.value;
+                if (cropRect) payload.rect = cropRect;
             }
             return payload;
         }
@@ -809,7 +943,8 @@
         // in place so they persist across the 1s poll instead of reloading.
         let lastResultsSig = null;
         function renderResults(results) {
-            const sig = results.map(j => j.id + ":" + (j.has_image ? 1 : 0) + ":" + j.status).join(",");
+            const sig = results.map(j => j.id + ":" + (j.has_image ? 1 : 0) + ":" +
+                                    (j.has_crop ? 1 : 0) + ":" + j.status).join(",");
             if (sig === lastResultsSig) return;
             lastResultsSig = sig;
             const res = document.getElementById("q-results");
@@ -821,6 +956,16 @@
                     img.src = root + "api/queue/image?id=" + encodeURIComponent(j.id);
                     img.addEventListener("click", () => window.open(img.src, "_blank"));
                     fig.appendChild(img);
+                    if (j.has_crop) {
+                        const ci = document.createElement("img");
+                        ci.className = "q-crop";
+                        ci.src = root + "api/queue/image?kind=crop&id=" + encodeURIComponent(j.id);
+                        ci.addEventListener("click", (ev) => {
+                            ev.stopPropagation();
+                            window.open(ci.src, "_blank");
+                        });
+                        fig.appendChild(ci);
+                    }
                 }
                 const cap = document.createElement("figcaption");
                 if (j.status === "failed") {
