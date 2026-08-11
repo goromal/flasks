@@ -397,7 +397,7 @@ def test_staged_crop_is_deleted_after_the_run(tmp_path):
     src = _src_image(tmp_path)
     indir = tmp_path / "input"
     indir.mkdir()
-    staged_rel = crop.stage(str(indir), src, {"x": 0, "y": 0, "w": 64, "h": 64})
+    staged_rel, _res = crop.stage(str(indir), src, {"x": 0, "y": 0, "w": 64, "h": 64})
     staged_abs = str(indir / staged_rel)
     assert os.path.exists(staged_abs)
     store = job_store.JobStore(str(tmp_path / "state"),

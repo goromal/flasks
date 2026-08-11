@@ -191,7 +191,7 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
             # Staged only now: everything above this point can still reject the
             # request, and a rejected request must not leave an orphaned crop.
             try:
-                image = crop.stage(input_dir, source_path, rect)
+                image, _res = crop.stage(input_dir, source_path, rect)
             except OSError:
                 return flask.jsonify({"error": "cannot read input image"}), 400
             staged_path = os.path.join(input_dir, image)

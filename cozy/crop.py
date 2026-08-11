@@ -20,6 +20,8 @@ from datetime import datetime
 
 from PIL import Image
 
+import fit
+
 # Diffusion models want dimensions that are multiples of 8; snapping here means
 # the user never has to think about it.
 SNAP = 8
@@ -85,9 +87,23 @@ def normalize_rect(rect, img_w, img_h):
 CROP_SUBDIR = "crop"
 
 
-def stage(input_dir, src_path, rect):
-    """Write the rect region of src_path under input_dir and return the
-    input-relative path handed to ComfyUI's LoadImage.
+def plan(src_path, rect, max_bytes):
+    """The FitResult for this rect region, without writing anything.
+
+    Only the crop is measured, never the source it came from: a small selection
+    out of a huge photo is a small input, and charging it for the source's size
+    would shrink it for no reason. Shared with /api/input-fit so the note the
+    picker shows is computed by the code that will run.
+    """
+    x, y = rect["x"], rect["y"]
+    with Image.open(src_path) as src:
+        patch = src.convert("RGB").crop((x, y, x + rect["w"], y + rect["h"]))
+    return fit.fit(patch, max_bytes)
+
+
+def stage(input_dir, src_path, rect, max_bytes=0):
+    """Write the rect region of src_path under input_dir and return
+    (input-relative path handed to ComfyUI's LoadImage, FitResult).
 
     A fresh name per run rather than a content hash: cropping costs
     milliseconds, so caching buys nothing, and a stable name would have to
@@ -98,27 +114,54 @@ def stage(input_dir, src_path, rect):
 
     Because the crop always lands in the input dir, LoadImage receives a plain
     relative path: the ' [output]' annotation never reaches it.
+
+    The default budget of 0 disables the ceiling, so a caller that has not been
+    taught about it behaves exactly as before.
     """
-    rel = os.path.join(CROP_SUBDIR, uuid.uuid4().hex + ".png")
-    dest = os.path.join(input_dir, rel)
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
-    x, y = rect["x"], rect["y"]
-    with Image.open(src_path) as src:
-        src.convert("RGB").crop((x, y, x + rect["w"], y + rect["h"])).save(dest, "PNG")
-    return rel
+    res = plan(src_path, rect, max_bytes)
+    return fit.stage(input_dir, res, CROP_SUBDIR), res
 
 
-def composite(src_path, rect, edited_bytes):
+def _scale_rect(rect, scale, size):
+    """Map a rect into an image scaled by `scale`, clamped to its bounds.
+
+    Origins are rounded, so placement can slip by a single pixel against an
+    exact mapping. In an image that is being downsampled anyway that is
+    invisible, and paste() takes integer coordinates regardless -- carrying the
+    float through is not an option.
+    """
+    w, h = size
+    rw = max(min(int(round(rect["w"] * scale)), w), 1)
+    rh = max(min(int(round(rect["h"] * scale)), h), 1)
+    rx = min(max(int(round(rect["x"] * scale)), 0), w - rw)
+    ry = min(max(int(round(rect["y"] * scale)), 0), h - rh)
+    return {"x": rx, "y": ry, "w": rw, "h": rh}
+
+
+def composite(src_path, rect, edited_bytes, scale=1.0):
     """Paste the model's output back into the original at rect; return PNG bytes.
 
     The output is resized to the rect's exact box because edit models normalise
     their input internally and do not return the crop's dimensions. Everything
     is flattened to RGB -- edit models do not preserve alpha, so carrying it
     through would be a promise this cannot keep.
+
+    `scale` is the factor the crop was shrunk by to meet the input-size ceiling.
+    The source is shrunk to match before the paste: without it, the model's
+    downsampled patch would be upscaled back into a full-resolution canvas --
+    soft content presented as if it were sharp -- and the composite would be a
+    less honest image than the one the model actually produced. Resizing here
+    rather than staging a resized copy keeps the original as the only source of
+    truth, which is what makes JobStore's crash recovery still work.
     """
-    x, y, w, h = rect["x"], rect["y"], rect["w"], rect["h"]
     with Image.open(src_path) as src:
         base = src.convert("RGB")
+        if scale != 1.0:
+            base = base.resize((max(int(round(base.width * scale)), 1),
+                                max(int(round(base.height * scale)), 1)),
+                               Image.LANCZOS)
+            rect = _scale_rect(rect, scale, base.size)
+        x, y, w, h = rect["x"], rect["y"], rect["w"], rect["h"]
         with Image.open(io.BytesIO(edited_bytes)) as edited:
             patch = edited.convert("RGB")
             if patch.size != (w, h):

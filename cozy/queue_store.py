@@ -341,7 +341,7 @@ class Scheduler:
                 rect = crop.normalize_rect(rect, dims[0], dims[1])
             if rect:
                 eta_pixels = rect["w"] * rect["h"]
-                image = crop.stage(self.input_dir, source_path, rect)
+                image, _res = crop.stage(self.input_dir, source_path, rect)
                 staged_path = os.path.join(self.input_dir, image)
             path = os.path.join(self.workflow_dir, job["workflow"] + ".api.json")
             graph, width, height = self._load_patch(
