@@ -661,7 +661,8 @@ def run():
     qstore = queue_store.QueueStore(state_dir)
     scheduler = queue_store.Scheduler(
         qstore, ComfyUIClient(args.comfyui_url), workflow_dir, workflow_kinds,
-        input_dir, output_dir, run_lock, rest_gap=args.rest_gap)
+        input_dir, output_dir, run_lock, rest_gap=args.rest_gap,
+        max_input_bytes=args.max_input_bytes)
     scheduler.resume()
     secrets = _load_secrets(args.secrets_file)
     restart_cmd = shlex.split(args.comfyui_restart_cmd) if args.comfyui_restart_cmd else None

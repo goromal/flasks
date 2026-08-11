@@ -12,6 +12,7 @@ import uuid
 
 import crop
 import eta
+import fit
 import image_refs
 import image_size
 import runner
@@ -156,14 +157,14 @@ class QueueStore:
                 data["current"]["prompt_id"] = prompt_id
                 self._write(data)
 
-    def finish_current(self, status, error=None, output=None):
+    def finish_current(self, status, error=None, output=None, fit=None):
         with self._lock:
             data = self._read()
             job = data.get("current")
             if not job:
                 return None
             dur = eta.seconds_since(job.get("started_at"))
-            job.update(status=status, error=error, output=output,
+            job.update(status=status, error=error, output=output, fit=fit,
                        finished_at=eta.now_iso(), duration=dur)
             data["results"].append(job)
             data["current"] = None
@@ -206,6 +207,7 @@ class QueueStore:
         results = [{"id": j["id"], "workflow": j.get("workflow"),
                     "prompt": j.get("prompt", ""), "status": j.get("status"),
                     "error": j.get("error"), "duration": j.get("duration"),
+                    "fit": j.get("fit"),
                     "has_image": os.path.exists(self.image_path(j["id"])),
                     "has_crop": os.path.exists(self.crop_image_path(j["id"]))}
                    for j in data["results"]]
@@ -221,7 +223,8 @@ class Scheduler:
     def __init__(self, store, client, workflow_dir, workflow_kinds,
                  input_dir, output_dir, run_lock, rest_gap=REST_GAP_SECONDS,
                  execute=runner.execute, sleep=None,
-                 load_patch=workflows.load_and_patch, stage_remote=None):
+                 load_patch=workflows.load_and_patch, stage_remote=None,
+                 max_input_bytes=fit.DEFAULT_MAX_BYTES):
         self.store = store
         self.client = client
         self.workflow_dir = workflow_dir
@@ -230,6 +233,7 @@ class Scheduler:
         self.output_dir = output_dir
         self.run_lock = run_lock
         self.rest_gap = rest_gap
+        self.max_input_bytes = max_input_bytes
         self._execute = execute
         self._sleep = sleep
         self._load_patch = load_patch
@@ -289,7 +293,7 @@ class Scheduler:
             self.store.clear_current()
             self.run_lock.release()
 
-    def _write_outputs(self, job_id, img, source_path, rect):
+    def _write_outputs(self, job_id, img, source_path, rect, scale=1.0):
         """Model output first, then the composite: a composite failure must not
         cost the result the GPU actually produced.
 
@@ -305,7 +309,7 @@ class Scheduler:
             return
         with open(self.store.crop_image_path(job_id), "wb") as f:
             f.write(img)
-        composited = crop.composite(source_path, rect, img)
+        composited = crop.composite(source_path, rect, img, scale)
         with open(self.store.image_path(job_id), "wb") as f:
             f.write(composited)
         # See JobStore._write_outputs: the composite must reach the output dir
@@ -328,21 +332,49 @@ class Scheduler:
             # The rect is normalised here rather than only at add time: a remote
             # image's dimensions are unknown until it has been staged, just
             # above. Normalising is idempotent, so re-running it over a rect
-            # that /api/queue/add already normalised is a no-op.
+            # that /api/queue/add already normalised is a no-op. The same is
+            # true of the size ceiling, which additionally cannot be applied at
+            # add time because the bytes do not exist yet.
             rect = job.get("rect")
             source_path = None
-            if rect:
-                source_path = image_refs.resolve(self.input_dir, self.output_dir, image)
+            dims = None
+            res = None
+            fit_info = None
+            if job.get("kind") == "edit":
+                # Resolved for every edit job, not just cropped ones: fitting a
+                # whole image needs its real path, which the relative picker
+                # value alone does not give.
+                source_path = image_refs.resolve(self.input_dir,
+                                                 self.output_dir, image)
                 if not source_path:
                     raise ValueError("valid input image required")
                 dims = image_size.image_size(source_path)
-                if dims is None:
-                    raise ValueError("cannot read input image")
-                rect = crop.normalize_rect(rect, dims[0], dims[1])
+                if rect:
+                    # Only a crop needs dimensions; a whole image that
+                    # image_size cannot parse is still perfectly loadable, and
+                    # failing it here would reject inputs that work today.
+                    if dims is None:
+                        raise ValueError("cannot read input image")
+                    rect = crop.normalize_rect(rect, dims[0], dims[1])
             if rect:
                 eta_pixels = rect["w"] * rect["h"]
-                image, _res = crop.stage(self.input_dir, source_path, rect)
+                image, res = crop.stage(self.input_dir, source_path, rect,
+                                        self.max_input_bytes)
                 staged_path = os.path.join(self.input_dir, image)
+                fit_from = [rect["w"], rect["h"]]
+            elif source_path:
+                rel, res = fit.stage_whole(self.input_dir, source_path,
+                                           self.max_input_bytes)
+                if rel:
+                    image = rel
+                    staged_path = os.path.join(self.input_dir, rel)
+                fit_from = list(dims) if dims else None
+            if res is not None and res.resized:
+                fit_info = {"scale": res.scale, "to": list(res.size),
+                            "from": fit_from or list(res.size)}
+                # See cozy.generate: ETA history is keyed on what the model
+                # actually sees, and a resized input is fewer pixels.
+                eta_pixels = res.size[0] * res.size[1]
             path = os.path.join(self.workflow_dir, job["workflow"] + ".api.json")
             graph, width, height = self._load_patch(
                 path, job.get("prompt", ""), job.get("width", 400),
@@ -352,9 +384,10 @@ class Scheduler:
             img = self._execute(self.client, graph, client_id,
                                 on_progress=self.store.set_current_progress,
                                 on_prompt_id=self.store.set_current_prompt_id)
-            self._write_outputs(job["id"], img, source_path, rect)
+            self._write_outputs(job["id"], img, source_path, rect,
+                                (fit_info or {}).get("scale", 1.0))
             dur = self.store.finish_current(
-                "success", output="queue/" + job["id"] + ".png")
+                "success", output="queue/" + job["id"] + ".png", fit=fit_info)
             if dur is not None:
                 eta.record_completion(self.store.state_dir, job["workflow"],
                                       record_pixels or 0, dur)
