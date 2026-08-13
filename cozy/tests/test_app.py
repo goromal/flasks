@@ -515,6 +515,16 @@ def test_index_has_remote_image_ui(edit_client):
     assert b'id="remote-image-label"' in page
 
 
+def test_index_has_crop_select_toggle(edit_client):
+    """Crop selection is opt-in: the stage only reacts to pointer gestures once
+    the toggle adds .selecting, so a stray tap on the preview does nothing."""
+    _login(edit_client)
+    page = edit_client.get("/cozy/").data
+    assert b'id="crop-select"' in page
+    assert b'id="crop-clear"' in page
+    assert b'#preview-stage.selecting' in page
+
+
 def test_status_includes_eta(client, monkeypatch):
     monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
     _login(client)
