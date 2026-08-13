@@ -109,12 +109,23 @@ def _find_prompt_node(graph):
     return None
 
 
-def _find_dimension_node(graph):
-    for nid, node in graph.items():
-        inputs = node.get("inputs") or {}
-        if "width" in inputs and "height" in inputs:
-            return nid
-    return None
+def _find_dimension_nodes(graph):
+    """Every node carrying a *literal* width and height.
+
+    Usually there is exactly one (the empty-latent node), but some graphs need
+    the same size in more than one place: Flux.2 text-to-image sizes the latent
+    with EmptyFlux2LatentImage *and* hands the same dimensions to Flux2Scheduler,
+    which uses them to pick the resolution-dependent sigma shift. ComfyUI's own
+    template drives both from a single subgraph input; API format has no such
+    wiring, so each node carries its own literal and they must be patched
+    together or the schedule is computed for the wrong resolution.
+
+    Nodes whose width/height are links (``[node_id, slot]``) are skipped: they
+    are already driven by the graph and overwriting them would break it.
+    """
+    return [nid for nid, node in graph.items()
+            if all(isinstance((node.get("inputs") or {}).get(k), int)
+                   for k in ("width", "height"))]
 
 
 def _set_prompt_text(node, text):
@@ -138,8 +149,8 @@ def load_and_patch(path, prompt, width, height, image=None):
 
     Behaviour depends on the workflow's _cozy.kind (default 'generate'):
       * generate: inject prompt into the PrimitiveStringMultiline 'Prompt' node
-        and width/height into the dimension node, snapping dimensions if a
-        resolution policy is declared.
+        and width/height into every node carrying literal dimensions, snapping
+        them first if a resolution policy is declared.
       * edit: inject prompt text into _cozy.prompt_node and the input-image
         filename into _cozy.image_node (a LoadImage). Output size derives from
         the image, so width/height are not patched. Requires a non-empty image.
@@ -180,10 +191,11 @@ def load_and_patch(path, prompt, width, height, image=None):
         raise ValueError("no prompt node (PrimitiveStringMultiline titled 'Prompt') found")
     graph[pnode]["inputs"]["value"] = prompt
 
-    dnode = _find_dimension_node(graph)
-    if dnode is None:
+    dnodes = _find_dimension_nodes(graph)
+    if not dnodes:
         raise ValueError("no width/height node found")
-    graph[dnode]["inputs"]["width"] = node_width
-    graph[dnode]["inputs"]["height"] = node_height
+    for dnode in dnodes:
+        graph[dnode]["inputs"]["width"] = node_width
+        graph[dnode]["inputs"]["height"] = node_height
 
     return graph, width, height

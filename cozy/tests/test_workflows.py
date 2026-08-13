@@ -119,6 +119,31 @@ def test_no_policy_keeps_exact_dimensions(tmp_path):
     assert graph["2"]["inputs"]["height"] == 777
 
 
+def test_patches_every_literal_dimension_node(tmp_path):
+    """Flux.2 t2i shape: the latent node and the scheduler each carry their own
+    literal size, and both must end up on the requested dimensions. A node whose
+    size comes in over a link is left alone."""
+    p = tmp_path / "flux2.api.json"
+    p.write_text(json.dumps({
+        "1": {"class_type": "PrimitiveStringMultiline",
+              "_meta": {"title": "Prompt"}, "inputs": {"value": ""}},
+        "2": {"class_type": "EmptyFlux2LatentImage",
+              "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+        "3": {"class_type": "Flux2Scheduler",
+              "inputs": {"steps": 20, "width": 1024, "height": 1024}},
+        "4": {"class_type": "Linked",
+              "inputs": {"width": ["9", 0], "height": ["9", 1]}},
+    }))
+    graph, width, height = workflows.load_and_patch(str(p), "a fox", 640, 960)
+    assert (width, height) == (640, 960)
+    assert graph["2"]["inputs"]["width"] == 640
+    assert graph["2"]["inputs"]["height"] == 960
+    assert graph["3"]["inputs"]["width"] == 640
+    assert graph["3"]["inputs"]["height"] == 960
+    assert graph["3"]["inputs"]["steps"] == 20
+    assert graph["4"]["inputs"] == {"width": ["9", 0], "height": ["9", 1]}
+
+
 def test_missing_prompt_node_raises(tmp_path):
     bad = tmp_path / "bad.json"
     bad.write_text(json.dumps({"1": {"class_type": "Foo", "inputs": {}}}))
