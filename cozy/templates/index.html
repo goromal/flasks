@@ -47,13 +47,19 @@
         }
         button.secondary:hover { background:#f0f4ff; }
         button.secondary:disabled { opacity:0.5; cursor:not-allowed; }
+        button.secondary.active { color:#fff; background:#4e73df; }
+        button.secondary.active:hover { background:#3a5bc7; }
         .progress { margin-top:20px; height:18px; background:#e9ecef; border-radius:9px; overflow:hidden; display:none; }
         .progress > div { height:100%; width:0%; background:linear-gradient(135deg,#4e73df,#224abe); transition:width 0.3s; }
         .error { color:#721c24; background:#f8d7da; border:2px solid #f5c6cb; padding:10px 14px; border-radius:6px; margin-top:16px; display:none; }
         .duration { margin-top:16px; text-align:center; color:#495057; font-weight:600; display:none; }
         #output { margin-top:24px; text-align:center; }
         #output img { max-width:100%; border-radius:8px; }
-        #preview-stage { position:relative; display:inline-block; max-width:100%; line-height:0; overflow:hidden; border-radius:8px; touch-action:none; cursor:crosshair; }
+        /* touch-action:none swallows scroll gestures over the image, so it is
+           applied only while selecting -- outside that mode the image scrolls
+           and taps do nothing. */
+        #preview-stage { position:relative; display:inline-block; max-width:100%; line-height:0; overflow:hidden; border-radius:8px; }
+        #preview-stage.selecting { touch-action:none; cursor:crosshair; }
         #preview-stage img { max-width:100%; display:block; }
         /* One huge spread paints the scrim outside the rect; overflow:hidden on
            the stage clips it to the image. */
@@ -134,6 +140,7 @@
                     </div>
                     <div id="crop-label"></div>
                     <div class="prompt-actions">
+                        <button type="button" class="secondary" id="crop-select" aria-pressed="false">Select region</button>
                         <button type="button" class="secondary" id="crop-clear">Clear region</button>
                     </div>
                 </div>
@@ -276,9 +283,14 @@
         const previewStage = document.getElementById("preview-stage");
         const cropRectEl = document.getElementById("crop-rect");
         const cropLabel = document.getElementById("crop-label");
+        const cropSelectBtn = document.getElementById("crop-select");
         const SNAP = 8, MIN_SIDE = 64;
         let cropRect = {{ state.rect | tojson }};
         let dragFrom = null;
+        // Off by default: pointer gestures on the preview are ignored until the
+        // user opts in, so an accidental tap can no longer wipe or invent a
+        // region. An existing rect still renders and still submits.
+        let cropMode = false;
 
         function snapDown(v) { return Math.floor(v / SNAP) * SNAP; }
         function snapUp(v) { return Math.ceil(v / SNAP) * SNAP; }
@@ -305,7 +317,9 @@
             const shown = preview.getBoundingClientRect().width;
             if (!cropRect || !preview.naturalWidth || !shown) {
                 cropRectEl.style.display = "none";
-                cropLabel.textContent = "Drag on the image to edit only part of it.";
+                cropLabel.textContent = cropMode
+                    ? "Drag on the image to select a region."
+                    : "Press “Select region” to edit only part of the image.";
                 return;
             }
             const scale = shown / preview.naturalWidth;
@@ -320,6 +334,17 @@
 
         function clearCropRect() { cropRect = null; renderCropRect(); }
 
+        function setCropMode(on) {
+            cropMode = on;
+            // A half-finished drag must not survive leaving the mode.
+            if (!on) dragFrom = null;
+            previewStage.classList.toggle("selecting", on);
+            cropSelectBtn.classList.toggle("active", on);
+            cropSelectBtn.setAttribute("aria-pressed", on ? "true" : "false");
+            cropSelectBtn.textContent = on ? "Done selecting" : "Select region";
+            renderCropRect();
+        }
+
         // Recomputed per event, so a resize between drags cannot skew the maths.
         function toNatural(ev) {
             const box = preview.getBoundingClientRect();
@@ -329,7 +354,7 @@
         }
 
         previewStage.addEventListener("pointerdown", (ev) => {
-            if (!preview.naturalWidth) return;
+            if (!cropMode || !preview.naturalWidth) return;
             previewStage.setPointerCapture(ev.pointerId);
             dragFrom = toNatural(ev);
             ev.preventDefault();
@@ -357,6 +382,7 @@
         // latched and the rect keeps following the pointer.
         previewStage.addEventListener("pointercancel", () => { dragFrom = null; });
         document.getElementById("crop-clear").addEventListener("click", clearCropRect);
+        cropSelectBtn.addEventListener("click", () => setCropMode(!cropMode));
         // naturalWidth is only meaningful once the image has decoded.
         preview.addEventListener("load", renderCropRect);
         window.addEventListener("resize", renderCropRect);
