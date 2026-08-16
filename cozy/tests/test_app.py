@@ -85,6 +85,109 @@ def test_status_requires_login(client):
     assert r.status_code in (301, 302, 401)
 
 
+def test_unauthenticated_api_gets_json_401_not_a_login_page(client):
+    # A redirect would hand a script 200 + login HTML, which only fails later
+    # when it tries to parse it as JSON.
+    r = client.get("/cozy/api/status", follow_redirects=False)
+    assert r.status_code == 401
+    assert r.get_json()["error"] == "unauthorized"
+
+
+TOKEN = "s3cret-api-token"
+
+
+@pytest.fixture
+def token_app(tmp_path):
+    """App with an API token configured, plus cleanup of the module global."""
+    from werkzeug.security import generate_password_hash
+    store = FakeStore()
+    qs = queue_store.QueueStore(str(tmp_path))
+
+    class FakeSched:
+        rest_gap = 30
+
+        def start(self):
+            return True
+
+        def stop(self):
+            pass
+
+        def is_active(self):
+            return False
+
+    app = cozy.create_app(store=store, workflows=["imggen"],
+                          workflow_dir=str(tmp_path), subdomain="/cozy",
+                          input_dir=str(tmp_path), output_dir=str(tmp_path),
+                          workflow_kinds={"imggen": "generate"},
+                          queue_store=qs, scheduler=FakeSched(),
+                          api_token_hash=generate_password_hash(TOKEN))
+    app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
+    yield app.test_client(), qs
+    cozy._API_TOKEN_HASH = None
+
+
+def _bearer(token):
+    return {"Authorization": "Bearer " + token}
+
+
+def test_bearer_token_queues_a_job_without_a_session(token_app):
+    # The whole point: a script with a token and no cookie jar can queue work.
+    c, qs = token_app
+    r = c.post("/cozy/api/queue/add", headers=_bearer(TOKEN),
+               json={"workflow": "imggen", "prompt": "p", "width": 400,
+                     "height": 800, "basename": "seaside"})
+    assert r.status_code == 200
+    jid = r.get_json()["id"]
+    jobs = qs.read()["jobs"]
+    assert [j["id"] for j in jobs] == [jid]
+    assert jobs[0]["basename"] == "seaside"
+
+
+def test_bearer_token_reads_queue_status(token_app):
+    c, _ = token_app
+    r = c.get("/cozy/api/queue/status", headers=_bearer(TOKEN))
+    assert r.status_code == 200 and r.get_json()["jobs"] == []
+
+
+@pytest.mark.parametrize("header", [
+    {"Authorization": "Bearer wrong-token"},
+    {"Authorization": "Bearer "},
+    {"Authorization": "Basic " + TOKEN},   # right secret, wrong scheme
+    {"Authorization": TOKEN},              # no scheme at all
+    {},
+])
+def test_bad_credentials_are_rejected(token_app, header):
+    c, qs = token_app
+    r = c.post("/cozy/api/queue/add", headers=header,
+               json={"workflow": "imggen", "prompt": "p", "width": 400,
+                     "height": 800})
+    assert r.status_code == 401
+    assert qs.read()["jobs"] == []
+
+
+def test_bearer_scheme_is_case_insensitive(token_app):
+    # RFC 7235 makes the scheme case-insensitive; clients do send "bearer".
+    c, _ = token_app
+    assert c.get("/cozy/api/queue/status",
+                 headers={"Authorization": "bearer " + TOKEN}).status_code == 200
+
+
+def test_token_auth_is_off_when_no_token_is_configured(client):
+    # The deployed secrets file predates this feature and has no token; an
+    # app without one must not accept a bearer header at all.
+    assert cozy._API_TOKEN_HASH is None
+    r = client.get("/cozy/api/status", headers=_bearer(TOKEN))
+    assert r.status_code == 401
+
+
+def test_token_does_not_disturb_the_browser_login_redirect(token_app):
+    # Non-API paths still send a human to the login page.
+    c, _ = token_app
+    r = c.get("/cozy/", follow_redirects=False)
+    assert r.status_code in (301, 302)
+
+
 def test_unknown_workflow_400(client, monkeypatch):
     monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
     _login(client)

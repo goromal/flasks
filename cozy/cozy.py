@@ -28,6 +28,7 @@ from queue_store import stage_remote_image
 import runner
 
 _PW_HASH = None  # populated from the secrets file at startup; see _load_secrets
+_API_TOKEN_HASH = None  # optional; absent from the secrets file disables API auth
 
 
 def _load_secrets(path):
@@ -46,6 +47,20 @@ def _load_secrets(path):
 
 def _check_password(password):
     return check_password_hash(_PW_HASH, password)
+
+
+def _check_api_token(token):
+    """True if ``token`` matches the configured API token.
+
+    Stored hashed, like the password, so a leaked secrets file does not hand
+    over a working token. That makes each check a deliberately slow KDF, which
+    is why callers should hold a session cookie rather than a bearer token when
+    they poll: a browser pays this once at login, a bearer-token client pays it
+    on every request.
+    """
+    if not _API_TOKEN_HASH or not token:
+        return False
+    return check_password_hash(_API_TOKEN_HASH, token)
 
 
 # Prompt-database entries are bare <name>.txt files in the selected directory.
@@ -95,10 +110,13 @@ class User(flask_login.UserMixin):
 def create_app(store, workflows, workflow_dir, subdomain="/cozy",
                input_dir=None, output_dir=None, workflow_kinds=None,
                secret_key=None, password_hash=None, restart_cmd=None,
-               prompt_db_dir=None, queue_store=None, scheduler=None):
-    global _PW_HASH
+               prompt_db_dir=None, queue_store=None, scheduler=None,
+               api_token_hash=None):
+    global _PW_HASH, _API_TOKEN_HASH
     if password_hash is not None:
         _PW_HASH = password_hash
+    if api_token_hash is not None:
+        _API_TOKEN_HASH = api_token_hash
     input_dir = input_dir or os.path.join(workflow_dir, "input")
     output_dir = output_dir or os.path.join(workflow_dir, "output")
     prompt_db_dir = prompt_db_dir or os.path.join(
@@ -108,6 +126,7 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
     prefix = subdomain.replace("/", "")
     prefix = prefix + "." if prefix else ""
     static_url_path = (subdomain.rstrip("/") or "") + "/static"
+    api_root = (subdomain.rstrip("/") or "") + "/api/"
 
     app = flask.Flask(__name__, static_url_path=static_url_path, static_folder="static")
     app.secret_key = secret_key or os.urandom(24)
@@ -120,6 +139,30 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
     @login_manager.user_loader
     def load_user(user_id):
         return user if user_id == "anonymous" else None
+
+    @login_manager.request_loader
+    def load_user_from_token(req):
+        """Authenticate a scripted client from ``Authorization: Bearer <token>``.
+
+        flask_login consults this only when the session cookie did not identify
+        anyone, so the browser flow is untouched. Hanging API auth here rather
+        than on individual views means every @login_required route accepts a
+        token, and no route can be added later that forgets to.
+        """
+        auth = req.headers.get("Authorization", "")
+        scheme, _, token = auth.partition(" ")
+        if scheme.lower() != "bearer":
+            return None
+        return user if _check_api_token(token.strip()) else None
+
+    @login_manager.unauthorized_handler
+    def unauthorized():
+        # Browsers get the login page; anything under /api/ gets a status an
+        # HTTP client can act on. Without this the redirect would hand a script
+        # a 200 full of login HTML, which only fails once it tries to parse it.
+        if flask.request.path.startswith(api_root):
+            return flask.jsonify({"error": "unauthorized"}), 401
+        return flask.redirect(flask.url_for(prefix + "login"))
 
     bp = flask.Blueprint("cozy", __name__, url_prefix=subdomain)
 
@@ -674,7 +717,8 @@ def run():
                      password_hash=secrets["password_hash"],
                      restart_cmd=restart_cmd,
                      prompt_db_dir=args.prompt_db_dir or os.path.join(state_dir, "prompts"),
-                     queue_store=qstore, scheduler=scheduler)
+                     queue_store=qstore, scheduler=scheduler,
+                     api_token_hash=secrets.get("api_token_hash"))
     app.run(host="0.0.0.0", port=args.port)
 
 
