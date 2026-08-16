@@ -58,6 +58,24 @@ _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]*$")
 # walking out of the queue directory via the bare join in QueueStore.image_path.
 _JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
+
+def _clean_basename(data):
+    """(basename_or_None, None) for a job payload's output name, or
+    (None, error_response) if it is not a legal name.
+
+    Deliberately validated against _NAME_RE, the same slug prompt names must
+    satisfy: the UI auto-fills this field from the loaded prompt's name, so
+    sharing the rule makes every auto-filled value valid by construction. It
+    also excludes '/' and '%', which ComfyUI's SaveImage would otherwise read as
+    a subfolder and a date-format escape.
+    """
+    name = (data.get("basename") or "").strip()
+    if not name:
+        return None, None
+    if not _NAME_RE.match(name):
+        return None, (flask.jsonify({"error": "invalid output name"}), 400)
+    return name, None
+
 # Guard against accidentally selecting a huge remote file: previews and edit
 # staging are synchronous transfers, fine on a LAN but not unbounded.
 _MAX_REMOTE_IMAGE_BYTES = 50 * 1024 * 1024
@@ -143,6 +161,11 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         wf = data.get("workflow")
         if wf not in workflows:
             return flask.jsonify({"error": "unknown workflow"}), 400
+        # Validated before anything is staged, so a rejected name cannot leave a
+        # fetched remote image or a staged crop behind.
+        basename, bad = _clean_basename(data)
+        if bad:
+            return bad
         prompt = data.get("prompt", "")
         image = data.get("image", "") or ""
         remote = data.get("remote_image") or None
@@ -197,7 +220,8 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
             staged_path = os.path.join(input_dir, image)
         if not store.start(wf, path, prompt, width, height, image,
                            eta_pixels=eta_pixels, source_path=source_path,
-                           rect=rect, staged_path=staged_path):
+                           rect=rect, staged_path=staged_path,
+                           basename=basename):
             # Nothing will consume the crop we just staged.
             if staged_path:
                 try:
@@ -401,6 +425,9 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         wf = data.get("workflow")
         if wf not in workflows:
             return None, (flask.jsonify({"error": "unknown workflow"}), 400)
+        basename, bad = _clean_basename(data)
+        if bad:
+            return None, bad
         try:
             width = int(data.get("width", 400))
             height = int(data.get("height", 800))
@@ -441,7 +468,8 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
             eta_pixels = width * height
         return {"workflow": wf, "kind": kind, "prompt": data.get("prompt", ""),
                 "width": width, "height": height, "image": image,
-                "remote_image": remote, "rect": rect, "eta_pixels": eta_pixels}, None
+                "remote_image": remote, "rect": rect, "eta_pixels": eta_pixels,
+                "basename": basename}, None
 
     @bp.route("/api/queue/add", methods=["POST"])
     @flask_login.login_required

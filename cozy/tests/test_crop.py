@@ -159,3 +159,21 @@ def test_save_composite_slugs_awkward_source_names(tmp_path):
     rel = crop.save_composite(str(outdir), "/x/we ird:name!.png", _png((8, 8), (1, 2, 3)))
     assert rel.startswith("we_ird_name")
     assert "/" not in rel and ":" not in rel and "!" not in rel
+
+
+def test_save_composite_uses_the_basename_when_given(tmp_path):
+    # On a cropped run SaveImage only ever sees the crop, so this file is the
+    # one the user's output name is actually for.
+    outdir = tmp_path / "out"
+    rel = crop.save_composite(str(outdir), "/x/photo.png", _png((8, 8), (1, 2, 3)),
+                              basename="seaside")
+    assert rel.startswith("seaside-")
+    assert "photo" not in rel and "-edit-" not in rel
+
+
+def test_save_composite_basename_still_does_not_collide(tmp_path):
+    outdir = tmp_path / "out"
+    data = _png((8, 8), (1, 2, 3))
+    names = {crop.save_composite(str(outdir), "/x/photo.png", data, basename="same")
+             for _ in range(3)}
+    assert len(names) == 3

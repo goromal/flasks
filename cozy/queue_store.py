@@ -193,7 +193,8 @@ class QueueStore:
         jobs = [{"id": j["id"], "workflow": j.get("workflow"),
                  "prompt": j.get("prompt", ""), "kind": j.get("kind"),
                  "width": j.get("width"), "height": j.get("height"),
-                 "eta": pred(j)} for j in data["jobs"]]
+                 "basename": j.get("basename"), "eta": pred(j)}
+                for j in data["jobs"]]
         current = None
         c = data.get("current")
         if c:
@@ -289,7 +290,7 @@ class Scheduler:
             self.store.clear_current()
             self.run_lock.release()
 
-    def _write_outputs(self, job_id, img, source_path, rect):
+    def _write_outputs(self, job_id, img, source_path, rect, basename=None):
         """Model output first, then the composite: a composite failure must not
         cost the result the GPU actually produced.
 
@@ -311,7 +312,8 @@ class Scheduler:
         # See JobStore._write_outputs: the composite must reach the output dir
         # to be re-feedable, since SaveImage only ever saw the crop.
         if self.output_dir:
-            crop.save_composite(self.output_dir, source_path, composited)
+            crop.save_composite(self.output_dir, source_path, composited,
+                                basename)
 
     def _run_job(self, job):
         staged_path = None
@@ -344,15 +346,16 @@ class Scheduler:
                 image = crop.stage(self.input_dir, source_path, rect)
                 staged_path = os.path.join(self.input_dir, image)
             path = os.path.join(self.workflow_dir, job["workflow"] + ".api.json")
+            basename = job.get("basename") or None
             graph, width, height = self._load_patch(
                 path, job.get("prompt", ""), job.get("width", 400),
-                job.get("height", 800), image=image)
+                job.get("height", 800), image=image, basename=basename)
             record_pixels = eta_pixels if eta_pixels is not None else width * height
             client_id = uuid.uuid4().hex
             img = self._execute(self.client, graph, client_id,
                                 on_progress=self.store.set_current_progress,
                                 on_prompt_id=self.store.set_current_prompt_id)
-            self._write_outputs(job["id"], img, source_path, rect)
+            self._write_outputs(job["id"], img, source_path, rect, basename)
             dur = self.store.finish_current(
                 "success", output="queue/" + job["id"] + ".png")
             if dur is not None:

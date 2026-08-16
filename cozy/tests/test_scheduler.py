@@ -96,7 +96,7 @@ def test_remote_edit_job_staged_by_default(tmp_path, monkeypatch):
     def fake_execute(client, graph, cid, on_progress=None, on_prompt_id=None):
         return b"IMG"
 
-    def fake_load_patch(path, prompt, w, h, image=None):
+    def fake_load_patch(path, prompt, w, h, image=None, basename=None):
         seen["image"] = image
         return ({}, 400, 800)
 
@@ -141,6 +141,35 @@ def test_cropped_queue_job_writes_composite_and_crop(tmp_path):
         assert im.size == (200, 160)
         assert im.getpixel((64, 32)) == (200, 100, 50)
         assert im.getpixel((63, 32)) == (10, 20, 30)
+
+
+def test_queue_job_basename_reaches_the_graph_and_the_composite(tmp_path):
+    src = tmp_path / "a.png"
+    src.write_bytes(_png((200, 160), (10, 20, 30)))
+    outdir = tmp_path / "out"
+    seen = {}
+
+    def execute(client, graph, cid, on_progress=None, on_prompt_id=None):
+        return _png((64, 64), (200, 100, 50))
+
+    def load_patch(path, prompt, w, h, image=None, basename=None):
+        seen["basename"] = basename
+        return ({}, 400, 800)
+
+    store = queue_store.QueueStore(str(tmp_path))
+    sched = queue_store.Scheduler(
+        store, client=object(), workflow_dir=str(tmp_path), workflow_kinds={},
+        input_dir=str(tmp_path), output_dir=str(outdir),
+        run_lock=runner.RunLock(), rest_gap=30, execute=execute,
+        sleep=lambda s: None, load_patch=load_patch)
+    store.add_job({"workflow": "imggen", "kind": "edit", "image": "a.png",
+                   "rect": {"x": 64, "y": 32, "w": 64, "h": 64},
+                   "basename": "seaside"})
+    _drain(sched)
+    assert store.read()["results"][0]["status"] == "success"
+    assert seen["basename"] == "seaside"
+    saved = list(outdir.iterdir())
+    assert len(saved) == 1 and saved[0].name.startswith("seaside-")
 
 
 def test_staged_crop_is_deleted_after_the_job(tmp_path):

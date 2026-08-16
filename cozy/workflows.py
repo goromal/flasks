@@ -128,6 +128,21 @@ def _find_dimension_nodes(graph):
                    for k in ("width", "height"))]
 
 
+def _find_save_nodes(graph):
+    """Every node carrying a literal ``filename_prefix``.
+
+    That input is what names the files ComfyUI writes into its output dir
+    (``<prefix>_00001_.png``), so it is the knob a user-supplied output name
+    turns. Every cozy workflow has exactly one such node today, but patching all
+    of them keeps a graph that saves more than one image consistent.
+
+    Nodes whose prefix is a link (``[node_id, slot]``) are skipped: they are
+    already driven by the graph, as in _find_dimension_nodes.
+    """
+    return [nid for nid, node in graph.items()
+            if isinstance((node.get("inputs") or {}).get("filename_prefix"), str)]
+
+
 def _set_prompt_text(node, text):
     """Write user text into a node's text-bearing input (CLIPTextEncode uses
     'text', PrimitiveStringMultiline uses 'value')."""
@@ -143,7 +158,7 @@ def load_meta(path):
     return {"kind": meta.get("kind", "generate"), **meta}
 
 
-def load_and_patch(path, prompt, width, height, image=None):
+def load_and_patch(path, prompt, width, height, image=None, basename=None):
     """Return ``(graph, width, height)``: a deep-copied API-format graph with the
     prompt and inputs injected, plus the dimensions actually applied.
 
@@ -155,6 +170,11 @@ def load_and_patch(path, prompt, width, height, image=None):
         filename into _cozy.image_node (a LoadImage). Output size derives from
         the image, so width/height are not patched. Requires a non-empty image.
 
+    ``basename`` overrides the SaveImage filename_prefix baked into the workflow
+    file, for both kinds. Falsy leaves the workflow's own default in place.
+    ComfyUI appends its own ``_00001_`` counter, so reusing a name across runs
+    never overwrites an earlier image.
+
     The _cozy key is cozy-only metadata and is stripped from the returned graph.
     """
     with open(path) as f:
@@ -164,6 +184,16 @@ def load_and_patch(path, prompt, width, height, image=None):
 
     cozy_meta = graph.pop("_cozy", None) or {}
     kind = cozy_meta.get("kind", "generate")
+
+    if basename:
+        snodes = _find_save_nodes(graph)
+        # Raise rather than no-op: silently dropping the name would write the
+        # image under the workflow's default prefix, and the user would have no
+        # way to tell that the field they filled in did nothing.
+        if not snodes:
+            raise ValueError("workflow has no filename_prefix node to name")
+        for snode in snodes:
+            graph[snode]["inputs"]["filename_prefix"] = basename
 
     if kind == "edit":
         if not image:

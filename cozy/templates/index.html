@@ -19,7 +19,7 @@
         h1 { color:#4e73df; margin:0; font-size:1.6rem; font-weight:700; }
         a.logout { color:#4e73df; text-decoration:none; font-weight:600; }
         label { display:block; font-weight:600; margin:16px 0 8px; color:#495057; }
-        select, textarea, input[type="number"] {
+        select, textarea, input[type="number"], input#basename {
             width:100%; padding:12px 14px; font-size:1rem; border:2px solid #ced4da; border-radius:8px; font-family:inherit;
         }
         select:focus, textarea:focus, input:focus { outline:none; border-color:#4e73df; box-shadow:0 0 0 3px rgba(78,115,223,0.15); }
@@ -169,6 +169,11 @@
                     <button type="button" class="secondary" id="pdb-delete">Delete</button>
                 </div>
             </details>
+            <label for="basename">Output name</label>
+            <input type="text" id="basename" value="{{ state.basename }}"
+                   placeholder="(workflow default)" />
+            <div class="pdb-path">Names the saved image. Empty uses the
+                workflow's own prefix. Loading a saved prompt fills this in.</div>
             <div class="dims">
                 <div>
                     <label for="width">Width</label>
@@ -263,6 +268,7 @@
         const preview = document.getElementById("preview");
         const dimsRow = document.querySelector(".dims");
         const promptLabel = document.getElementById("prompt-label");
+        const basenameInput = document.getElementById("basename");
 
         function currentKind() { return WORKFLOW_KINDS[workflowSel.value] || "generate"; }
 
@@ -532,6 +538,7 @@
         document.getElementById("clear").addEventListener("click", async () => {
             await fetch(root + "api/clear", { method: "POST" });
             document.getElementById("prompt").value = "";
+            basenameInput.value = "";
             imageSelect.value = ""; clearRemoteImage(); clearCropRect(); updatePreview();
             IMAGE_SRC = null;  // Clear also forgets the remembered remote source dir
             output.innerHTML = ""; cropOutput.style.display = "none"; showError(""); showDuration(null); bar.style.width = "0%";
@@ -800,6 +807,11 @@
             const d = await r.json();
             if (!r.ok) { showError(d.error || "load failed"); return; }
             promptTA.value = d.text;
+            // The prompt name is the obvious thing to name its output after.
+            // Overwriting rather than only filling a blank field matches how the
+            // prompt text itself is replaced wholesale by a load. Prompt names
+            // satisfy the server's _NAME_RE, so this is always a valid basename.
+            basenameInput.value = d.name;
         });
 
         async function savePrompt(name) {
@@ -808,6 +820,7 @@
                 body: JSON.stringify({ name: name, text: promptTA.value }),
             });
             if (!r.ok) { const d = await r.json().catch(() => ({})); showError(d.error || "save failed"); return; }
+            basenameInput.value = name;
             refreshPdb();
         }
 
@@ -902,6 +915,8 @@
                 width: parseInt(document.getElementById("width").value, 10),
                 height: parseInt(document.getElementById("height").value, 10),
             };
+            const basename = basenameInput.value.trim();
+            if (basename) payload.basename = basename;
             if (currentKind() === "edit") {
                 if (remoteImage) payload.remote_image = remoteImage;
                 else payload.image = imageSelect.value;
@@ -925,7 +940,8 @@
                 meta.className = "q-meta";
                 meta.textContent = (i + 1) + ". " + j.workflow + "  " +
                     (j.kind === "edit" ? "(edit)" : (j.width + "x" + j.height)) +
-                    "  “" + (j.prompt || "").slice(0, 30) + "”";
+                    "  “" + (j.prompt || "").slice(0, 30) + "”" +
+                    (j.basename ? "  → " + j.basename : "");
                 const eta = document.createElement("span");
                 eta.className = "q-eta";
                 eta.textContent = j.eta == null ? "" : "~" + formatDuration(j.eta);
