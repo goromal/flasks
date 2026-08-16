@@ -762,28 +762,42 @@
         let pdbHost = "";
         let pdbLoaded = false;
 
-        function renderPdbPrompts() {
+        // `selected` names the entry to leave selected; omitted keeps whatever
+        // is selected now. Rebuilding innerHTML drops the browser's selection,
+        // which would silently drop the list back to whatever sorts first --
+        // so after a save the user would be looking at a different prompt than
+        // the one they just wrote.
+        function renderPdbPrompts(selected) {
             const f = pdbFilter.value.toLowerCase();
+            const keep = selected != null ? selected : pdbSelect.value;
             pdbSelect.innerHTML = pdbPrompts
                 .filter(n => !f || n.toLowerCase().includes(f))
                 .map(n => '<option value="' + escAttr(n) + '">' + escHtml(n) + '</option>')
                 .join("");
+            if (!keep) return;
+            pdbSelect.value = keep;
+            // Filtered out or deleted: assigning an absent value leaves the
+            // select showing nothing (value "", selectedIndex -1), so fall back
+            // to the first entry rather than a blank box.
+            if (pdbSelect.value !== keep && pdbSelect.options.length) {
+                pdbSelect.selectedIndex = 0;
+            }
         }
 
-        async function refreshPdb() {
+        async function refreshPdb(selected) {
             let d;
             try {
                 const r = await fetch(root + "api/pdb/prompts");
                 d = await r.json();
                 if (!r.ok) {
                     pdbPathEl.textContent = "⚠ " + (d.error || "prompt database unavailable");
-                    pdbPrompts = []; renderPdbPrompts(); return;
+                    pdbPrompts = []; renderPdbPrompts(selected); return;
                 }
             } catch (e) { pdbPathEl.textContent = "⚠ " + e.message; return; }
             pdbHost = d.db.host;
             pdbPathEl.textContent = (d.db.host ? d.db.host + ":" : "") + d.db.path;
             pdbPrompts = d.prompts;
-            renderPdbPrompts();
+            renderPdbPrompts(selected);
         }
 
         pdbDetails.addEventListener("toggle", () => {
@@ -821,7 +835,12 @@
             });
             if (!r.ok) { const d = await r.json().catch(() => ({})); showError(d.error || "save failed"); return; }
             basenameInput.value = name;
-            refreshPdb();
+            // "Save as…" can create a name the active filter excludes, which
+            // would leave it unselectable in the list it was just added to.
+            if (pdbFilter.value && !name.toLowerCase().includes(pdbFilter.value.toLowerCase())) {
+                pdbFilter.value = "";
+            }
+            await refreshPdb(name);
         }
 
         document.getElementById("pdb-save").addEventListener("click", () => {
@@ -841,7 +860,9 @@
             if (!r.ok) { const d = await r.json().catch(() => ({})); showError(d.error || "delete failed"); return; }
             refreshPdb();
         });
-        pdbFilter.addEventListener("input", renderPdbPrompts);
+        // Wrapped, not passed directly: the listener's Event argument would be
+        // read as `selected`.
+        pdbFilter.addEventListener("input", () => renderPdbPrompts());
 
         // --- Remote input image (edit workflows) ---
         let remoteImage = null; // {host, path} or null
