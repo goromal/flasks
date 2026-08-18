@@ -1,5 +1,36 @@
 # cozy HTTP API
 
+For batch work from a shell, `cozyctl` (below) is usually easier than driving
+these endpoints by hand.
+
+## cozyctl
+
+Ships in the same package as the UI, and is installed on any host running cozy
+with `COZY_URL` pre-pointed at the local service.
+
+```bash
+# One named generator job per <name>.txt in the directory, then start the queue.
+cozyctl queue ~/cozy-state/prompts -w imggen-quantized --width 512 --height 768
+
+cozyctl queue ./prompts -w imggen-quantized -n   # preview, queue nothing
+cozyctl status                                    # what is running / pending
+cozyctl start / cozyctl stop
+```
+
+Each file's *name* becomes the job's output image name and its *contents*
+become the prompt, which is the same layout the prompt library uses — so the
+prompt database directory can be pointed at directly.
+
+The whole directory is validated before the first job is queued, so a filename
+that is not a legal output name stops the run rather than queueing half of it.
+Empty files are skipped with a warning. `queue` starts the scheduler when it is
+done unless `--no-start` is given.
+
+Connection settings: `--url` (env `COZY_URL`), and `--token-file` (env
+`COZY_TOKEN_FILE`, default `~/secrets/flask/cozy-api-token`) or `--token` /
+env `COZY_TOKEN`.
+
+
 Every endpoint the browser UI uses is a plain JSON endpoint, so a script can
 drive the queue the same way the page does. All state lives on the server
 (`queue.json` under the state dir), so a job added by a script shows up in every

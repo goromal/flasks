@@ -203,9 +203,14 @@ class QueueStore:
                             c.get("progress", 0))
             current = {"id": c["id"], "workflow": c.get("workflow"),
                        "prompt": c.get("prompt", ""),
+                       "basename": c.get("basename"),
                        "progress": c.get("progress", 0), "eta": rem}
+        # basename rides along on the running job and the results, not just the
+        # pending ones, so a client watching a batch can say which named job is
+        # in flight and which produced each image.
         results = [{"id": j["id"], "workflow": j.get("workflow"),
                     "prompt": j.get("prompt", ""), "status": j.get("status"),
+                    "basename": j.get("basename"),
                     "error": j.get("error"), "duration": j.get("duration"),
                     "has_image": os.path.exists(self.image_path(j["id"])),
                     "has_crop": os.path.exists(self.crop_image_path(j["id"]))}
