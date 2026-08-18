@@ -312,6 +312,32 @@ def test_cropped_run_saves_the_composite_to_the_output_dir(tmp_path):
         assert im.getpixel((63, 32)) == (10, 20, 30)
 
 
+def test_basename_names_the_composite_and_persists_in_state(tmp_path):
+    src = _src_image(tmp_path)
+    outdir = tmp_path / "out"
+    store = job_store.JobStore(str(tmp_path / "state"),
+                               _done_client(_png_bytes((64, 64), (200, 100, 50))),
+                               output_dir=str(outdir))
+    store.start("imggen", _fixture_path(), "p", 400, 800, image="crop/abc.png",
+                source_path=src, rect={"x": 64, "y": 32, "w": 64, "h": 64},
+                basename="seaside")
+    st = _wait_idle(store)
+    assert st["job"]["status"] == "success"
+    saved = list(outdir.iterdir())
+    assert len(saved) == 1 and saved[0].name.startswith("seaside-")
+    # Persisted so a reload repopulates the field, and so the recovery path in
+    # read_state() can name a composite it finalises after a restart.
+    assert st["basename"] == "seaside"
+
+
+def test_clear_resets_the_basename(tmp_path):
+    store = job_store.JobStore(str(tmp_path / "state"), _done_client(b"IMG"))
+    store.start("imggen", _fixture_path(), "p", 400, 800, basename="seaside")
+    _wait_idle(store)
+    store.clear()
+    assert store.read_state()["basename"] == ""
+
+
 def test_uncropped_run_saves_nothing_to_the_output_dir(tmp_path):
     # ComfyUI's SaveImage already handles the whole-image case; cozy must not
     # write a duplicate.

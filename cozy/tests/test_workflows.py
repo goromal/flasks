@@ -189,6 +189,57 @@ def test_edit_patch_requires_image(tmp_path):
         workflows.load_and_patch(str(p), "add a hat", 400, 800, image="")
 
 
+def test_basename_overrides_the_save_prefix():
+    graph, _, _ = workflows.load_and_patch(FIXTURE, "x", 400, 800,
+                                           basename="seaside")
+    assert graph["9"]["inputs"]["filename_prefix"] == "seaside"
+
+
+def test_no_basename_keeps_the_workflow_default():
+    graph, _, _ = workflows.load_and_patch(FIXTURE, "x", 400, 800)
+    assert graph["9"]["inputs"]["filename_prefix"] == "jun15"
+    # Empty string is "unset", not "name the file the empty string".
+    graph, _, _ = workflows.load_and_patch(FIXTURE, "x", 400, 800, basename="")
+    assert graph["9"]["inputs"]["filename_prefix"] == "jun15"
+
+
+def test_basename_applies_to_edit_workflows(tmp_path):
+    # The edit branch returns before the generate patching runs, so the prefix
+    # must be applied ahead of the kind split or edit runs would silently ignore
+    # the name.
+    g = _edit_graph()
+    g["9"] = {"class_type": "SaveImage",
+              "inputs": {"filename_prefix": "flux2_edit", "images": ["8", 0]}}
+    p = tmp_path / "imgedit.api.json"
+    p.write_text(json.dumps(g))
+    graph, _, _ = workflows.load_and_patch(str(p), "add a hat", 400, 800,
+                                           image="me.png", basename="portrait")
+    assert graph["9"]["inputs"]["filename_prefix"] == "portrait"
+
+
+def test_basename_on_a_workflow_without_a_save_node_raises(tmp_path):
+    p = tmp_path / "imgedit.api.json"
+    p.write_text(json.dumps(_edit_graph()))
+    with pytest.raises(ValueError):
+        workflows.load_and_patch(str(p), "x", 400, 800, image="me.png",
+                                 basename="portrait")
+    # ...but the same workflow still runs fine when no name was asked for.
+    workflows.load_and_patch(str(p), "x", 400, 800, image="me.png")
+
+
+def test_basename_skips_linked_prefixes(tmp_path):
+    # A prefix driven by another node is graph wiring, not a literal; patching
+    # it would replace a link with a string and break the graph.
+    g = _edit_graph()
+    g["9"] = {"class_type": "SaveImage",
+              "inputs": {"filename_prefix": ["7", 0], "images": ["8", 0]}}
+    p = tmp_path / "imgedit.api.json"
+    p.write_text(json.dumps(g))
+    with pytest.raises(ValueError):
+        workflows.load_and_patch(str(p), "x", 400, 800, image="me.png",
+                                 basename="portrait")
+
+
 def test_load_meta_returns_kind(tmp_path):
     p = tmp_path / "imgedit.api.json"
     p.write_text(json.dumps(_edit_graph()))

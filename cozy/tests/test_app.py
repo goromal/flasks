@@ -16,6 +16,7 @@ class FakeStore:
         self.started_rect = None
         self.started_source = None
         self.started_staged_path = None
+        self.started_basename = None
         self.image_path = "/nonexistent/output.png"
         self.crop_image_path = "/nonexistent/output-crop.png"
         self.state_dir = state_dir
@@ -24,7 +25,7 @@ class FakeStore:
 
     def read_state(self):
         return {"workflow": "imggen", "prompt": "p", "width": 400, "height": 800,
-                "image": "", "rect": None,
+                "image": "", "rect": None, "basename": "",
                 "prompt_db": None, "known_hosts": [], "image_src": None,
                 "job": {"status": "running" if self._running else "idle",
                         "progress": 42, "error": None, "record_pixels": 320000,
@@ -42,7 +43,7 @@ class FakeStore:
         self.image_src = (host, path)
 
     def start(self, name, path, prompt, w, h, image="", eta_pixels=None,
-              source_path=None, rect=None, staged_path=None):
+              source_path=None, rect=None, staged_path=None, basename=None):
         if self._running:
             return False
         self._running = True
@@ -50,6 +51,7 @@ class FakeStore:
         self.started_rect = rect
         self.started_source = source_path
         self.started_staged_path = staged_path
+        self.started_basename = basename
         return True
 
     def clear(self):
@@ -83,6 +85,109 @@ def test_status_requires_login(client):
     assert r.status_code in (301, 302, 401)
 
 
+def test_unauthenticated_api_gets_json_401_not_a_login_page(client):
+    # A redirect would hand a script 200 + login HTML, which only fails later
+    # when it tries to parse it as JSON.
+    r = client.get("/cozy/api/status", follow_redirects=False)
+    assert r.status_code == 401
+    assert r.get_json()["error"] == "unauthorized"
+
+
+TOKEN = "s3cret-api-token"
+
+
+@pytest.fixture
+def token_app(tmp_path):
+    """App with an API token configured, plus cleanup of the module global."""
+    from werkzeug.security import generate_password_hash
+    store = FakeStore()
+    qs = queue_store.QueueStore(str(tmp_path))
+
+    class FakeSched:
+        rest_gap = 30
+
+        def start(self):
+            return True
+
+        def stop(self):
+            pass
+
+        def is_active(self):
+            return False
+
+    app = cozy.create_app(store=store, workflows=["imggen"],
+                          workflow_dir=str(tmp_path), subdomain="/cozy",
+                          input_dir=str(tmp_path), output_dir=str(tmp_path),
+                          workflow_kinds={"imggen": "generate"},
+                          queue_store=qs, scheduler=FakeSched(),
+                          api_token_hash=generate_password_hash(TOKEN))
+    app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
+    yield app.test_client(), qs
+    cozy._API_TOKEN_HASH = None
+
+
+def _bearer(token):
+    return {"Authorization": "Bearer " + token}
+
+
+def test_bearer_token_queues_a_job_without_a_session(token_app):
+    # The whole point: a script with a token and no cookie jar can queue work.
+    c, qs = token_app
+    r = c.post("/cozy/api/queue/add", headers=_bearer(TOKEN),
+               json={"workflow": "imggen", "prompt": "p", "width": 400,
+                     "height": 800, "basename": "seaside"})
+    assert r.status_code == 200
+    jid = r.get_json()["id"]
+    jobs = qs.read()["jobs"]
+    assert [j["id"] for j in jobs] == [jid]
+    assert jobs[0]["basename"] == "seaside"
+
+
+def test_bearer_token_reads_queue_status(token_app):
+    c, _ = token_app
+    r = c.get("/cozy/api/queue/status", headers=_bearer(TOKEN))
+    assert r.status_code == 200 and r.get_json()["jobs"] == []
+
+
+@pytest.mark.parametrize("header", [
+    {"Authorization": "Bearer wrong-token"},
+    {"Authorization": "Bearer "},
+    {"Authorization": "Basic " + TOKEN},   # right secret, wrong scheme
+    {"Authorization": TOKEN},              # no scheme at all
+    {},
+])
+def test_bad_credentials_are_rejected(token_app, header):
+    c, qs = token_app
+    r = c.post("/cozy/api/queue/add", headers=header,
+               json={"workflow": "imggen", "prompt": "p", "width": 400,
+                     "height": 800})
+    assert r.status_code == 401
+    assert qs.read()["jobs"] == []
+
+
+def test_bearer_scheme_is_case_insensitive(token_app):
+    # RFC 7235 makes the scheme case-insensitive; clients do send "bearer".
+    c, _ = token_app
+    assert c.get("/cozy/api/queue/status",
+                 headers={"Authorization": "bearer " + TOKEN}).status_code == 200
+
+
+def test_token_auth_is_off_when_no_token_is_configured(client):
+    # The deployed secrets file predates this feature and has no token; an
+    # app without one must not accept a bearer header at all.
+    assert cozy._API_TOKEN_HASH is None
+    r = client.get("/cozy/api/status", headers=_bearer(TOKEN))
+    assert r.status_code == 401
+
+
+def test_token_does_not_disturb_the_browser_login_redirect(token_app):
+    # Non-API paths still send a human to the login page.
+    c, _ = token_app
+    r = c.get("/cozy/", follow_redirects=False)
+    assert r.status_code in (301, 302)
+
+
 def test_unknown_workflow_400(client, monkeypatch):
     monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
     _login(client)
@@ -102,6 +207,45 @@ def test_generate_then_conflict(client, monkeypatch, tmp_path):
     r2 = client.post("/cozy/api/generate", json={"workflow": "imggen", "prompt": "x",
                                                  "width": 400, "height": 800})
     assert r2.status_code == 409
+
+
+def test_generate_passes_basename_through(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    open(os.path.join(str(tmp_path), "imggen.api.json"), "w").write("{}")
+    _login(client)
+    r = client.post("/cozy/api/generate",
+                    json={"workflow": "imggen", "prompt": "x", "width": 400,
+                          "height": 800, "basename": "  seaside  "})
+    assert r.status_code == 200
+    assert client._store.started_basename == "seaside"
+
+
+def test_generate_without_basename_leaves_it_unset(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    open(os.path.join(str(tmp_path), "imggen.api.json"), "w").write("{}")
+    _login(client)
+    # Absent and blank both mean "use the workflow's own prefix", so both must
+    # reach the store as None rather than as an empty string.
+    for payload in ({}, {"basename": ""}, {"basename": "   "}):
+        client._store._running = False
+        r = client.post("/cozy/api/generate",
+                        json=dict(workflow="imggen", prompt="x", width=400,
+                                  height=800, **payload))
+        assert r.status_code == 200
+        assert client._store.started_basename is None
+
+
+@pytest.mark.parametrize("bad", ["../escape", "a/b", "%date%", ".hidden", ""])
+def test_generate_rejects_illegal_basenames(client, monkeypatch, tmp_path, bad):
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    open(os.path.join(str(tmp_path), "imggen.api.json"), "w").write("{}")
+    _login(client)
+    r = client.post("/cozy/api/generate",
+                    json={"workflow": "imggen", "prompt": "x", "width": 400,
+                          "height": 800, "basename": bad})
+    # "" is legal-as-unset; everything else must be refused before it can reach
+    # ComfyUI's filename_prefix, where "/" and "%" have special meaning.
+    assert r.status_code == (200 if bad == "" else 400)
 
 
 def test_status_and_clear(client, monkeypatch):
@@ -508,6 +652,14 @@ def test_index_has_prompt_library_ui(client, monkeypatch):
         assert el_id in page
 
 
+def test_index_has_basename_field(client, monkeypatch):
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    _login(client)
+    page = client.get("/cozy/").data
+    assert b'id="basename"' in page
+    assert b'placeholder="(workflow default)"' in page
+
+
 def test_index_has_remote_image_ui(edit_client):
     _login(edit_client)
     page = edit_client.get("/cozy/").data
@@ -586,6 +738,22 @@ def test_queue_add_and_status(queue_ctx):
     s = c.get("/cozy/api/queue/status").get_json()
     assert len(s["jobs"]) == 1
     assert "total_eta" in s
+
+
+def test_queue_add_carries_and_validates_basename(queue_ctx):
+    c, qs, sched, run_lock = queue_ctx
+    _login(c)
+    r = c.post("/cozy/api/queue/add", json={"workflow": "imggen", "prompt": "p",
+               "width": 400, "height": 800, "basename": "seaside"})
+    assert r.status_code == 200
+    assert qs.read()["jobs"][0]["basename"] == "seaside"
+    # Surfaced in the pending list so queued jobs are tellable apart.
+    assert c.get("/cozy/api/queue/status").get_json()["jobs"][0]["basename"] == "seaside"
+
+    bad = c.post("/cozy/api/queue/add", json={"workflow": "imggen", "prompt": "p",
+                 "width": 400, "height": 800, "basename": "a/b"})
+    assert bad.status_code == 400
+    assert len(qs.read()["jobs"]) == 1
 
 
 def test_generate_blocked_when_queue_active(queue_ctx):

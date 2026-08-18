@@ -62,7 +62,7 @@ class JobStore:
 
     def _default_state(self):
         return {"workflow": None, "prompt": "", "width": DEFAULT_W,
-                "height": DEFAULT_H, "image": "", "rect": None,
+                "height": DEFAULT_H, "image": "", "rect": None, "basename": "",
                 "job": _idle_job(), "prompt_db": None, "known_hosts": [],
                 "image_src": None, "source_path": None,
                 "output": os.path.exists(self.image_path),
@@ -107,7 +107,8 @@ class JobStore:
                     img = runner.fetch_image(self.client, pid)
                     if img is not None:
                         rect = state.get("rect")
-                        self._write_outputs(img, state.get("source_path"), rect)
+                        self._write_outputs(img, state.get("source_path"), rect,
+                                            state.get("basename"))
                         state["job"].update(status="success", progress=100,
                                             finished_at=_now(), error=None)
                         state["output"] = True
@@ -162,7 +163,7 @@ class JobStore:
 
     def start(self, workflow_name, workflow_path, prompt, width, height,
               image="", eta_pixels=None, source_path=None, rect=None,
-              staged_path=None):
+              staged_path=None, basename=None):
         with self._lock:
             if self._read_raw().get("job", {}).get("status") == "running":
                 return False
@@ -170,7 +171,8 @@ class JobStore:
                 return False
             try:
                 graph, width, height = workflows.load_and_patch(
-                    workflow_path, prompt, width, height, image=image)
+                    workflow_path, prompt, width, height, image=image,
+                    basename=basename)
             except Exception:
                 self._run_lock.release()
                 raise
@@ -179,7 +181,8 @@ class JobStore:
             state = self._read_raw()
             state.update(workflow=workflow_name, prompt=prompt,
                          width=int(width), height=int(height), image=image,
-                         rect=rect, source_path=source_path)
+                         rect=rect, source_path=source_path,
+                         basename=basename or "")
             state["job"] = {"status": "running", "prompt_id": None, "progress": 0,
                             "started_at": _now(), "finished_at": None,
                             "error": None, "client_id": client_id,
@@ -194,7 +197,8 @@ class JobStore:
             self._write_state(state)
             self._thread = threading.Thread(
                 target=self._run,
-                args=(graph, client_id, source_path, rect, staged_path),
+                args=(graph, client_id, source_path, rect, staged_path,
+                      basename),
                 daemon=True)
             self._thread.start()
             return True
@@ -219,7 +223,7 @@ class JobStore:
             state["job"].update(status="failed", finished_at=_now(), error=error)
             self._write_state(state)
 
-    def _write_outputs(self, img, source_path, rect):
+    def _write_outputs(self, img, source_path, rect, basename=None):
         """Persist a finished job's images.
 
         With a rect, the model's own output is written FIRST and the composite
@@ -246,16 +250,17 @@ class JobStore:
         # run. ComfyUI's SaveImage only ever saw the crop, so without this the
         # composite would never reach the output dir and could not be re-fed.
         if self.output_dir:
-            crop.save_composite(self.output_dir, source_path, composited)
+            crop.save_composite(self.output_dir, source_path, composited,
+                                basename)
 
     def _run(self, graph, client_id, source_path=None, rect=None,
-             staged_path=None):
+             staged_path=None, basename=None):
         try:
             img = runner.execute(self.client, graph, client_id,
                                  on_progress=self._set_progress,
                                  on_prompt_id=self._set_prompt_id)
             with self._lock:
-                self._write_outputs(img, source_path, rect)
+                self._write_outputs(img, source_path, rect, basename)
                 state = self._read_raw()
                 state["job"].update(status="success", progress=100,
                                     finished_at=_now(), error=None)
@@ -292,6 +297,7 @@ class JobStore:
             state = self._read_raw()
             state["prompt"] = ""
             state["image"] = ""
+            state["basename"] = ""
             state["rect"] = None
             state["source_path"] = None
             # Clear resets the remote selections too (prompt DB and image

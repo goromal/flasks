@@ -133,7 +133,7 @@ def _slug(name):
     return _SLUG_RE.sub("_", name).strip("._") or "image"
 
 
-def save_composite(output_dir, source_path, data):
+def save_composite(output_dir, source_path, data, basename=None):
     """Persist composite bytes in the output dir; return the relative filename.
 
     ComfyUI's SaveImage node only ever sees the crop, so for a cropped run the
@@ -142,10 +142,16 @@ def save_composite(output_dir, source_path, data):
     derived from the source image so it is obvious what it came from, with a
     timestamp for ordering and a counter for the case of two runs landing in
     the same second.
+
+    ``basename`` is the user's chosen output name, which replaces the
+    source-derived stem. It has to be honoured here as well as in the SaveImage
+    prefix: on a cropped run SaveImage writes only the crop, so this file is the
+    one the name is actually for.
     """
     os.makedirs(output_dir, exist_ok=True)
-    stem = _slug(os.path.splitext(os.path.basename(source_path))[0])
-    base = "%s-edit-%s" % (stem, datetime.now().strftime("%Y%m%d-%H%M%S"))
+    stem = _slug(basename) if basename else \
+        _slug(os.path.splitext(os.path.basename(source_path))[0]) + "-edit"
+    base = "%s-%s" % (stem, datetime.now().strftime("%Y%m%d-%H%M%S"))
     rel, n = base + ".png", 2
     while os.path.exists(os.path.join(output_dir, rel)):
         rel = "%s-%d.png" % (base, n)
