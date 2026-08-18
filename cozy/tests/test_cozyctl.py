@@ -197,6 +197,7 @@ def test_queue_posts_one_named_job_per_prompt(tmp_path, monkeypatch, capsys):
          "--width", "512", "--height", "768"],
         [FakeResponse(body={"id": "a" * 32, "eta": 60}),
          FakeResponse(body={"id": "b" * 32, "eta": 90}),
+         FakeResponse(body={"total_eta": 210}),
          FakeResponse(body={"ok": True})],
         monkeypatch)
     assert code == 0
@@ -209,13 +210,30 @@ def test_queue_posts_one_named_job_per_prompt(tmp_path, monkeypatch, capsys):
     assert session.calls[-1][1].endswith("/api/queue/start")
     out = capsys.readouterr().out
     assert "queued 2 jobs" in out and "queue started" in out
+    # The server total (which counts rest gaps) is reported, not the local sum
+    # of 60+90 -- otherwise 'cozyctl status' would immediately disagree.
+    assert "3m30s" in out and "2m30s" not in out
+
+
+def test_queue_survives_a_failed_total_eta_lookup(tmp_path, monkeypatch, capsys):
+    # The summary lookup is a nicety; losing it must not fail a queue that
+    # already landed.
+    write(tmp_path, "a.txt", "x")
+    code, _ = run_main(
+        ["queue", str(tmp_path), "-w", "imggen", "--no-start"],
+        [FakeResponse(body={"id": "a" * 32, "eta": 60}),
+         FakeResponse(500, body={"error": "boom"})],
+        monkeypatch)
+    assert code == 0
+    assert "queued 1 job" in capsys.readouterr().out
 
 
 def test_no_start_leaves_the_queue_alone(tmp_path, monkeypatch, capsys):
     write(tmp_path, "a.txt", "x")
     code, session = run_main(
         ["queue", str(tmp_path), "-w", "imggen", "--no-start"],
-        [FakeResponse(body={"id": "a" * 32, "eta": 1})], monkeypatch)
+        [FakeResponse(body={"id": "a" * 32, "eta": 1}),
+         FakeResponse(body={"total_eta": 1})], monkeypatch)
     assert code == 0
     assert not any(c[1].endswith("/api/queue/start") for c in session.calls)
     assert "--no-start" in capsys.readouterr().out
@@ -233,7 +251,8 @@ def test_default_size_matches_the_ui(tmp_path, monkeypatch):
     write(tmp_path, "a.txt", "x")
     _, session = run_main(
         ["queue", str(tmp_path), "-w", "imggen", "--no-start"],
-        [FakeResponse(body={"id": "a" * 32, "eta": 1})], monkeypatch)
+        [FakeResponse(body={"id": "a" * 32, "eta": 1}),
+         FakeResponse(body={"total_eta": 1})], monkeypatch)
     assert session.calls[0][2]["width"] == 400
     assert session.calls[0][2]["height"] == 800
 

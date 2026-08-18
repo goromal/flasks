@@ -152,7 +152,6 @@ def cmd_queue(args, cozy):
         print("(dry run; nothing queued)")
         return 0
 
-    total = 0.0
     queued = 0
     try:
         for name, text in prompts:
@@ -160,7 +159,6 @@ def cmd_queue(args, cozy):
                             "width": args.width, "height": args.height,
                             "basename": name})
             queued += 1
-            total += res.get("eta") or 0
             print("  %-28s %s" % (name, human_eta(res.get("eta"))))
     except Error:
         # Report what did land: the queue keeps them, so the user needs to know
@@ -170,8 +168,17 @@ def cmd_queue(args, cozy):
                   file=sys.stderr)
         raise
 
-    print("queued %d job%s, ETA %s" % (
-        queued, "" if queued == 1 else "s", human_eta(total)))
+    # Ask the server for the total rather than summing the per-job ETAs above:
+    # it also counts the rest gap between jobs, so a local sum would disagree
+    # with what 'cozyctl status' reports a moment later. It covers the whole
+    # queue, hence the wording -- anything already pending is included.
+    try:
+        total = cozy.status().get("total_eta")
+    except Error:
+        total = None
+    print("queued %d job%s%s" % (
+        queued, "" if queued == 1 else "s",
+        "; queue ETA " + human_eta(total) if total else ""))
     if args.no_start:
         print("not started (--no-start); run 'cozyctl start' when ready")
     elif cozy.start():
