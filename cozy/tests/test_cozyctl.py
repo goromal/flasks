@@ -185,8 +185,19 @@ def run_main(argv, responses, monkeypatch, token="tok"):
 
     monkeypatch.setattr(cozyctl.Cozy, "__init__", fake_init)
     monkeypatch.setenv("COZY_TOKEN", token)
+    monkeypatch.setenv("COZY_URL", "http://host/cozy")
     code = cozyctl.main(argv)
     return code, session
+
+
+def test_missing_url_is_a_clear_error(monkeypatch, capsys):
+    # There is deliberately no baked-in default: cozy's port comes from the
+    # NixOS module, so a hardcoded copy here would rot silently.
+    monkeypatch.delenv("COZY_URL", raising=False)
+    monkeypatch.setenv("COZY_TOKEN", "tok")
+    assert cozyctl.main(["status"]) == 1
+    err = capsys.readouterr().err
+    assert "COZY_URL" in err and "--url" in err
 
 
 def test_queue_posts_one_named_job_per_prompt(tmp_path, monkeypatch, capsys):

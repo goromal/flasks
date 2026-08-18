@@ -12,8 +12,14 @@ import sys
 
 import requests
 
-DEFAULT_URL = "http://127.0.0.1:6262/cozy"
 DEFAULT_TOKEN_FILE = "~/secrets/flask/cozy-api-token"
+
+# No default URL on purpose. cozy's port is chosen by the NixOS module (from
+# anixpkgs' service-ports.nix), which this repo cannot see -- a hardcoded copy
+# would rot silently. Hosts running cozy get COZY_URL set for them by the
+# packaging; anywhere else, the URL is genuinely unknown and worth asking for.
+URL_HELP = ("base URL of the cozy app, e.g. http://myhost.local/cozy "
+            "(env COZY_URL; set for you on hosts running cozy)")
 
 # Mirrors cozy._NAME_RE. Checked here so a badly named prompt file is caught
 # before anything is queued, rather than 400ing partway through a directory.
@@ -224,8 +230,7 @@ def build_parser():
     p = argparse.ArgumentParser(
         prog="cozyctl",
         description="Queue cozy image-generation jobs from the command line.")
-    p.add_argument("--url", default=os.environ.get("COZY_URL", DEFAULT_URL),
-                   help="base URL of the cozy app (env COZY_URL, default %s)" % DEFAULT_URL)
+    p.add_argument("--url", default=os.environ.get("COZY_URL"), help=URL_HELP)
     p.add_argument("--token", default=None,
                    help="API token (env COZY_TOKEN; prefer --token-file)")
     p.add_argument("--token-file", default=os.environ.get("COZY_TOKEN_FILE"),
@@ -261,6 +266,9 @@ def build_parser():
 def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
+        if not args.url:
+            raise Error("no cozy URL: pass --url or set COZY_URL "
+                        "(e.g. http://myhost.local/cozy)")
         cozy = Cozy(args.url, read_token(args.token, args.token_file))
         return args.func(args, cozy)
     except Error as e:

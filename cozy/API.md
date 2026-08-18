@@ -30,6 +30,11 @@ Connection settings: `--url` (env `COZY_URL`), and `--token-file` (env
 `COZY_TOKEN_FILE`, default `~/secrets/flask/cozy-api-token`) or `--token` /
 env `COZY_TOKEN`.
 
+There is no baked-in default URL: cozy's port is chosen by the NixOS module
+(anixpkgs' `service-ports.nix`), which this repo cannot see, so a hardcoded copy
+here would rot silently. On a host running cozy the packaging sets `COZY_URL`
+for you; from anywhere else, pass `--url http://myhost.local/cozy`.
+
 
 Every endpoint the browser UI uses is a plain JSON endpoint, so a script can
 drive the queue the same way the page does. All state lives on the server
