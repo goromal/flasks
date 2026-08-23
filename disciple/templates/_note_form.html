@@ -1,0 +1,7 @@
+<form method="POST" action="{{ url_for('disciple.save_note', group_id=g.id) }}"
+      class="note-form">
+  <input type="hidden" name="next" value="{{ request.full_path }}">
+  <label for="note-{{ g.id }}">Notes</label>
+  <textarea name="note" id="note-{{ g.id }}" rows="3">{{ g.note }}</textarea>
+  <button type="submit" class="btn btn-primary btn-sm">Save Note</button>
+</form>

@@ -1,6 +1,20 @@
 {% extends "base.html" %}
 {% block title %}Browse — Disciple{% endblock %}
 {% block content %}
+{% macro sort_heading(key, label, width='') %}
+  {% set next_direction = 'desc' if sort == key and direction == 'asc' else 'asc' %}
+  <th{% if width %} style="width:{{ width }};"{% endif %}>
+    <a class="sort-link"
+       href="{{ url_for('disciple.browse', sort=key, direction=next_direction) }}">
+      {{ label }}
+      {% if sort == key %}
+        <span class="sort-indicator" aria-label="sorted {{ direction }}ending">
+          {{ '▲' if direction == 'asc' else '▼' }}
+        </span>
+      {% endif %}
+    </a>
+  </th>
+{% endmacro %}
 <h1>Browse Passages</h1>
 <p style="color:#888; margin-bottom:16px;">
   {{ groups|length }} Christ-reference group{{ 's' if groups|length != 1 else '' }}
@@ -10,10 +24,10 @@
 <table>
   <thead>
     <tr>
-      <th style="width:160px;">Reference</th>
-      <th>Preview</th>
-      <th style="width:50px;">Done</th>
-      <th style="width:220px;">Tags</th>
+      {{ sort_heading('reference', 'Reference', '160px') }}
+      {{ sort_heading('preview', 'Preview') }}
+      {{ sort_heading('done', 'Done', '60px') }}
+      {{ sort_heading('tags', 'Tags', '220px') }}
     </tr>
   </thead>
   <tbody>
@@ -43,10 +57,7 @@
                 {{ m.text }}
               </div>
             {% endfor %}
-            {% if g.note %}
-              <p style="margin-top:12px; color:#666; font-style:italic;
-                         border-top:1px solid #eee; padding-top:10px;">{{ g.note }}</p>
-            {% endif %}
+            {% include "_note_form.html" %}
             <div style="margin-top:10px;">
               <form method="POST"
                     action="{{ url_for('disciple.toggle_christ', group_id=g.id) }}"
