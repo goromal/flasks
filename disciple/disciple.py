@@ -198,6 +198,30 @@ def _now():
     return datetime.datetime.utcnow().isoformat()
 
 
+def _save_group_note(db, group_id, note):
+    now = _now()
+    existing = db.execute(
+        "SELECT id FROM group_notes WHERE group_id=?", (group_id,)
+    ).fetchone()
+    if existing:
+        db.execute(
+            "UPDATE group_notes SET note=?, updated_at=? WHERE group_id=?",
+            (note, now, group_id),
+        )
+    else:
+        db.execute(
+            "INSERT INTO group_notes (group_id, note, created_at, updated_at) VALUES (?,?,?,?)",
+            (group_id, note, now, now),
+        )
+
+
+def _redirect_after_form(default_endpoint):
+    next_url = flask.request.form.get("next", "")
+    if next_url.startswith("/") and not next_url.startswith("//"):
+        return flask.redirect(next_url)
+    return flask.redirect(flask.url_for(default_endpoint))
+
+
 def _load_group(db, group_id):
     members = db.execute("""
         SELECT v.id, v.scripture_ref, v.text, v.verse_num, v.chapter,
@@ -300,17 +324,7 @@ def process_group(group_id):
     tags_raw = flask.request.form.get("tags", "").strip()
     db = get_db()
     now = _now()
-    existing = db.execute("SELECT id FROM group_notes WHERE group_id=?", (group_id,)).fetchone()
-    if existing:
-        db.execute(
-            "UPDATE group_notes SET note=?, updated_at=? WHERE group_id=?",
-            (note, now, group_id),
-        )
-    else:
-        db.execute(
-            "INSERT INTO group_notes (group_id, note, created_at, updated_at) VALUES (?,?,?,?)",
-            (group_id, note, now, now),
-        )
+    _save_group_note(db, group_id, note)
     db.execute("DELETE FROM group_tags WHERE group_id=?", (group_id,))
     for name in [t.strip() for t in tags_raw.split(",") if t.strip()]:
         db.execute("INSERT OR IGNORE INTO tags (name, created_at) VALUES (?,?)", (name, now))
@@ -328,8 +342,29 @@ def process_group(group_id):
     return flask.redirect(flask.url_for("disciple.study"))
 
 
+@bp.route("/groups/<int:group_id>/note", methods=["POST"])
+def save_note(group_id):
+    note = flask.request.form.get("note", "").strip()
+    db = get_db()
+    group = db.execute("SELECT id FROM verse_groups WHERE id=?", (group_id,)).fetchone()
+    if not group:
+        db.close()
+        flask.abort(404)
+    _save_group_note(db, group_id, note)
+    db.commit()
+    db.close()
+    flask.flash("Note saved.")
+    return _redirect_after_form("disciple.browse")
+
+
 @bp.route("/browse")
 def browse():
+    sort = flask.request.args.get("sort", "reference")
+    direction = flask.request.args.get("direction", "asc")
+    if sort not in {"reference", "preview", "done", "tags"}:
+        sort = "reference"
+    if direction not in {"asc", "desc"}:
+        direction = "asc"
     db = get_db()
     rows = db.execute("""
         SELECT vg.id,
@@ -357,7 +392,23 @@ def browse():
         gd["snippet"] = _snippet(db, r["id"])
         groups.append(gd)
     db.close()
-    return flask.render_template("browse.html", groups=groups)
+    def reference_key(group):
+        return group["order_index"], group["chapter"], group["first_ref_verse"]
+
+    sort_keys = {
+        "reference": reference_key,
+        "preview": lambda group: group["snippet"].casefold(),
+        "done": lambda group: bool(group["processed"]),
+        "tags": lambda group: ", ".join(
+            sorted(group["tags"], key=str.casefold)
+        ).casefold(),
+    }
+    if sort != "reference":
+        groups.sort(key=reference_key)
+    groups.sort(key=sort_keys[sort], reverse=direction == "desc")
+    return flask.render_template(
+        "browse.html", groups=groups, sort=sort, direction=direction
+    )
 
 
 @bp.route("/tags")

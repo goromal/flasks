@@ -26,6 +26,7 @@
 
   <div class="card">
     <form method="POST" action="{{ url_for('disciple.process_group', group_id=group.id) }}">
+      <input type="hidden" name="next" value="{{ request.full_path }}">
       <div class="field">
         <label for="note">Notes</label>
         <textarea name="note" id="note" rows="4">{{ group.note }}</textarea>
@@ -46,6 +47,10 @@
       </div>
       <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
         <button type="submit" class="btn btn-primary">Mark as Processed</button>
+        <button type="submit" class="btn btn-secondary"
+                formaction="{{ url_for('disciple.save_note', group_id=group.id) }}">
+          Save Note
+        </button>
         <a href="{{ url_for('disciple.study') }}" class="btn btn-secondary">Skip</a>
       </div>
     </form>

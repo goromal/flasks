@@ -61,6 +61,17 @@
     td { padding: 8px 10px; border-bottom: 1px solid #eee; vertical-align: top; }
     .status-done { color: #2e7d32; font-weight: 700; }
     .status-pending { color: #bbb; }
+    .sort-link { color: #555; text-decoration: none; }
+    .sort-link:hover { color: #1a3a5c; text-decoration: underline; }
+    .sort-indicator { color: #1a3a5c; font-size: 0.8em; }
+    .note-form {
+      margin-top: 12px; padding-top: 10px; border-top: 1px solid #eee;
+    }
+    .note-form textarea { margin-bottom: 8px; }
+    .flash-message {
+      background: #e7f4e8; color: #245c2a; border: 1px solid #b8d9bb;
+      border-radius: 5px; padding: 10px 14px; margin-bottom: 16px;
+    }
     details > summary { list-style: none; }
     details > summary::-webkit-details-marker { display: none; }
     .detail-body { margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee; }
@@ -78,6 +89,9 @@
     <span class="nav-progress">{{ processed_groups }}/{{ total_groups }} processed</span>
   </nav>
   <div class="container">
+    {% for message in get_flashed_messages() %}
+      <div class="flash-message" role="status">{{ message }}</div>
+    {% endfor %}
     {% block content %}{% endblock %}
   </div>
 </body>
