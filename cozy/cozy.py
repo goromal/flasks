@@ -451,10 +451,12 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
     @bp.route("/api/image-src", methods=["POST"])
     @flask_login.login_required
     def image_src_set():
-        # Remember the host + directory a remote input image was picked from, so
-        # the picker reopens there next time. Persisted until Clear resets it.
+        # Remember the host + directory a remote input image was picked from,
+        # plus the filter that was active while picking, so the picker reopens
+        # exactly where it left off. Persisted until Clear resets it.
         data = flask.request.get_json(force=True, silent=True) or {}
-        store.set_image_src((data.get("host") or "").strip(), data.get("path") or "")
+        store.set_image_src((data.get("host") or "").strip(), data.get("path") or "",
+                            data.get("filter") or "")
         return flask.jsonify({"ok": True})
 
     def _queue_or_503():

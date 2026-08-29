@@ -152,10 +152,18 @@ class JobStore:
             self._remember_host(state, host)
             self._write_state(state)
 
-    def set_image_src(self, host, path):
+    def set_image_src(self, host, path, filter_text=None):
         with self._lock:
             state = self._read_raw()
-            state["image_src"] = {"host": host, "path": path}
+            # filter_text=None means "leave the remembered filter alone": the
+            # generate path re-records the directory the picker already chose
+            # and has no picker filter of its own to report.
+            prev = state.get("image_src") or {}
+            state["image_src"] = {
+                "host": host,
+                "path": path,
+                "filter": prev.get("filter", "") if filter_text is None else filter_text,
+            }
             self._remember_host(state, host)
             self._write_state(state)
 
