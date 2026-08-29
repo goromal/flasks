@@ -21,6 +21,7 @@ from comfyui_client import ComfyUIClient
 from job_store import JobStore, job_duration
 import crop
 import eta
+import heif
 import image_refs
 import image_size
 import queue_store
@@ -220,7 +221,7 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
             if remote:
                 rhost = (remote.get("host") or "").strip()
                 rpath = remote.get("path") or ""
-                if not rpath.lower().endswith(image_refs.IMAGE_EXTS):
+                if not rpath.lower().endswith(image_refs.PICKABLE_EXTS):
                     return flask.jsonify({"error": "valid input image required"}), 400
                 try:
                     image = _stage_remote_image(rhost, rpath)
@@ -341,14 +342,24 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
     def remote_image():
         host = (flask.request.args.get("host") or "").strip()
         path = flask.request.args.get("path") or ""
-        if not path.lower().endswith(image_refs.IMAGE_EXTS):
+        if not path.lower().endswith(image_refs.PICKABLE_EXTS):
             return flask.jsonify({"error": "not an image"}), 404
         try:
             data = wormhole.read_file(host, path,
                                       max_bytes=_MAX_REMOTE_IMAGE_BYTES)
         except wormhole.WormholeError as e:
             return flask.jsonify({"error": str(e)}), 502
-        mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        if heif.is_heif(path):
+            # No browser but Safari renders HEIF. Serve a JPEG built by the
+            # same conversion staging uses, so the raster the crop rectangle
+            # is drawn on is the one ComfyUI will be given.
+            try:
+                data = heif.to_jpeg_bytes(data)
+            except OSError as e:
+                return flask.jsonify({"error": "cannot decode image: %s" % e}), 502
+            mime = "image/jpeg"
+        else:
+            mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
         return flask.send_file(io.BytesIO(data), mimetype=mime)
 
     @bp.route("/api/browse", methods=["GET"])
@@ -367,7 +378,7 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         if flask.request.args.get("files") == "img":
             resp["files"] = [e["name"] for e in entries
                              if not e["is_dir"]
-                             and e["name"].lower().endswith(image_refs.IMAGE_EXTS)]
+                             and e["name"].lower().endswith(image_refs.PICKABLE_EXTS)]
         return flask.jsonify(resp)
 
     @bp.route("/api/pdb/select", methods=["POST"])
@@ -490,7 +501,7 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
                 # rect rides along raw for the same reason -- normalising it
                 # needs dimensions that do not exist yet -- and _run_job
                 # normalises whatever it finds.
-                if not (remote.get("path") or "").lower().endswith(image_refs.IMAGE_EXTS):
+                if not (remote.get("path") or "").lower().endswith(image_refs.PICKABLE_EXTS):
                     return None, (flask.jsonify({"error": "valid input image required"}), 400)
                 rect = data.get("rect") or None
             else:

@@ -13,7 +13,17 @@ need to resolve a picker value to a real file.
 """
 import os
 
+# What ComfyUI's LoadImage can read. The input/output dropdown and resolve()
+# are limited to these because those files reach LoadImage untouched.
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
+
+# HEIF is what phones shoot, so the remote (wormhole) picker offers it even
+# though ComfyUI cannot read it: images arriving that way are transcoded to
+# PNG as they are staged into the input dir, so LoadImage never sees a HEIF.
+# A HEIF sitting in ComfyUI's own input dir is still not offered -- nothing
+# would transcode it.
+HEIF_EXTS = (".heic", ".heif")
+PICKABLE_EXTS = IMAGE_EXTS + HEIF_EXTS
 
 OUTPUT_SUFFIX = " [output]"
 

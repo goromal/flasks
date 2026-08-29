@@ -79,3 +79,57 @@ def test_clear_results_removes_both_files(tmp_path):
     s.clear_results()
     assert not os.path.exists(s.image_path(job["id"]))
     assert not os.path.exists(s.crop_image_path(job["id"]))
+
+
+def _stage_ctx(tmp_path, monkeypatch, files):
+    """Point the real wormhole module's read_file at a dict of canned files.
+
+    stage_remote_image imports wormhole inside the function, so the patch has
+    to land on the module itself rather than on a caller's reference.
+    """
+    import wormhole
+
+    def read_file(host, path, max_bytes=None):
+        return files[(host, path)]
+
+    monkeypatch.setattr(wormhole, "read_file", read_file)
+    in_dir = tmp_path / "input"
+    in_dir.mkdir()
+    return str(in_dir)
+
+
+def test_stage_remote_image_copies_loadable_formats_verbatim(tmp_path, monkeypatch):
+    in_dir = _stage_ctx(tmp_path, monkeypatch,
+                        {("box", "/pics/cat.png"): b"\x89PNGdata"})
+    rel = queue_store.stage_remote_image(in_dir, "box", "/pics/cat.png")
+    assert rel.endswith("-cat.png")
+    assert open(os.path.join(in_dir, rel), "rb").read() == b"\x89PNGdata"
+
+
+def test_stage_remote_image_transcodes_heif_to_png(tmp_path, monkeypatch, make_heic):
+    # ComfyUI's LoadImage cannot read HEIF, so staging must hand it a PNG --
+    # both the bytes and the name LoadImage is given.
+    import io
+
+    from PIL import Image
+
+
+    in_dir = _stage_ctx(tmp_path, monkeypatch,
+                        {("box", "/pics/cat.heic"): make_heic(48, 24)})
+    rel = queue_store.stage_remote_image(in_dir, "box", "/pics/cat.heic")
+    assert rel.endswith("-cat.png"), rel
+    with open(os.path.join(in_dir, rel), "rb") as f:
+        img = Image.open(io.BytesIO(f.read()))
+    assert img.format == "PNG" and img.size == (48, 24)
+
+
+def test_stage_remote_image_digest_still_keyed_on_remote_path(tmp_path, monkeypatch, make_heic):
+    # Transcoding renames the file; the collision-avoiding digest must still
+    # come from the original remote path so same-basename files stay distinct.
+
+    in_dir = _stage_ctx(tmp_path, monkeypatch,
+                        {("box", "/a/cat.heic"): make_heic(),
+                         ("box", "/b/cat.heic"): make_heic()})
+    a = queue_store.stage_remote_image(in_dir, "box", "/a/cat.heic")
+    b = queue_store.stage_remote_image(in_dir, "box", "/b/cat.heic")
+    assert a != b and a.endswith("-cat.png") and b.endswith("-cat.png")

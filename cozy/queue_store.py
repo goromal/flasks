@@ -28,11 +28,19 @@ def stage_remote_image(input_dir, host, rpath, max_bytes=MAX_REMOTE_IMAGE_BYTES)
     path (cozy.generate) and the queue Scheduler so both stage identically."""
     import hashlib
 
+    import heif
     import wormhole
     data = wormhole.read_file(host, rpath, max_bytes=max_bytes)
     digest = hashlib.sha1(rpath.encode("utf-8")).hexdigest()[:8]
-    rel = os.path.join("wormhole", host or "local",
-                       digest + "-" + os.path.basename(rpath))
+    name = os.path.basename(rpath)
+    if heif.is_heif(name):
+        # ComfyUI's LoadImage cannot read HEIF, nor can crop.stage's Pillow
+        # round-trip further down. Convert once, here, so nothing past this
+        # point has to know HEIF exists. The digest still hashes the original
+        # remote path, so collision behaviour is unchanged.
+        data = heif.to_png_bytes(data)
+        name = os.path.splitext(name)[0] + ".png"
+    rel = os.path.join("wormhole", host or "local", digest + "-" + name)
     dest = os.path.join(input_dir, rel)
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     with open(dest, "wb") as f:

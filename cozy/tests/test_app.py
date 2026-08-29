@@ -604,6 +604,69 @@ def test_remote_image_preview(remote_edit_client):
         "/cozy/api/remote-image?host=box&path=/pics/gone.png").status_code == 502
 
 
+def test_remote_image_preview_transcodes_heif(remote_edit_client, make_heic):
+    # HEIF renders in Safari and nowhere else, so the preview endpoint hands
+    # the browser a JPEG rather than the raw bytes it does for other formats.
+    import io as _io
+
+    from PIL import Image as _Image
+
+
+    _login(remote_edit_client)
+    remote_edit_client._wh.files[("box", "/pics/cat.heic")] = make_heic(48, 24)
+    r = remote_edit_client.get(
+        "/cozy/api/remote-image?host=box&path=/pics/cat.heic")
+    assert r.status_code == 200 and r.mimetype == "image/jpeg"
+    img = _Image.open(_io.BytesIO(r.data))
+    assert img.format == "JPEG" and img.size == (48, 24)
+
+
+def test_remote_image_preview_rejects_undecodable_heif(remote_edit_client):
+    _login(remote_edit_client)
+    remote_edit_client._wh.files[("box", "/pics/bad.heic")] = b"not a heic"
+    r = remote_edit_client.get(
+        "/cozy/api/remote-image?host=box&path=/pics/bad.heic")
+    assert r.status_code == 502
+    assert "cannot decode" in r.get_json()["error"]
+
+
+def test_generate_stages_heif_as_png(remote_edit_client, make_heic):
+    # End to end: a .heic picked over the wormhole reaches ComfyUI as a PNG,
+    # under a .png name, with its pixels measured for the ETA history.
+    import io as _io
+
+    from PIL import Image as _Image
+
+
+    _login(remote_edit_client)
+    remote_edit_client._wh.files[("box", "/pics/cat.heic")] = make_heic(64, 32)
+    r = remote_edit_client.post("/cozy/api/generate", json={
+        "workflow": "imgedit", "prompt": "p", "width": 400, "height": 800,
+        "remote_image": {"host": "box", "path": "/pics/cat.heic"}})
+    assert r.status_code == 200, r.get_json()
+    staged_image = remote_edit_client._store.started[4]
+    assert staged_image.startswith("wormhole/box/")
+    assert staged_image.endswith("-cat.png"), staged_image
+    staged = remote_edit_client._in_dir / staged_image
+    img = _Image.open(_io.BytesIO(staged.read_bytes()))
+    assert img.format == "PNG" and img.size == (64, 32)
+    # image_size reads the staged PNG, so ETA history is keyed correctly --
+    # it has no HEIF parser and would have returned None on the original.
+    assert remote_edit_client._store.started[5] == 64 * 32
+
+
+def test_browse_lists_heif_among_images(remote_edit_client):
+    _login(remote_edit_client)
+    remote_edit_client._wh.dirs[("box", "/pics")] = [
+        {"name": "cat.heic", "is_dir": False},
+        {"name": "dog.png", "is_dir": False},
+        {"name": "notes.txt", "is_dir": False},
+    ]
+    r = remote_edit_client.get("/cozy/api/browse?host=box&path=/pics&files=img")
+    assert r.status_code == 200
+    assert sorted(r.get_json()["files"]) == ["cat.heic", "dog.png"]
+
+
 def test_generate_stages_remote_image(remote_edit_client):
     _login(remote_edit_client)
     remote_edit_client._wh.files[("box", "/pics/cat.png")] = b"\x89PNGdata"
