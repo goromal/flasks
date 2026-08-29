@@ -13,7 +13,7 @@ inclusive; the active partition is (stack[top-1], stack[top]).
 import re
 
 UINT32_MAX = 0xFFFFFFFF
-RANKABLE_EXTS = (".txt", ".png", ".mp4")
+RANKABLE_EXTS = (".txt", ".png", ".heic", ".heif", ".mp4")
 STAMP_RE = re.compile(r"stamped\.(.*?)\.")
 # QuickSortState enum values (mirror sorting/Sorting.h); used by the
 # sort-state surgery functions added alongside the QuickSortState helpers.

@@ -1,3 +1,4 @@
+import io
 import os
 import json
 import sys
@@ -15,7 +16,14 @@ from datetime import timedelta
 from PIL import Image
 import cv2
 from urllib.parse import quote
-from imageops import pad_image, fill_white_rect
+from imageops import (
+    HEIF_EXTS,
+    fill_white_rect,
+    image_format,
+    is_image,
+    pad_image,
+    save_image,
+)
 from fileops import unique_suffixed_name, validate_stamp_name
 
 STAMP_RE = re.compile(r"stamped\.(.*?)\.")
@@ -105,6 +113,8 @@ class StampServer:
                     self.filelist.append((file.strip(), "PNG"))
                 elif file.lower().endswith((".jpg", ".jpeg")):
                     self.filelist.append((file.strip(), "JPG"))
+                elif file.lower().endswith(HEIF_EXTS):
+                    self.filelist.append((file.strip(), "HEIC"))
                 elif file.lower().endswith(".mp4"):
                     self.filelist.append((file.strip(), "MP4"))
             shuffle(self.filelist)
@@ -125,6 +135,8 @@ class StampServer:
                         self.filelist.append((file.strip(), "PNG"))
                     elif file.lower().endswith((".jpg", ".jpeg")):
                         self.filelist.append((file.strip(), "JPG"))
+                    elif file.lower().endswith(HEIF_EXTS):
+                        self.filelist.append((file.strip(), "HEIC"))
                     elif file.lower().endswith(".mp4"):
                         self.filelist.append((file.strip(), "MP4"))
             shuffle(self.filelist)
@@ -183,6 +195,17 @@ class StampServer:
         self.filelist = []
 
 stampserver = StampServer()
+
+def file_url(name, ftype):
+    """URL the page's <img>/<video> should point at for a file in RES_DIR.
+
+    Everything is served straight out of the static folder except HEIC, which
+    only Safari can render -- that goes through /preview for a JPEG re-encode.
+    Either way the filename stays the last path segment, which is what the
+    page's JS reads back to name the file in the edit APIs.
+    """
+    prefix = urlroot + ("preview/" if ftype == "HEIC" else "")
+    return prefix + quote(name)
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -247,7 +270,7 @@ def index():
     if not res:
         return flask.render_template("index.html", urlroot=urlroot, err=True, msg=msg, file="", ftype="", root="", nleft="?", datadir=SHORT_RESDIR, stamps=stamps)
     file, ftype, numleft = stampserver.getfile()
-    file = urlroot + quote(file)
+    file = file_url(file, ftype)
     return flask.render_template("index.html", urlroot=urlroot, err=False, msg="", file=file, ftype=ftype, root="", nleft=str(numleft), datadir=SHORT_RESDIR, stamps=stamps)
 
 @bp.route("/restamp/", methods=["GET","POST"])
@@ -282,7 +305,7 @@ def stamped(stamp=""):
     if not res:
         return flask.render_template("index.html", urlroot=urlroot, err=True, msg=msg, file="", ftype="", root=root, nleft="?", datadir=SHORT_RESDIR, stamps={})
     file, ftype, numleft = stampserver.getfile()
-    file = urlroot + quote(file)
+    file = file_url(file, ftype)
     return flask.render_template("index.html", urlroot=urlroot, err=False, msg="", file=file, ftype=ftype, root=root, nleft=str(numleft), datadir=SHORT_RESDIR, stamps={})
 
 @bp.route("/zzz", methods=["GET","POST"])
@@ -301,6 +324,31 @@ def zzz():
         datadir=SHORT_RESDIR,
         stamps={}
     )
+
+@bp.route("/preview/<path:filename>", methods=["GET"])
+@flask_login.login_required
+def preview(filename):
+    # HEIC/HEIF renders in Safari and nowhere else, so hand the browser a JPEG
+    # re-encode at the *original* pixel dimensions: crop and white-rect
+    # coordinates are measured against the displayed raster and then applied to
+    # the file by Pillow, so the two must line up pixel for pixel. EXIF is
+    # deliberately dropped -- Pillow ignores orientation on load, and an
+    # orientation tag in the preview would rotate the browser's view out of
+    # step with the pixels the server edits.
+    safe = os.path.basename(filename)
+    if safe != filename or not safe.lower().endswith(HEIF_EXTS):
+        flask.abort(404)
+    src = os.path.join(RES_DIR, safe)
+    if not os.path.isfile(src):
+        flask.abort(404)
+    buf = io.BytesIO()
+    try:
+        Image.open(src).convert("RGB").save(buf, format="JPEG", quality=90)
+    except Exception:
+        flask.abort(404)
+    buf.seek(0)
+    # No caching: the edit APIs rewrite the file in place under this same URL.
+    return flask.send_file(buf, mimetype="image/jpeg", max_age=0)
 
 @bp.route("/api/stampables-info", methods=["GET"])
 @flask_login.login_required
@@ -365,14 +413,14 @@ def rotate_image_api():
         # Construct full file path
         file_path = os.path.join(RES_DIR, filename)
 
-        # Validate file exists and is a PNG
+        # Validate file exists and is an image
         if not os.path.exists(file_path):
             return flask.jsonify({'success': False, 'error': f'File not found: {filename}'}), 404
 
-        if not filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-            return flask.jsonify({'success': False, 'error': 'Only image files (PNG, JPEG) can be rotated'}), 400
+        if not is_image(filename):
+            return flask.jsonify({'success': False, 'error': 'Only image files (PNG, JPEG, HEIC) can be rotated'}), 400
 
-        img_format = 'JPEG' if filename.lower().endswith(('.jpg', '.jpeg')) else 'PNG'
+        img_format = image_format(filename)
 
         # Open image with Pillow
         img = Image.open(file_path)
@@ -390,7 +438,7 @@ def rotate_image_api():
 
         # Save to temporary file first, then rename (atomic operation)
         temp_path = file_path + '.tmp'
-        rotated_img.save(temp_path, format=img_format)
+        save_image(rotated_img, temp_path, img_format)
         os.replace(temp_path, file_path)
 
         return flask.jsonify({'success': True})
@@ -415,14 +463,14 @@ def crop_image_api():
         # Construct full file path
         file_path = os.path.join(RES_DIR, filename)
 
-        # Validate file exists and is a PNG
+        # Validate file exists and is an image
         if not os.path.exists(file_path):
             return flask.jsonify({'success': False, 'error': f'File not found: {filename}'}), 404
 
-        if not filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-            return flask.jsonify({'success': False, 'error': 'Only image files (PNG, JPEG) can be cropped'}), 400
+        if not is_image(filename):
+            return flask.jsonify({'success': False, 'error': 'Only image files (PNG, JPEG, HEIC) can be cropped'}), 400
 
-        img_format = 'JPEG' if filename.lower().endswith(('.jpg', '.jpeg')) else 'PNG'
+        img_format = image_format(filename)
 
         # Validate crop parameters
         if width <= 0 or height <= 0:
@@ -441,7 +489,7 @@ def crop_image_api():
 
         # Save to temporary file first, then rename (atomic operation)
         temp_path = file_path + '.tmp'
-        cropped_img.save(temp_path, format=img_format)
+        save_image(cropped_img, temp_path, img_format)
         os.replace(temp_path, file_path)
 
         return flask.jsonify({'success': True})
@@ -470,10 +518,10 @@ def whiteout_image_api():
         if not os.path.exists(file_path):
             return flask.jsonify({'success': False, 'error': f'File not found: {filename}'}), 404
 
-        if not filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-            return flask.jsonify({'success': False, 'error': 'Only image files (PNG, JPEG) can be edited'}), 400
+        if not is_image(filename):
+            return flask.jsonify({'success': False, 'error': 'Only image files (PNG, JPEG, HEIC) can be edited'}), 400
 
-        img_format = 'JPEG' if filename.lower().endswith(('.jpg', '.jpeg')) else 'PNG'
+        img_format = image_format(filename)
 
         # Validate rectangle parameters
         if width <= 0 or height <= 0:
@@ -492,7 +540,7 @@ def whiteout_image_api():
 
         # Save to temporary file first, then rename (atomic operation)
         temp_path = file_path + '.tmp'
-        whited_img.save(temp_path, format=img_format)
+        save_image(whited_img, temp_path, img_format)
         os.replace(temp_path, file_path)
 
         return flask.jsonify({'success': True})
@@ -515,8 +563,8 @@ def pad_image_api():
         if not os.path.exists(file_path):
             return flask.jsonify({'success': False, 'error': f'File not found: {filename}'}), 404
 
-        if not filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-            return flask.jsonify({'success': False, 'error': 'Only image files (PNG, JPEG) can be padded'}), 400
+        if not is_image(filename):
+            return flask.jsonify({'success': False, 'error': 'Only image files (PNG, JPEG, HEIC) can be padded'}), 400
 
         try:
             top = int(data.get('top', 0))
@@ -532,13 +580,13 @@ def pad_image_api():
         if (top + bottom + left + right) == 0:
             return flask.jsonify({'success': False, 'error': 'At least one side must be greater than zero'}), 400
 
-        img_format = 'JPEG' if filename.lower().endswith(('.jpg', '.jpeg')) else 'PNG'
+        img_format = image_format(filename)
 
         img = Image.open(file_path)
         padded = pad_image(img, top, bottom, left, right)
 
         temp_path = file_path + '.tmp'
-        padded.save(temp_path, format=img_format)
+        save_image(padded, temp_path, img_format)
         os.replace(temp_path, file_path)
 
         return flask.jsonify({'success': True})
@@ -559,14 +607,14 @@ def duplicate_image_api():
         # Construct full file path
         file_path = os.path.join(RES_DIR, filename)
 
-        # Validate file exists and is a PNG
+        # Validate file exists and is an image
         if not os.path.exists(file_path):
             return flask.jsonify({'success': False, 'error': f'File not found: {filename}'}), 404
 
-        if not filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-            return flask.jsonify({'success': False, 'error': 'Only image files (PNG, JPEG) can be duplicated'}), 400
+        if not is_image(filename):
+            return flask.jsonify({'success': False, 'error': 'Only image files (PNG, JPEG, HEIC) can be duplicated'}), 400
 
-        img_format = 'JPEG' if filename.lower().endswith(('.jpg', '.jpeg')) else 'PNG'
+        img_format = image_format(filename)
 
         # Parse filename to preserve stamp metadata
         # Format: [stamped.{stamp}.]basename.ext
@@ -602,7 +650,7 @@ def duplicate_image_api():
 
         # Copy the file using Pillow to ensure proper image handling
         img = Image.open(file_path)
-        img.save(new_file_path, format=img_format)
+        save_image(img, new_file_path, img_format)
 
         return flask.jsonify({'success': True, 'new_filename': new_filename})
 

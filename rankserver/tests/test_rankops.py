@@ -13,6 +13,13 @@ def test_scan_stamps_counts_rankable_only():
     assert list(result.keys()) == ["a", "b"]  # sorted by count desc
 
 
+def test_is_rankable_extensions():
+    for name in ("a.txt", "a.png", "a.PNG", "a.heic", "a.HEIC", "a.heif", "a.mp4"):
+        assert rankops.is_rankable(name), name
+    for name in ("a.jpg", "a.webm", "a.log", "heic", "a.heic.log"):
+        assert not rankops.is_rankable(name), name
+
+
 def test_scan_stamps_empty():
     assert rankops.scan_stamps(["plain.png", "x.jpg"]) == {}
 
