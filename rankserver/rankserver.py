@@ -5,7 +5,7 @@ import hashlib
 import argparse
 import subprocess
 import flask
-from PIL import Image
+from PIL import Image, ImageOps
 import pillow_heif
 import flask_login
 import flask_wtf
@@ -223,7 +223,7 @@ class RankServer:
                            "active": raw_ins.get("active")}
         files = [f.strip() for f in os.listdir(RES_DIR) if rankops.is_rankable(f)]
         if len(files) == 0:
-            return (False, "Data directory has no rankable files (.txt|.png|.heic|.mp4)")
+            return (False, "Data directory has no rankable files (.txt|.png|.jpg|.heic|.mp4)")
         self.mapfilename = os.path.join(RES_DIR, MAPNAME)
         self.logfilename = os.path.join(RES_DIR, LOGNAME)
         if not os.path.exists(self.mapfilename) or not os.path.exists(self.logfilename):
@@ -649,8 +649,8 @@ def make_dir():
 @bp.route("/thumb/<path:filename>", methods=["GET"])
 @flask_login.login_required
 def thumb(filename):
-    # Downscaled, disk-cached thumbnail served as PNG. For .png/.heic this is a
-    # Pillow downscale; for .mp4 it is the first video frame extracted via
+    # Downscaled, disk-cached thumbnail served as PNG. For still images this is
+    # a Pillow downscale; for .mp4 it is the first video frame extracted via
     # ffmpeg. Both cache to the same store so the ranked list can show many
     # items (images or video posters) as small lazy <img>s -- without
     # downloading full-resolution files or spinning up a per-item <video>
@@ -659,10 +659,13 @@ def thumb(filename):
     # HEIC works in browsers that cannot decode it natively (everything but
     # Safari) -- the thumbnail *is* the only view of an image here.
     safe = os.path.basename(filename)
-    is_png = safe.lower().endswith(".png")
-    is_heif = safe.lower().endswith((".heic", ".heif"))
-    is_mp4 = safe.lower().endswith(".mp4")
-    if safe != filename or not (is_png or is_heif or is_mp4):
+    lower = safe.lower()
+    native_mime = ("image/png" if lower.endswith(".png")
+                   else "image/jpeg" if lower.endswith((".jpg", ".jpeg"))
+                   else None)
+    is_img = native_mime is not None or lower.endswith((".heic", ".heif"))
+    is_mp4 = lower.endswith(".mp4")
+    if safe != filename or not (is_img or is_mp4):
         flask.abort(404)
     src = os.path.join(RES_DIR, safe)
     if not os.path.isfile(src):
@@ -679,10 +682,16 @@ def thumb(filename):
     cached = os.path.join(THUMB_CACHE, key + ".png")
     if not os.path.exists(cached):
         tmp = cached + ".tmp"
-        if is_png or is_heif:
+        if is_img:
             try:
                 os.makedirs(THUMB_CACHE, exist_ok=True)
                 img = Image.open(src)
+                # Phone photos (JPEG and HEIC alike) carry their rotation in an
+                # EXIF orientation tag that Pillow does not apply on load. The
+                # thumbnail is pure display -- no coordinates are mapped back
+                # onto it -- so bake the rotation in rather than show portrait
+                # shots on their side.
+                img = ImageOps.exif_transpose(img)
                 img.thumbnail((w, 100000000), Image.LANCZOS)
                 if img.mode not in ("RGB", "RGBA", "L", "LA", "P"):
                     img = img.convert("RGB")
@@ -690,11 +699,11 @@ def thumb(filename):
                 os.replace(tmp, cached)
             except Exception:
                 # Fall back to the original on any cache/decode/encode failure --
-                # but only for PNG, which the browser can render as-is. A HEIC
-                # served raw would just be a broken image.
-                if is_heif:
+                # but only for formats the browser renders itself. A HEIC served
+                # raw would just be a broken image, so 404 instead.
+                if native_mime is None:
                     flask.abort(404)
-                return flask.send_file(src, mimetype="image/png", max_age=86400)
+                return flask.send_file(src, mimetype=native_mime, max_age=86400)
         else:
             # Extract a single frame near the start, scaled to width w. One decoded
             # frame, not the whole file. No usable fallback if this fails.
