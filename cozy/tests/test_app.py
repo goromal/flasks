@@ -39,8 +39,8 @@ class FakeStore:
     def set_prompt_db(self, host, path):
         self.prompt_db = (host, path)
 
-    def set_image_src(self, host, path):
-        self.image_src = (host, path)
+    def set_image_src(self, host, path, filter_text=None):
+        self.image_src = (host, path, filter_text)
 
     def start(self, name, path, prompt, w, h, image="", eta_pixels=None,
               source_path=None, rect=None, staged_path=None, basename=None):
@@ -616,7 +616,8 @@ def test_generate_stages_remote_image(remote_edit_client):
     assert started_image.endswith("-cat.png")
     staged = remote_edit_client._in_dir / started_image
     assert staged.read_bytes() == b"\x89PNGdata"
-    assert remote_edit_client._store.image_src == ("box", "/pics")
+    # No filter argument: generate must not disturb what the picker remembered.
+    assert remote_edit_client._store.image_src == ("box", "/pics", None)
 
 
 def test_generate_remote_image_failures(remote_edit_client):
@@ -827,14 +828,43 @@ def test_queue_results_use_stable_image_url(queue_ctx):
     assert 'api/queue/image?id=" + encodeURIComponent(j.id) + "&t="' not in body
 
 
-def test_image_src_remembered_on_selection(client, monkeypatch):
-    # Picking a remote image persists its host + directory so the picker
-    # reopens there next time (until Clear resets it).
+def test_known_hosts_datalist_populated_on_load(client, monkeypatch):
+    # Both browser entry points share one #known-hosts datalist. It used to be
+    # filled only when the prompt library <details> was first opened, so the
+    # "Remote…" image picker offered no host history unless that panel happened
+    # to have been opened first in the same page load.
     monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
     _login(client)
-    r = client.post("/cozy/api/image-src", json={"host": "box", "path": "/pics/cats"})
+    body = client.get("/cozy/").get_data(as_text=True)
+    init = body[body.index("function init()"):]
+    assert "renderKnownHosts();" in init[:init.index("})();")]
+    toggle = body[body.index('pdbDetails.addEventListener("toggle"'):]
+    assert "renderKnownHosts" not in toggle[:toggle.index("});")]
+
+
+def test_image_picker_reopens_with_remembered_filter(client, monkeypatch):
+    # The picker restores host, directory and filter together.
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    _login(client)
+    body = client.get("/cozy/").get_data(as_text=True)
+    assert "(IMAGE_SRC && IMAGE_SRC.filter) || \"\"" in body
+    assert "modalFilter.value = startFilter || \"\";" in body
+    assert "browser.onPick(modalHost.value.trim(), res, modalFilter.value);" in body
+
+
+def test_image_src_remembered_on_selection(client, monkeypatch):
+    # Picking a remote image persists its host + directory + active filter so
+    # the picker reopens exactly there next time (until Clear resets it).
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    _login(client)
+    r = client.post("/cozy/api/image-src",
+                    json={"host": "box", "path": "/pics/cats", "filter": "tabby"})
     assert r.status_code == 200
-    assert client._store.image_src == ("box", "/pics/cats")
+    assert client._store.image_src == ("box", "/pics/cats", "tabby")
+    # Omitting the filter records an empty one rather than failing.
+    r = client.post("/cozy/api/image-src", json={"host": "box", "path": "/pics"})
+    assert r.status_code == 200
+    assert client._store.image_src == ("box", "/pics", "")
 
 
 def _edit_client(tmp_path, monkeypatch, size=(200, 160)):

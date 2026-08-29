@@ -201,11 +201,34 @@ def test_prompt_db_and_known_hosts_persist(tmp_path):
 
     store.set_image_src("", "/local/imgs")  # local host: not remembered
     st = store.read_state()
-    assert st["image_src"] == {"host": "", "path": "/local/imgs"}
+    assert st["image_src"] == {"host": "", "path": "/local/imgs", "filter": ""}
     assert st["known_hosts"] == ["box"]
 
     store.set_image_src("otherbox", "/imgs")
     assert store.read_state()["known_hosts"] == ["box", "otherbox"]
+
+
+def test_image_src_filter_persists_and_survives_generate(tmp_path):
+    store = job_store.JobStore(str(tmp_path), FakeClient([]))
+    store.set_image_src("box", "/pics", "cat")
+    st = job_store.JobStore(str(tmp_path), FakeClient([])).read_state()
+    assert st["image_src"] == {"host": "box", "path": "/pics", "filter": "cat"}
+
+    # The generate path re-records the source directory without a filter of its
+    # own; that must not wipe what the picker remembered.
+    store.set_image_src("box", "/pics")
+    assert store.read_state()["image_src"]["filter"] == "cat"
+
+    # An explicit empty filter does clear it.
+    store.set_image_src("box", "/pics", "")
+    assert store.read_state()["image_src"]["filter"] == ""
+
+
+def test_clear_forgets_image_src_filter(tmp_path):
+    store = job_store.JobStore(str(tmp_path), FakeClient([]))
+    store.set_image_src("box", "/pics", "cat")
+    store.clear()
+    assert store.read_state()["image_src"] is None
 
 
 def test_clear_resets_remote_selections_keeps_hosts(tmp_path):
