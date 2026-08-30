@@ -17,6 +17,7 @@ containing newlines are not supported (the listing is parsed line-wise).
 
 import argparse
 import os
+import pwd
 import shlex
 import socket
 import subprocess
@@ -109,8 +110,79 @@ def resolve_host(host):
     return ip or host
 
 
+# ssh reports every authentication failure identically, so a key it silently
+# skipped is indistinguishable from one the server rejected. Observed: a
+# private key at mode 644 makes ssh ignore the identity without printing
+# anything about it, and the caller sees only "Permission denied (publickey,
+# password,keyboard-interactive)."
+_PUBKEY_DENIED = "Permission denied (publickey"
+
+# OpenSSH's default identity file names, in the order it tries them.
+_IDENTITY_FILES = ("id_rsa", "id_ecdsa", "id_ecdsa_sk", "id_ed25519",
+                   "id_ed25519_sk", "id_dsa")
+
+
+def _ssh_home():
+    """The home directory ssh expands "~" to when looking for identity files.
+
+    OpenSSH takes it from the passwd entry, not from $HOME -- verified with
+    `ssh -v` under a redirected HOME, which still read the account's real
+    ~/.ssh. Diagnostics have to look where ssh looked, or a service started
+    with a different HOME gets told about the wrong files.
+    """
+    try:
+        return pwd.getpwuid(os.getuid()).pw_dir
+    except (KeyError, OSError):
+        return os.path.expanduser("~")
+
+
+def identity_problems():
+    """Local reasons ssh would have declined to offer a key, as plain strings.
+
+    Only ever describes this side of the connection: a key that looks fine
+    here can still be missing from the server's authorized_keys, which is
+    unknowable from a failed login. Only the default identity file names are
+    checked -- an IdentityFile set in ssh_config is not parsed -- so an empty
+    result means "nothing obviously wrong locally", never "the key is good".
+    """
+    problems = []
+    ssh_dir = os.path.join(_ssh_home(), ".ssh")
+    found = False
+    for name in _IDENTITY_FILES:
+        path = os.path.join(ssh_dir, name)
+        try:
+            mode = os.stat(path).st_mode & 0o777
+        except OSError:
+            continue
+        found = True
+        if mode & 0o077:
+            problems.append(
+                "%s is mode %03o -- ssh ignores a private key that group or "
+                "others can read; chmod 600 it" % (path, mode))
+        elif not os.access(path, os.R_OK):
+            problems.append("%s is not readable by this user" % path)
+    if not found and not os.environ.get("SSH_AUTH_SOCK"):
+        problems.append("no private key in %s and no ssh agent "
+                        "(SSH_AUTH_SOCK is unset)" % ssh_dir)
+    return problems
+
+
+def _explain_auth_failure(message):
+    """Append local key diagnostics to a publickey rejection, if any apply."""
+    if _PUBKEY_DENIED not in message:
+        return message
+    problems = identity_problems()
+    if not problems:
+        return message
+    return message + " [wormhole: " + "; ".join(problems) + "]"
+
+
 def _ssh(host, remote_cmd, input_bytes=None):
-    return _run(["ssh", *_SSH_OPTS, "--", resolve_host(host), remote_cmd], input_bytes)
+    try:
+        return _run(["ssh", *_SSH_OPTS, "--", resolve_host(host), remote_cmd],
+                    input_bytes)
+    except WormholeError as e:
+        raise WormholeError(_explain_auth_failure(str(e))) from None
 
 
 def home(host):

@@ -281,3 +281,106 @@ class SelfHostIsLocal(unittest.TestCase):
                 self.assertEqual(
                     wormhole.read_file("localhost", os.path.join(self.d, "a.txt")),
                     b"LOCAL")
+
+
+DENIED = ("andrew@192.168.50.56: Permission denied "
+          "(publickey,password,keyboard-interactive).")
+
+
+class AuthFailureDiagnostics(unittest.TestCase):
+    """ssh prints nothing about a key it skipped for being world-readable, so
+    the bare 'Permission denied' has to be annotated or the cause is invisible."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.home = self._tmp.name
+        self.addCleanup(self._tmp.cleanup)
+        self.ssh_dir = os.path.join(self.home, ".ssh")
+        os.mkdir(self.ssh_dir)
+        # Patch _ssh_home, not $HOME: ssh expands "~" from the passwd entry,
+        # so the code under test deliberately ignores the environment.
+        self._home = mock.patch.object(wormhole, "_ssh_home",
+                                       return_value=self.home)
+        self._home.start()
+        self.addCleanup(self._home.stop)
+        self._env = mock.patch.dict(os.environ, {}, clear=False)
+        self._env.start()
+        self.addCleanup(self._env.stop)
+        os.environ.pop("SSH_AUTH_SOCK", None)
+
+    def _key(self, name="id_rsa", mode=0o600):
+        path = os.path.join(self.ssh_dir, name)
+        with open(path, "w") as f:
+            f.write("KEY")
+        os.chmod(path, mode)
+        return path
+
+    def _read_file_error(self):
+        with mock.patch.object(wormhole, "_run",
+                               side_effect=WormholeError(DENIED)):
+            with self.assertRaises(WormholeError) as cm:
+                wormhole.read_file("box", "/x/a.txt")
+        return str(cm.exception)
+
+    def test_world_readable_key_is_named_with_its_mode(self):
+        path = self._key(mode=0o644)
+        msg = self._read_file_error()
+        self.assertIn(DENIED, msg)          # original text preserved
+        self.assertIn(path, msg)
+        self.assertIn("644", msg)
+        self.assertIn("chmod 600", msg)
+
+    def test_group_readable_key_also_flagged(self):
+        self._key(mode=0o640)
+        self.assertIn("640", self._read_file_error())
+
+    def test_correct_permissions_add_no_noise(self):
+        self._key(mode=0o600)
+        self.assertEqual(self._read_file_error(), DENIED)
+
+    def test_no_key_and_no_agent_is_reported(self):
+        msg = self._read_file_error()
+        self.assertIn("no private key", msg)
+        self.assertIn("SSH_AUTH_SOCK", msg)
+
+    def test_no_key_but_agent_present_adds_nothing(self):
+        with mock.patch.dict(os.environ, {"SSH_AUTH_SOCK": "/run/agent"}):
+            self.assertEqual(self._read_file_error(), DENIED)
+
+    def test_every_default_identity_name_is_checked(self):
+        self._key(name="id_ed25519", mode=0o644)
+        self.assertIn("id_ed25519", self._read_file_error())
+
+    def test_other_ssh_errors_are_untouched(self):
+        self._key(mode=0o644)   # would be flagged if the check ran
+        for other in ("Connection reset by 192.168.50.56 port 22",
+                      "ssh: Could not resolve hostname box",
+                      "Host key verification failed."):
+            with mock.patch.object(wormhole, "_run",
+                                   side_effect=WormholeError(other)):
+                with self.assertRaises(WormholeError) as cm:
+                    wormhole.read_file("box", "/x/a.txt")
+            self.assertEqual(str(cm.exception), other)
+
+    def test_local_operations_never_consult_ssh_state(self):
+        self._key(mode=0o644)
+        with open(os.path.join(self.home, "a.txt"), "wb") as f:
+            f.write(b"LOCAL")
+        self.assertEqual(wormhole.read_file("", os.path.join(self.home, "a.txt")),
+                         b"LOCAL")
+
+
+class SshHomeResolution(unittest.TestCase):
+    def test_passwd_entry_wins_over_env_home(self):
+        # A service started with HOME set elsewhere must still be told about
+        # the ~/.ssh that ssh itself reads.
+        import pwd as _pwd
+        entry = _pwd.getpwuid(os.getuid())
+        with mock.patch.dict(os.environ, {"HOME": "/nowhere/at/all"}):
+            self.assertEqual(wormhole._ssh_home(), entry.pw_dir)
+
+    def test_falls_back_to_env_when_passwd_lookup_fails(self):
+        with mock.patch.object(wormhole.pwd, "getpwuid",
+                               side_effect=KeyError("no such uid")):
+            with mock.patch.dict(os.environ, {"HOME": "/fallback"}):
+                self.assertEqual(wormhole._ssh_home(), "/fallback")
