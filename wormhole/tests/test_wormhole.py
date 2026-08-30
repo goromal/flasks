@@ -200,3 +200,84 @@ class Cli(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SelfHostIsLocal(unittest.TestCase):
+    """Naming this machine must read local disk, not ssh out and back in.
+
+    The round trip is pointless (same filesystem) and it fails with
+    "Permission denied (publickey,...)" whenever the machine's own key is not
+    usable from the calling process -- which is how a file on local disk ends
+    up reported as an auth error.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.d = self._tmp.name
+        self.addCleanup(self._tmp.cleanup)
+        with open(os.path.join(self.d, "a.txt"), "wb") as f:
+            f.write(b"LOCAL")
+
+    def test_own_hostname_and_mdns_name_read_locally(self):
+        with mock.patch.object(wormhole.socket, "gethostname",
+                               return_value="jetson-orin-agx"):
+            with mock.patch.object(wormhole, "_run") as run:
+                for host in ("jetson-orin-agx", "jetson-orin-agx.local",
+                             "JETSON-ORIN-AGX.local", " jetson-orin-agx.local ",
+                             "localhost", "127.0.0.1", "::1", "", None):
+                    data = wormhole.read_file(host, os.path.join(self.d, "a.txt"))
+                    self.assertEqual(data, b"LOCAL", host)
+                run.assert_not_called()
+
+    def test_own_lan_ip_from_secrets_reads_locally(self):
+        # ~/secrets/<name>/i.txt maps our mDNS name to our LAN IP, so a UI that
+        # stored the IP must be recognised as us too.
+        secrets = tempfile.TemporaryDirectory()
+        self.addCleanup(secrets.cleanup)
+        os.mkdir(os.path.join(secrets.name, "jetson-orin-agx"))
+        with open(os.path.join(secrets.name, "jetson-orin-agx", "i.txt"), "w") as f:
+            f.write("192.168.50.56\n")
+        with mock.patch.object(wormhole, "_SECRETS_DIR", secrets.name), \
+             mock.patch.object(wormhole.socket, "gethostname",
+                               return_value="jetson-orin-agx"), \
+             mock.patch.object(wormhole, "_run") as run:
+            data = wormhole.read_file("192.168.50.56",
+                                      os.path.join(self.d, "a.txt"))
+            self.assertEqual(data, b"LOCAL")
+            run.assert_not_called()
+
+    def test_other_hosts_still_go_over_ssh(self):
+        with mock.patch.object(wormhole.socket, "gethostname",
+                               return_value="jetson-orin-agx"):
+            with mock.patch.object(wormhole, "_run",
+                                   return_value=b"REMOTE") as run:
+                self.assertEqual(wormhole.read_file("ats.local", "/x/a.txt"),
+                                 b"REMOTE")
+                run.assert_called_once()
+                # A name that merely contains ours is not ours.
+                run.reset_mock()
+                wormhole.read_file("jetson-orin-agx-backup.local", "/x/a.txt")
+                run.assert_called_once()
+
+    def test_write_and_delete_also_stay_local(self):
+        target = os.path.join(self.d, "sub", "new.txt")
+        with mock.patch.object(wormhole.socket, "gethostname",
+                               return_value="jetson-orin-agx"):
+            with mock.patch.object(wormhole, "_run") as run:
+                wormhole.write_file("jetson-orin-agx.local", target, b"W")
+                self.assertEqual(open(target, "rb").read(), b"W")
+                wormhole.delete_file("jetson-orin-agx.local", target)
+                self.assertFalse(os.path.exists(target))
+                run.assert_not_called()
+
+    def test_unresolvable_hostname_does_not_break_dispatch(self):
+        with mock.patch.object(wormhole.socket, "gethostname",
+                               side_effect=OSError("no hostname")):
+            with mock.patch.object(wormhole, "_run",
+                                   return_value=b"REMOTE") as run:
+                self.assertEqual(wormhole.read_file("ats.local", "/x/a.txt"),
+                                 b"REMOTE")
+                run.assert_called_once()
+                self.assertEqual(
+                    wormhole.read_file("localhost", os.path.join(self.d, "a.txt")),
+                    b"LOCAL")

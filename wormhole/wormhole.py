@@ -1,9 +1,10 @@
 """Local-or-remote file operations over ssh.
 
-A wormhole address is (host, path). A host of None/"" means the local
-filesystem; anything else is an ssh destination reached as the invoking
-user. BatchMode is forced, so keys must already be in place and nothing
-ever prompts; a host that needs interaction fails fast instead.
+A wormhole address is (host, path). A host of None/"" -- or one naming this
+machine -- means the local filesystem; anything else is an ssh destination
+reached as the invoking user. BatchMode is forced, so keys must already be in
+place and nothing ever prompts; a host that needs interaction fails fast
+instead.
 
 An "<name>.local" mDNS host is transparently redirected to the direct LAN
 IP in ~/secrets/<name>/i.txt when that file exists (mDNS doesn't propagate
@@ -17,6 +18,7 @@ containing newlines are not supported (the listing is parsed line-wise).
 import argparse
 import os
 import shlex
+import socket
 import subprocess
 import sys
 
@@ -33,8 +35,42 @@ class WormholeError(Exception):
     """A local or remote file operation failed; str() is user-presentable."""
 
 
+_LOOPBACK_NAMES = frozenset(("localhost", "127.0.0.1", "::1"))
+
+
+def self_names():
+    """Lower-cased host spellings that mean "this machine".
+
+    Naming your own box in a wormhole address is a natural thing to do -- a UI
+    offers it in host history like any other host -- but routing that through
+    ssh sends the request out and straight back in. Same filesystem, same
+    files, except it is slower and it only works while the machine's own key
+    is usable from the calling process. When it is not, the caller gets
+    "Permission denied (publickey,...)" for a file sitting on local disk.
+
+    Covers the bare hostname, its mDNS ".local" form, the LAN IP that form
+    resolves to via ~/secrets (see _resolve_host), and the loopback spellings.
+    Deliberately no reverse DNS or interface enumeration: this has to stay
+    cheap, and anything it misses merely falls back to the old ssh path.
+    """
+    names = set(_LOOPBACK_NAMES)
+    try:
+        hostname = socket.gethostname()
+    except OSError:
+        return names
+    short = hostname.split(".")[0].lower()
+    if not short:
+        return names
+    names.update((hostname.lower(), short, short + _MDNS_SUFFIX))
+    names.add(resolve_host(short + _MDNS_SUFFIX).lower())
+    return names
+
+
 def _local(host):
-    return host is None or host == ""
+    if host is None:
+        return True
+    host = host.strip().lower()
+    return host == "" or host in self_names()
 
 
 def _run(argv, input_bytes=None):
