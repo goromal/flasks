@@ -130,8 +130,13 @@
                 <label for="image-select">Input image</label>
                 <select id="image-select"></select>
                 <div class="prompt-actions">
+                    <button type="button" class="secondary" id="upload-image-btn">Upload&hellip;</button>
                     <button type="button" class="secondary" id="remote-image-btn">Remote&hellip;</button>
                 </div>
+                <!-- Hidden, driven by the button above: the native control is
+                     hard to style and the button can show upload progress.
+                     accept="image/*" makes a phone offer its photo library. -->
+                <input type="file" id="upload-image-input" accept="image/*" style="display:none;" />
                 <div class="pdb-path" id="remote-image-label" style="display:none;"></div>
                 <div id="preview-wrap" style="margin-top:12px; display:none;">
                     <div id="preview-stage">
@@ -865,6 +870,46 @@
         // Wrapped, not passed directly: the listener's Event argument would be
         // read as `selected`.
         pdbFilter.addEventListener("input", () => renderPdbPrompts());
+
+        // --- Upload an image into the input dir ---
+        const uploadInput = document.getElementById("upload-image-input");
+        const uploadBtn = document.getElementById("upload-image-btn");
+
+        uploadBtn.addEventListener("click", () => uploadInput.click());
+
+        uploadInput.addEventListener("change", async () => {
+            const file = uploadInput.files && uploadInput.files[0];
+            // Reset immediately so picking the same file again still fires
+            // 'change' -- otherwise a failed upload could not be retried.
+            uploadInput.value = "";
+            if (!file) return;
+            const body = new FormData();
+            body.append("file", file);
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = "Uploading…";
+            let d;
+            try {
+                const r = await fetch(root + "api/upload-image",
+                                      { method: "POST", body: body });
+                d = await r.json();
+                if (!r.ok) { showError(d.error || "upload failed"); return; }
+            } catch (e) {
+                showError("upload failed: " + e.message);
+                return;
+            } finally {
+                uploadBtn.disabled = false;
+                uploadBtn.textContent = "Upload…";
+            }
+            showError("");
+            // Select what was just uploaded. The server reports the name it
+            // actually used, which collision suffixing and HEIF-to-PNG
+            // conversion can both make differ from the file that was picked.
+            await loadInputImages();
+            clearRemoteImage();
+            imageSelect.value = d.value;
+            clearCropRect();
+            updatePreview();
+        });
 
         // --- Remote input image (edit workflows) ---
         let remoteImage = null; // {host, path} or null

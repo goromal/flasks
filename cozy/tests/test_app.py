@@ -1096,3 +1096,92 @@ def test_queue_image_rejects_traversal(tmp_path, monkeypatch):
     open(os.path.join(str(tmp_path), "output.png"), "wb").write(b"SECRET")
     assert c.get("/cozy/api/queue/image?id=../output").status_code == 404
     assert c.get("/cozy/api/queue/image?id=notahexid").status_code == 404
+
+
+def _upload(c, filename, data):
+    import io as _io
+    return c.post("/cozy/api/upload-image",
+                  data={"file": (_io.BytesIO(data), filename)},
+                  content_type="multipart/form-data")
+
+
+def test_upload_puts_the_image_in_the_input_dir(remote_edit_client):
+    _login(remote_edit_client)
+    r = _upload(remote_edit_client, "cat.png", b"\x89PNGdata")
+    assert r.status_code == 200, r.get_json()
+    rel = r.get_json()["value"]
+    assert rel == "cat.png"
+    assert (remote_edit_client._in_dir / rel).read_bytes() == b"\x89PNGdata"
+    # ...and it is immediately selectable in the picker.
+    images = remote_edit_client.get("/cozy/api/input-images").get_json()["images"]
+    assert {"value": "cat.png", "label": "cat.png", "source": "input"} in images
+
+
+def test_upload_sanitises_the_filename(remote_edit_client):
+    _login(remote_edit_client)
+    rel = _upload(remote_edit_client, "../../etc/pass wd.png",
+                  b"\x89PNGdata").get_json()["value"]
+    assert rel == "pass_wd.png"
+    assert (remote_edit_client._in_dir / rel).exists()
+    # Nothing was created outside the input dir.
+    assert not (remote_edit_client._in_dir.parent / "pass_wd.png").exists()
+
+
+def test_upload_never_overwrites_an_existing_image(remote_edit_client):
+    _login(remote_edit_client)
+    first = _upload(remote_edit_client, "cat.png", b"FIRST").get_json()["value"]
+    second = _upload(remote_edit_client, "cat.png", b"SECOND").get_json()["value"]
+    assert first == "cat.png" and second == "cat_2.png"
+    assert (remote_edit_client._in_dir / first).read_bytes() == b"FIRST"
+    assert (remote_edit_client._in_dir / second).read_bytes() == b"SECOND"
+
+
+def test_upload_converts_heif_to_png(remote_edit_client, make_heic):
+    # ComfyUI cannot read HEIF, so an uploaded .heic must land as a PNG under
+    # a .png name -- otherwise it would be offered in the picker and then fail
+    # at generate time.
+    import io as _io
+
+    from PIL import Image as _Image
+
+    _login(remote_edit_client)
+    rel = _upload(remote_edit_client, "IMG_1.heic",
+                  make_heic(40, 20)).get_json()["value"]
+    assert rel == "IMG_1.png", rel
+    img = _Image.open(_io.BytesIO((remote_edit_client._in_dir / rel).read_bytes()))
+    assert img.format == "PNG" and img.size == (40, 20)
+
+
+def test_upload_rejects_bad_input(remote_edit_client, make_heic):
+    _login(remote_edit_client)
+    assert _upload(remote_edit_client, "notes.txt", b"x").status_code == 400
+    assert _upload(remote_edit_client, "clip.mp4", b"x").status_code == 400
+    assert _upload(remote_edit_client, "cat.png", b"").status_code == 400
+    assert remote_edit_client.post("/cozy/api/upload-image",
+                                   data={}, content_type="multipart/form-data"
+                                   ).status_code == 400
+    # A .heic that is not really a HEIF fails with a decode message, not a 500.
+    r = _upload(remote_edit_client, "bad.heic", b"not a heic")
+    assert r.status_code == 400 and "cannot decode" in r.get_json()["error"]
+
+
+def test_upload_requires_login(remote_edit_client):
+    r = _upload(remote_edit_client, "cat.png", b"\x89PNGdata")
+    assert r.status_code == 401
+
+
+def test_oversize_upload_gets_json_not_an_html_error_page(remote_edit_client):
+    # The uploader parses JSON; Flask's stock 413 body is HTML.
+    _login(remote_edit_client)
+    big = b"x" * (cozy._MAX_UPLOAD_BYTES + 1024)
+    r = _upload(remote_edit_client, "big.png", big)
+    assert r.status_code == 413
+    assert "larger than" in r.get_json()["error"]
+
+
+def test_index_has_upload_ui(edit_client):
+    _login(edit_client)
+    page = edit_client.get("/cozy/").data
+    assert b'id="upload-image-btn"' in page
+    assert b'id="upload-image-input"' in page
+    assert b'accept="image/*"' in page
