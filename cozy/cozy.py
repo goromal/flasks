@@ -21,6 +21,7 @@ from comfyui_client import ComfyUIClient
 from job_store import JobStore, job_duration
 import crop
 import eta
+import heif
 import image_refs
 import image_size
 import queue_store
@@ -95,6 +96,31 @@ def _clean_basename(data):
 # staging are synchronous transfers, fine on a LAN but not unbounded.
 _MAX_REMOTE_IMAGE_BYTES = 50 * 1024 * 1024
 
+# Browser uploads are buffered in memory before they are written, so this is
+# also the cap Flask enforces on any request body (see MAX_CONTENT_LENGTH).
+_MAX_UPLOAD_BYTES = _MAX_REMOTE_IMAGE_BYTES
+
+
+def _write_new_file(directory, name, data):
+    """Write data into directory as name, or name_2/name_3... if taken.
+
+    O_EXCL rather than an exists() check: two uploads of the same filename
+    racing must not land on the same file, and an upload must never silently
+    replace an image already sitting in the input dir. Returns the name used.
+    """
+    stem, ext = os.path.splitext(name)
+    for n in range(1, 1001):
+        candidate = name if n == 1 else "%s_%d%s" % (stem, n, ext)
+        try:
+            fd = os.open(os.path.join(directory, candidate),
+                         os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        except FileExistsError:
+            continue
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        return candidate
+    raise OSError("too many files named like %s" % name)
+
 
 class LoginForm(flask_wtf.FlaskForm):
     username = StringField("Username")
@@ -132,6 +158,15 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
     app.secret_key = secret_key or os.urandom(24)
     app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(minutes=20)
     app.config.setdefault("WTF_CSRF_ENABLED", True)
+    # Uploads are read into memory before being written, so cap the body size.
+    app.config["MAX_CONTENT_LENGTH"] = _MAX_UPLOAD_BYTES
+
+    @app.errorhandler(413)
+    def too_large(e):
+        # Flask's own 413 page is HTML; the uploader parses JSON.
+        return flask.jsonify({
+            "error": "file is larger than %d MB" % (_MAX_UPLOAD_BYTES // (1024 * 1024))
+        }), 413
 
     login_manager = flask_login.LoginManager()
     user = User()
@@ -220,7 +255,7 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
             if remote:
                 rhost = (remote.get("host") or "").strip()
                 rpath = remote.get("path") or ""
-                if not rpath.lower().endswith(image_refs.IMAGE_EXTS):
+                if not rpath.lower().endswith(image_refs.PICKABLE_EXTS):
                     return flask.jsonify({"error": "valid input image required"}), 400
                 try:
                     image = _stage_remote_image(rhost, rpath)
@@ -308,6 +343,40 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
             return flask.jsonify({"error": "no image"}), 404
         return flask.send_file(path, mimetype="image/png")
 
+    @bp.route("/api/upload-image", methods=["POST"])
+    @flask_login.login_required
+    def upload_image():
+        """Save an uploaded image into the input dir; return its picker value.
+
+        Returning the value lets the caller select exactly what it uploaded
+        rather than guessing at the name, which collision suffixing and HEIF
+        transcoding can both change.
+        """
+        f = flask.request.files.get("file")
+        if f is None or not (f.filename or "").strip():
+            return flask.jsonify({"error": "no file supplied"}), 400
+        name = image_refs.safe_upload_name(f.filename)
+        if name is None:
+            return flask.jsonify({"error": "unsupported image type"}), 400
+        data = f.read()
+        if not data:
+            return flask.jsonify({"error": "file is empty"}), 400
+        if heif.is_heif(name):
+            # Same conversion the wormhole staging path does, for the same
+            # reason: ComfyUI's LoadImage cannot read HEIF, so nothing that
+            # lands in the input dir is allowed to be one.
+            try:
+                data = heif.to_png_bytes(data)
+            except OSError as e:
+                return flask.jsonify({"error": "cannot decode image: %s" % e}), 400
+            name = os.path.splitext(name)[0] + ".png"
+        try:
+            os.makedirs(input_dir, exist_ok=True)
+            rel = _write_new_file(input_dir, name, data)
+        except OSError as e:
+            return flask.jsonify({"error": str(e)}), 500
+        return flask.jsonify({"value": rel, "label": rel})
+
     @bp.route("/api/input-images", methods=["GET"])
     @flask_login.login_required
     def input_images():
@@ -341,14 +410,24 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
     def remote_image():
         host = (flask.request.args.get("host") or "").strip()
         path = flask.request.args.get("path") or ""
-        if not path.lower().endswith(image_refs.IMAGE_EXTS):
+        if not path.lower().endswith(image_refs.PICKABLE_EXTS):
             return flask.jsonify({"error": "not an image"}), 404
         try:
             data = wormhole.read_file(host, path,
                                       max_bytes=_MAX_REMOTE_IMAGE_BYTES)
         except wormhole.WormholeError as e:
             return flask.jsonify({"error": str(e)}), 502
-        mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        if heif.is_heif(path):
+            # No browser but Safari renders HEIF. Serve a JPEG built by the
+            # same conversion staging uses, so the raster the crop rectangle
+            # is drawn on is the one ComfyUI will be given.
+            try:
+                data = heif.to_jpeg_bytes(data)
+            except OSError as e:
+                return flask.jsonify({"error": "cannot decode image: %s" % e}), 502
+            mime = "image/jpeg"
+        else:
+            mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
         return flask.send_file(io.BytesIO(data), mimetype=mime)
 
     @bp.route("/api/browse", methods=["GET"])
@@ -367,7 +446,7 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         if flask.request.args.get("files") == "img":
             resp["files"] = [e["name"] for e in entries
                              if not e["is_dir"]
-                             and e["name"].lower().endswith(image_refs.IMAGE_EXTS)]
+                             and e["name"].lower().endswith(image_refs.PICKABLE_EXTS)]
         return flask.jsonify(resp)
 
     @bp.route("/api/pdb/select", methods=["POST"])
@@ -451,10 +530,12 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
     @bp.route("/api/image-src", methods=["POST"])
     @flask_login.login_required
     def image_src_set():
-        # Remember the host + directory a remote input image was picked from, so
-        # the picker reopens there next time. Persisted until Clear resets it.
+        # Remember the host + directory a remote input image was picked from,
+        # plus the filter that was active while picking, so the picker reopens
+        # exactly where it left off. Persisted until Clear resets it.
         data = flask.request.get_json(force=True, silent=True) or {}
-        store.set_image_src((data.get("host") or "").strip(), data.get("path") or "")
+        store.set_image_src((data.get("host") or "").strip(), data.get("path") or "",
+                            data.get("filter") or "")
         return flask.jsonify({"ok": True})
 
     def _queue_or_503():
@@ -488,7 +569,7 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
                 # rect rides along raw for the same reason -- normalising it
                 # needs dimensions that do not exist yet -- and _run_job
                 # normalises whatever it finds.
-                if not (remote.get("path") or "").lower().endswith(image_refs.IMAGE_EXTS):
+                if not (remote.get("path") or "").lower().endswith(image_refs.PICKABLE_EXTS):
                     return None, (flask.jsonify({"error": "valid input image required"}), 400)
                 rect = data.get("rect") or None
             else:

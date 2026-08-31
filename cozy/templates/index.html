@@ -130,8 +130,13 @@
                 <label for="image-select">Input image</label>
                 <select id="image-select"></select>
                 <div class="prompt-actions">
+                    <button type="button" class="secondary" id="upload-image-btn">Upload&hellip;</button>
                     <button type="button" class="secondary" id="remote-image-btn">Remote&hellip;</button>
                 </div>
+                <!-- Hidden, driven by the button above: the native control is
+                     hard to style and the button can show upload progress.
+                     accept="image/*" makes a phone offer its photo library. -->
+                <input type="file" id="upload-image-input" accept="image/*" style="display:none;" />
                 <div class="pdb-path" id="remote-image-label" style="display:none;"></div>
                 <div id="preview-wrap" style="margin-top:12px; display:none;">
                     <div id="preview-stage">
@@ -682,11 +687,13 @@
         }
 
         // mode "dir": pick a directory. mode "img": pick an image file (with preview).
-        function openBrowser(host, mode, startPath, onPick) {
+        // onPick receives (host, result, filter) -- the filter so a caller can
+        // reopen the browser with it still applied.
+        function openBrowser(host, mode, startPath, onPick, startFilter) {
             browser = { mode: mode, onPick: onPick, path: "", entries: [], picked: null };
             modalHost.value = host || "";
             modalSelectBtn.textContent = mode === "img" ? "Use this image" : "Select this directory";
-            modalFilter.value = "";
+            modalFilter.value = startFilter || "";
             modalBackdrop.style.display = "flex";
             browseTo(startPath || "");
         }
@@ -750,7 +757,7 @@
             const res = browser.mode === "img" ? browser.picked : browser.path;
             modalBackdrop.style.display = "none";
             rememberHost(modalHost.value.trim());
-            browser.onPick(modalHost.value.trim(), res);
+            browser.onPick(modalHost.value.trim(), res, modalFilter.value);
         });
 
         // --- Prompt library ---
@@ -801,7 +808,7 @@
         }
 
         pdbDetails.addEventListener("toggle", () => {
-            if (pdbDetails.open && !pdbLoaded) { pdbLoaded = true; renderKnownHosts(); refreshPdb(); }
+            if (pdbDetails.open && !pdbLoaded) { pdbLoaded = true; refreshPdb(); }
         });
 
         document.getElementById("pdb-browse").addEventListener("click", () => {
@@ -864,6 +871,46 @@
         // read as `selected`.
         pdbFilter.addEventListener("input", () => renderPdbPrompts());
 
+        // --- Upload an image into the input dir ---
+        const uploadInput = document.getElementById("upload-image-input");
+        const uploadBtn = document.getElementById("upload-image-btn");
+
+        uploadBtn.addEventListener("click", () => uploadInput.click());
+
+        uploadInput.addEventListener("change", async () => {
+            const file = uploadInput.files && uploadInput.files[0];
+            // Reset immediately so picking the same file again still fires
+            // 'change' -- otherwise a failed upload could not be retried.
+            uploadInput.value = "";
+            if (!file) return;
+            const body = new FormData();
+            body.append("file", file);
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = "Uploading…";
+            let d;
+            try {
+                const r = await fetch(root + "api/upload-image",
+                                      { method: "POST", body: body });
+                d = await r.json();
+                if (!r.ok) { showError(d.error || "upload failed"); return; }
+            } catch (e) {
+                showError("upload failed: " + e.message);
+                return;
+            } finally {
+                uploadBtn.disabled = false;
+                uploadBtn.textContent = "Upload…";
+            }
+            showError("");
+            // Select what was just uploaded. The server reports the name it
+            // actually used, which collision suffixing and HEIF-to-PNG
+            // conversion can both make differ from the file that was picked.
+            await loadInputImages();
+            clearRemoteImage();
+            imageSelect.value = d.value;
+            clearCropRect();
+            updatePreview();
+        });
+
         // --- Remote input image (edit workflows) ---
         let remoteImage = null; // {host, path} or null
         const remoteImageBtn = document.getElementById("remote-image-btn");
@@ -887,21 +934,23 @@
             previewWrap.style.display = "block";
         }
 
-        // Remember the host + source directory a remote image was picked from,
-        // so the picker reopens there next time. Persisted server-side (survives
-        // reload) until the Clear button resets it.
-        function rememberImageSrc(host, path) {
-            IMAGE_SRC = { host: host, path: parentPath(path) };
+        // Remember the host, source directory and filter a remote image was
+        // picked with, so the picker reopens exactly there next time. Persisted
+        // server-side (survives reload) until the Clear button resets it.
+        function rememberImageSrc(host, path, filterText) {
+            IMAGE_SRC = { host: host, path: parentPath(path), filter: filterText || "" };
             fetch(root + "api/image-src", {
                 method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ host: host, path: IMAGE_SRC.path }),
+                body: JSON.stringify({ host: host, path: IMAGE_SRC.path,
+                                       filter: IMAGE_SRC.filter }),
             });
         }
 
         remoteImageBtn.addEventListener("click", () => {
             openBrowser((IMAGE_SRC && IMAGE_SRC.host) || "", "img",
                         (IMAGE_SRC && IMAGE_SRC.path) || "",
-                        (h, p) => { rememberImageSrc(h, p); setRemoteImage(h, p); });
+                        (h, p, f) => { rememberImageSrc(h, p, f); setRemoteImage(h, p); },
+                        (IMAGE_SRC && IMAGE_SRC.filter) || "");
         });
 
         // Restore state on load: show image if present, resume polling if running.
@@ -913,6 +962,12 @@
             const hasCrop = {{ state.crop_output | tojson }};
             if (hasImage) { showImage(hasCrop); showDuration(st.duration); }
             else if (hasCrop) { showCropOnly(); }
+            // Fill the shared host suggestions up front. Both browser entry
+            // points -- "Remote…" for an input image and the prompt library's
+            // "Browse…" -- read the same datalist, so populating it lazily when
+            // the library panel first opened left the image picker with no
+            // history unless that panel happened to have been opened first.
+            renderKnownHosts();
             applyKind();
         })();
 

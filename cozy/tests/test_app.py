@@ -39,8 +39,8 @@ class FakeStore:
     def set_prompt_db(self, host, path):
         self.prompt_db = (host, path)
 
-    def set_image_src(self, host, path):
-        self.image_src = (host, path)
+    def set_image_src(self, host, path, filter_text=None):
+        self.image_src = (host, path, filter_text)
 
     def start(self, name, path, prompt, w, h, image="", eta_pixels=None,
               source_path=None, rect=None, staged_path=None, basename=None):
@@ -604,6 +604,69 @@ def test_remote_image_preview(remote_edit_client):
         "/cozy/api/remote-image?host=box&path=/pics/gone.png").status_code == 502
 
 
+def test_remote_image_preview_transcodes_heif(remote_edit_client, make_heic):
+    # HEIF renders in Safari and nowhere else, so the preview endpoint hands
+    # the browser a JPEG rather than the raw bytes it does for other formats.
+    import io as _io
+
+    from PIL import Image as _Image
+
+
+    _login(remote_edit_client)
+    remote_edit_client._wh.files[("box", "/pics/cat.heic")] = make_heic(48, 24)
+    r = remote_edit_client.get(
+        "/cozy/api/remote-image?host=box&path=/pics/cat.heic")
+    assert r.status_code == 200 and r.mimetype == "image/jpeg"
+    img = _Image.open(_io.BytesIO(r.data))
+    assert img.format == "JPEG" and img.size == (48, 24)
+
+
+def test_remote_image_preview_rejects_undecodable_heif(remote_edit_client):
+    _login(remote_edit_client)
+    remote_edit_client._wh.files[("box", "/pics/bad.heic")] = b"not a heic"
+    r = remote_edit_client.get(
+        "/cozy/api/remote-image?host=box&path=/pics/bad.heic")
+    assert r.status_code == 502
+    assert "cannot decode" in r.get_json()["error"]
+
+
+def test_generate_stages_heif_as_png(remote_edit_client, make_heic):
+    # End to end: a .heic picked over the wormhole reaches ComfyUI as a PNG,
+    # under a .png name, with its pixels measured for the ETA history.
+    import io as _io
+
+    from PIL import Image as _Image
+
+
+    _login(remote_edit_client)
+    remote_edit_client._wh.files[("box", "/pics/cat.heic")] = make_heic(64, 32)
+    r = remote_edit_client.post("/cozy/api/generate", json={
+        "workflow": "imgedit", "prompt": "p", "width": 400, "height": 800,
+        "remote_image": {"host": "box", "path": "/pics/cat.heic"}})
+    assert r.status_code == 200, r.get_json()
+    staged_image = remote_edit_client._store.started[4]
+    assert staged_image.startswith("wormhole/box/")
+    assert staged_image.endswith("-cat.png"), staged_image
+    staged = remote_edit_client._in_dir / staged_image
+    img = _Image.open(_io.BytesIO(staged.read_bytes()))
+    assert img.format == "PNG" and img.size == (64, 32)
+    # image_size reads the staged PNG, so ETA history is keyed correctly --
+    # it has no HEIF parser and would have returned None on the original.
+    assert remote_edit_client._store.started[5] == 64 * 32
+
+
+def test_browse_lists_heif_among_images(remote_edit_client):
+    _login(remote_edit_client)
+    remote_edit_client._wh.dirs[("box", "/pics")] = [
+        {"name": "cat.heic", "is_dir": False},
+        {"name": "dog.png", "is_dir": False},
+        {"name": "notes.txt", "is_dir": False},
+    ]
+    r = remote_edit_client.get("/cozy/api/browse?host=box&path=/pics&files=img")
+    assert r.status_code == 200
+    assert sorted(r.get_json()["files"]) == ["cat.heic", "dog.png"]
+
+
 def test_generate_stages_remote_image(remote_edit_client):
     _login(remote_edit_client)
     remote_edit_client._wh.files[("box", "/pics/cat.png")] = b"\x89PNGdata"
@@ -616,7 +679,8 @@ def test_generate_stages_remote_image(remote_edit_client):
     assert started_image.endswith("-cat.png")
     staged = remote_edit_client._in_dir / started_image
     assert staged.read_bytes() == b"\x89PNGdata"
-    assert remote_edit_client._store.image_src == ("box", "/pics")
+    # No filter argument: generate must not disturb what the picker remembered.
+    assert remote_edit_client._store.image_src == ("box", "/pics", None)
 
 
 def test_generate_remote_image_failures(remote_edit_client):
@@ -827,14 +891,43 @@ def test_queue_results_use_stable_image_url(queue_ctx):
     assert 'api/queue/image?id=" + encodeURIComponent(j.id) + "&t="' not in body
 
 
-def test_image_src_remembered_on_selection(client, monkeypatch):
-    # Picking a remote image persists its host + directory so the picker
-    # reopens there next time (until Clear resets it).
+def test_known_hosts_datalist_populated_on_load(client, monkeypatch):
+    # Both browser entry points share one #known-hosts datalist. It used to be
+    # filled only when the prompt library <details> was first opened, so the
+    # "Remote…" image picker offered no host history unless that panel happened
+    # to have been opened first in the same page load.
     monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
     _login(client)
-    r = client.post("/cozy/api/image-src", json={"host": "box", "path": "/pics/cats"})
+    body = client.get("/cozy/").get_data(as_text=True)
+    init = body[body.index("function init()"):]
+    assert "renderKnownHosts();" in init[:init.index("})();")]
+    toggle = body[body.index('pdbDetails.addEventListener("toggle"'):]
+    assert "renderKnownHosts" not in toggle[:toggle.index("});")]
+
+
+def test_image_picker_reopens_with_remembered_filter(client, monkeypatch):
+    # The picker restores host, directory and filter together.
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    _login(client)
+    body = client.get("/cozy/").get_data(as_text=True)
+    assert "(IMAGE_SRC && IMAGE_SRC.filter) || \"\"" in body
+    assert "modalFilter.value = startFilter || \"\";" in body
+    assert "browser.onPick(modalHost.value.trim(), res, modalFilter.value);" in body
+
+
+def test_image_src_remembered_on_selection(client, monkeypatch):
+    # Picking a remote image persists its host + directory + active filter so
+    # the picker reopens exactly there next time (until Clear resets it).
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    _login(client)
+    r = client.post("/cozy/api/image-src",
+                    json={"host": "box", "path": "/pics/cats", "filter": "tabby"})
     assert r.status_code == 200
-    assert client._store.image_src == ("box", "/pics/cats")
+    assert client._store.image_src == ("box", "/pics/cats", "tabby")
+    # Omitting the filter records an empty one rather than failing.
+    r = client.post("/cozy/api/image-src", json={"host": "box", "path": "/pics"})
+    assert r.status_code == 200
+    assert client._store.image_src == ("box", "/pics", "")
 
 
 def _edit_client(tmp_path, monkeypatch, size=(200, 160)):
@@ -1003,3 +1096,92 @@ def test_queue_image_rejects_traversal(tmp_path, monkeypatch):
     open(os.path.join(str(tmp_path), "output.png"), "wb").write(b"SECRET")
     assert c.get("/cozy/api/queue/image?id=../output").status_code == 404
     assert c.get("/cozy/api/queue/image?id=notahexid").status_code == 404
+
+
+def _upload(c, filename, data):
+    import io as _io
+    return c.post("/cozy/api/upload-image",
+                  data={"file": (_io.BytesIO(data), filename)},
+                  content_type="multipart/form-data")
+
+
+def test_upload_puts_the_image_in_the_input_dir(remote_edit_client):
+    _login(remote_edit_client)
+    r = _upload(remote_edit_client, "cat.png", b"\x89PNGdata")
+    assert r.status_code == 200, r.get_json()
+    rel = r.get_json()["value"]
+    assert rel == "cat.png"
+    assert (remote_edit_client._in_dir / rel).read_bytes() == b"\x89PNGdata"
+    # ...and it is immediately selectable in the picker.
+    images = remote_edit_client.get("/cozy/api/input-images").get_json()["images"]
+    assert {"value": "cat.png", "label": "cat.png", "source": "input"} in images
+
+
+def test_upload_sanitises_the_filename(remote_edit_client):
+    _login(remote_edit_client)
+    rel = _upload(remote_edit_client, "../../etc/pass wd.png",
+                  b"\x89PNGdata").get_json()["value"]
+    assert rel == "pass_wd.png"
+    assert (remote_edit_client._in_dir / rel).exists()
+    # Nothing was created outside the input dir.
+    assert not (remote_edit_client._in_dir.parent / "pass_wd.png").exists()
+
+
+def test_upload_never_overwrites_an_existing_image(remote_edit_client):
+    _login(remote_edit_client)
+    first = _upload(remote_edit_client, "cat.png", b"FIRST").get_json()["value"]
+    second = _upload(remote_edit_client, "cat.png", b"SECOND").get_json()["value"]
+    assert first == "cat.png" and second == "cat_2.png"
+    assert (remote_edit_client._in_dir / first).read_bytes() == b"FIRST"
+    assert (remote_edit_client._in_dir / second).read_bytes() == b"SECOND"
+
+
+def test_upload_converts_heif_to_png(remote_edit_client, make_heic):
+    # ComfyUI cannot read HEIF, so an uploaded .heic must land as a PNG under
+    # a .png name -- otherwise it would be offered in the picker and then fail
+    # at generate time.
+    import io as _io
+
+    from PIL import Image as _Image
+
+    _login(remote_edit_client)
+    rel = _upload(remote_edit_client, "IMG_1.heic",
+                  make_heic(40, 20)).get_json()["value"]
+    assert rel == "IMG_1.png", rel
+    img = _Image.open(_io.BytesIO((remote_edit_client._in_dir / rel).read_bytes()))
+    assert img.format == "PNG" and img.size == (40, 20)
+
+
+def test_upload_rejects_bad_input(remote_edit_client, make_heic):
+    _login(remote_edit_client)
+    assert _upload(remote_edit_client, "notes.txt", b"x").status_code == 400
+    assert _upload(remote_edit_client, "clip.mp4", b"x").status_code == 400
+    assert _upload(remote_edit_client, "cat.png", b"").status_code == 400
+    assert remote_edit_client.post("/cozy/api/upload-image",
+                                   data={}, content_type="multipart/form-data"
+                                   ).status_code == 400
+    # A .heic that is not really a HEIF fails with a decode message, not a 500.
+    r = _upload(remote_edit_client, "bad.heic", b"not a heic")
+    assert r.status_code == 400 and "cannot decode" in r.get_json()["error"]
+
+
+def test_upload_requires_login(remote_edit_client):
+    r = _upload(remote_edit_client, "cat.png", b"\x89PNGdata")
+    assert r.status_code == 401
+
+
+def test_oversize_upload_gets_json_not_an_html_error_page(remote_edit_client):
+    # The uploader parses JSON; Flask's stock 413 body is HTML.
+    _login(remote_edit_client)
+    big = b"x" * (cozy._MAX_UPLOAD_BYTES + 1024)
+    r = _upload(remote_edit_client, "big.png", big)
+    assert r.status_code == 413
+    assert "larger than" in r.get_json()["error"]
+
+
+def test_index_has_upload_ui(edit_client):
+    _login(edit_client)
+    page = edit_client.get("/cozy/").data
+    assert b'id="upload-image-btn"' in page
+    assert b'id="upload-image-input"' in page
+    assert b'accept="image/*"' in page

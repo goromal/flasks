@@ -5,7 +5,8 @@ import hashlib
 import argparse
 import subprocess
 import flask
-from PIL import Image
+from PIL import Image, ImageOps
+import pillow_heif
 import flask_login
 import flask_wtf
 from wtforms import StringField, PasswordField, SubmitField
@@ -20,6 +21,10 @@ from pysorting import (
     restfulQuickSort,
 )
 import rankops
+
+# HEIC/HEIF is not a built-in Pillow format; registering the plugin lets the
+# thumbnailer open .heic the same way it opens .png.
+pillow_heif.register_heif_opener()
 
 UINT32_MAX = 0xffffffff
 LOGNAME = "sort_state.log"
@@ -82,7 +87,7 @@ DEFAULT_TARGET = os.path.realpath(RES_DIR)
 # Cache thumbnails inside the rankables directory itself. RES_DIR is the symlink
 # path, so this always resolves into whatever directory is currently linked —
 # each rankable directory keeps its own persistent cache, and re-pointing the
-# symlink moves the cache with it. Hidden + a directory, so load()'s .txt/.png
+# symlink moves the cache with it. Hidden + a directory, so load()'s rankable
 # scan of RES_DIR never picks it up.
 THUMB_CACHE = os.path.join(RES_DIR, ".rankthumbs")
 
@@ -218,7 +223,7 @@ class RankServer:
                            "active": raw_ins.get("active")}
         files = [f.strip() for f in os.listdir(RES_DIR) if rankops.is_rankable(f)]
         if len(files) == 0:
-            return (False, "Data directory has no rankable files (.txt|.png|.mp4)")
+            return (False, "Data directory has no rankable files (.txt|.png|.jpg|.heic|.mp4)")
         self.mapfilename = os.path.join(RES_DIR, MAPNAME)
         self.logfilename = os.path.join(RES_DIR, LOGNAME)
         if not os.path.exists(self.mapfilename) or not os.path.exists(self.logfilename):
@@ -644,17 +649,23 @@ def make_dir():
 @bp.route("/thumb/<path:filename>", methods=["GET"])
 @flask_login.login_required
 def thumb(filename):
-    # Downscaled, disk-cached thumbnail served as PNG. For .png this is a Pillow
-    # downscale; for .mp4 it is the first video frame extracted via ffmpeg. Both
-    # cache to the same store so the ranked list can show many items (images or
-    # video posters) as small lazy <img>s -- without downloading full-resolution
-    # files or spinning up a per-item <video> decoder (which mobile browsers cap
-    # in number). Cache key includes mtime and size so edits invalidate stale
-    # thumbnails.
+    # Downscaled, disk-cached thumbnail served as PNG. For still images this is
+    # a Pillow downscale; for .mp4 it is the first video frame extracted via
+    # ffmpeg. Both cache to the same store so the ranked list can show many
+    # items (images or video posters) as small lazy <img>s -- without
+    # downloading full-resolution files or spinning up a per-item <video>
+    # decoder (which mobile browsers cap in number). Cache key includes mtime
+    # and size so edits invalidate stale thumbnails. Serving PNG also means
+    # HEIC works in browsers that cannot decode it natively (everything but
+    # Safari) -- the thumbnail *is* the only view of an image here.
     safe = os.path.basename(filename)
-    is_png = safe.lower().endswith(".png")
-    is_mp4 = safe.lower().endswith(".mp4")
-    if safe != filename or not (is_png or is_mp4):
+    lower = safe.lower()
+    native_mime = ("image/png" if lower.endswith(".png")
+                   else "image/jpeg" if lower.endswith((".jpg", ".jpeg"))
+                   else None)
+    is_img = native_mime is not None or lower.endswith((".heic", ".heif"))
+    is_mp4 = lower.endswith(".mp4")
+    if safe != filename or not (is_img or is_mp4):
         flask.abort(404)
     src = os.path.join(RES_DIR, safe)
     if not os.path.isfile(src):
@@ -671,16 +682,28 @@ def thumb(filename):
     cached = os.path.join(THUMB_CACHE, key + ".png")
     if not os.path.exists(cached):
         tmp = cached + ".tmp"
-        if is_png:
+        if is_img:
             try:
                 os.makedirs(THUMB_CACHE, exist_ok=True)
                 img = Image.open(src)
+                # Phone photos (JPEG and HEIC alike) carry their rotation in an
+                # EXIF orientation tag that Pillow does not apply on load. The
+                # thumbnail is pure display -- no coordinates are mapped back
+                # onto it -- so bake the rotation in rather than show portrait
+                # shots on their side.
+                img = ImageOps.exif_transpose(img)
                 img.thumbnail((w, 100000000), Image.LANCZOS)
+                if img.mode not in ("RGB", "RGBA", "L", "LA", "P"):
+                    img = img.convert("RGB")
                 img.save(tmp, format="PNG")
                 os.replace(tmp, cached)
             except Exception:
-                # Fall back to the original on any cache/decode/encode failure.
-                return flask.send_file(src, mimetype="image/png", max_age=86400)
+                # Fall back to the original on any cache/decode/encode failure --
+                # but only for formats the browser renders itself. A HEIC served
+                # raw would just be a broken image, so 404 instead.
+                if native_mime is None:
+                    flask.abort(404)
+                return flask.send_file(src, mimetype=native_mime, max_age=86400)
         else:
             # Extract a single frame near the start, scaled to width w. One decoded
             # frame, not the whole file. No usable fallback if this fails.

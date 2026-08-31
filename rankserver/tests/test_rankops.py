@@ -5,12 +5,20 @@ import rankops
 
 def test_scan_stamps_counts_rankable_only():
     listing = [
-        "stamped.a.x.png", "stamped.a.y.mp4", "stamped.a.z.jpg",
+        "stamped.a.x.png", "stamped.a.y.mp4", "stamped.a.z.gif",
         "stamped.b.q.txt", "plain.png", "file_map.log",
     ]
     result = rankops.scan_stamps(listing)
     assert result == {"a": 2, "b": 1}
     assert list(result.keys()) == ["a", "b"]  # sorted by count desc
+
+
+def test_is_rankable_extensions():
+    for name in ("a.txt", "a.png", "a.PNG", "a.jpg", "a.JPEG", "a.heic",
+                 "a.HEIC", "a.heif", "a.mp4"):
+        assert rankops.is_rankable(name), name
+    for name in ("a.webm", "a.gif", "a.log", "heic", "a.heic.log"):
+        assert not rankops.is_rankable(name), name
 
 
 def test_scan_stamps_empty():
@@ -33,7 +41,7 @@ def test_get_watches_normalizes_legacy_and_list():
 
 def test_plan_sync_links_missing_matches():
     to_link, to_prune, warns = rankops.plan_sync(
-        ["stamped.t.a.png", "stamped.t.b.mp4", "stamped.u.c.png", "stamped.t.d.jpg"],
+        ["stamped.t.a.png", "stamped.t.b.mp4", "stamped.u.c.png", "stamped.t.d.gif"],
         {}, "t")
     assert to_link == ["stamped.t.a.png", "stamped.t.b.mp4"]
     assert to_prune == []

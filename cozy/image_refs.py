@@ -12,10 +12,43 @@ Lives apart from cozy.py because both the Flask app and the queue Scheduler
 need to resolve a picker value to a real file.
 """
 import os
+import re
 
+# What ComfyUI's LoadImage can read. The input/output dropdown and resolve()
+# are limited to these because those files reach LoadImage untouched.
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
 
+# HEIF is what phones shoot, so the remote (wormhole) picker offers it even
+# though ComfyUI cannot read it: images arriving that way are transcoded to
+# PNG as they are staged into the input dir, so LoadImage never sees a HEIF.
+# A HEIF sitting in ComfyUI's own input dir is still not offered -- nothing
+# would transcode it.
+HEIF_EXTS = (".heic", ".heif")
+PICKABLE_EXTS = IMAGE_EXTS + HEIF_EXTS
+
 OUTPUT_SUFFIX = " [output]"
+
+_UNSAFE_NAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def safe_upload_name(filename):
+    """Reduce a browser-supplied filename to a bare safe basename, or None.
+
+    None means the extension is not one the picker accepts. The result is both
+    a path under the input dir and part of the LoadImage string ComfyUI gets,
+    so it has to be a single plain segment: browsers send directory components
+    on some platforms, and spaces, quotes or unicode on others. The extension
+    is preserved as-is (lower-cased) because callers key transcoding off it.
+    """
+    base = os.path.basename(filename.replace("\\", "/")).strip()
+    stem, ext = os.path.splitext(base)
+    ext = ext.lower()
+    if ext not in PICKABLE_EXTS:
+        return None
+    # Trim leading dots so an upload can never become a hidden file, and cap
+    # the length well short of any filesystem limit once suffixes are added.
+    stem = _UNSAFE_NAME_CHARS.sub("_", stem).strip("._-")[:100]
+    return (stem or "upload") + ext
 
 
 def list_dir_images(directory):
