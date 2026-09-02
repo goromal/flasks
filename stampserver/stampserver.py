@@ -18,6 +18,7 @@ import cv2
 from urllib.parse import quote
 from imageops import (
     HEIF_EXTS,
+    IMAGE_EXTS,
     fill_white_rect,
     image_format,
     is_image,
@@ -27,6 +28,11 @@ from imageops import (
 from fileops import unique_suffixed_name, validate_stamp_name
 
 STAMP_RE = re.compile(r"stamped\.(.*?)\.")
+
+# Extensions the server can surface and stamp: every editable image plus MP4
+# video. Uploads are restricted to these so a freshly added file actually shows
+# up in the stamping rotation.
+UPLOAD_EXTS = IMAGE_EXTS + (".mp4",)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--port", action="store", type=int, default=5000, help="Port to run the server on")
@@ -398,6 +404,59 @@ def set_stampables_dir():
         return flask.jsonify({'success': True, 'real_path': new_target})
     except Exception as e:
         return flask.jsonify({'success': False, 'error': str(e)}), 500
+
+@bp.route("/api/upload", methods=["POST"])
+@flask_login.login_required
+def upload_media():
+    """Save uploaded image/video files into the stampables directory.
+
+    Accepts a multipart form with one or more files under the "files" field.
+    Each file must have a recognised extension (see UPLOAD_EXTS) and a plain
+    basename -- anything with a path separator or a reserved 'stamped.' prefix
+    is rejected so an upload can never escape RES_DIR or masquerade as an
+    already-stamped file. Colliding names get a numeric suffix rather than
+    overwriting an existing file.
+    """
+    files = flask.request.files.getlist("files")
+    if not files:
+        return flask.jsonify({'success': False, 'error': 'No files provided'}), 400
+    if not os.path.isdir(RES_DIR):
+        return flask.jsonify({'success': False, 'error': f'Data directory non-existent or broken: {RES_DIR}'}), 500
+
+    uploaded = []
+    errors = []
+    for f in files:
+        raw = f.filename or ""
+        safe = os.path.basename(raw)
+        if not safe or safe in (".", "..") or safe != raw:
+            errors.append(f"{raw or '(unnamed)'}: invalid filename")
+            continue
+        if not safe.lower().endswith(UPLOAD_EXTS):
+            errors.append(f"{safe}: unsupported file type")
+            continue
+        if safe.startswith("stamped."):
+            errors.append(f"{safe}: filename may not start with 'stamped.'")
+            continue
+
+        base, ext = os.path.splitext(safe)
+        dest_name = safe
+        counter = 1
+        while os.path.exists(os.path.join(RES_DIR, dest_name)):
+            counter += 1
+            dest_name = f"{base}_{counter}{ext}"
+        try:
+            f.save(os.path.join(RES_DIR, dest_name))
+            uploaded.append(dest_name)
+        except Exception as e:
+            errors.append(f"{safe}: {e}")
+
+    if not uploaded:
+        return flask.jsonify({'success': False, 'error': '; '.join(errors) or 'No files uploaded', 'errors': errors}), 400
+
+    # Drop the cached, shuffled file list so the newly uploaded files are picked
+    # up the next time the page loads.
+    stampserver.reset()
+    return flask.jsonify({'success': True, 'uploaded': uploaded, 'errors': errors})
 
 @bp.route("/api/rotate-image", methods=["POST"])
 @flask_login.login_required
