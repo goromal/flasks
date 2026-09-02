@@ -728,10 +728,10 @@
         {% if root == "" %}
         <div class="upload-section">
             <h2>Upload Media</h2>
-            <p class="upload-hint">Add images (PNG, JPG, HEIC) or videos (MP4) to the stampables directory.</p>
+            <p class="upload-hint">Add images (PNG, JPG, HEIC) or videos (MP4, MOV) to the stampables directory.</p>
             <div class="upload-controls">
                 <input type="file" id="uploadInput" class="upload-input"
-                       accept=".png,.jpg,.jpeg,.heic,.heif,.mp4,image/*,video/mp4" multiple>
+                       accept=".png,.jpg,.jpeg,.heic,.heif,.mp4,.mov,image/*,video/mp4,video/quicktime" multiple>
                 <button class="btn" id="uploadBtn" onclick="uploadFiles()">Upload</button>
             </div>
         </div>
@@ -875,7 +875,7 @@
 
         <div class="image-container">
             <video id="currentVideo" controls loop preload="metadata" playsinline>
-                <source src="{{ file }}#t=0.001" type="video/mp4" />
+                <source src="{{ file }}#t=0.001" type="{% if file.lower().endswith('.mov') %}video/quicktime{% else %}video/mp4{% endif %}" />
             </video>
             <canvas id="videoCropCanvas"></canvas>
         </div>

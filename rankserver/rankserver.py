@@ -223,7 +223,7 @@ class RankServer:
                            "active": raw_ins.get("active")}
         files = [f.strip() for f in os.listdir(RES_DIR) if rankops.is_rankable(f)]
         if len(files) == 0:
-            return (False, "Data directory has no rankable files (.txt|.png|.jpg|.heic|.mp4)")
+            return (False, "Data directory has no rankable files (.txt|.png|.jpg|.heic|.mp4|.mov)")
         self.mapfilename = os.path.join(RES_DIR, MAPNAME)
         self.logfilename = os.path.join(RES_DIR, LOGNAME)
         if not os.path.exists(self.mapfilename) or not os.path.exists(self.logfilename):
@@ -664,8 +664,8 @@ def thumb(filename):
                    else "image/jpeg" if lower.endswith((".jpg", ".jpeg"))
                    else None)
     is_img = native_mime is not None or lower.endswith((".heic", ".heif"))
-    is_mp4 = lower.endswith(".mp4")
-    if safe != filename or not (is_img or is_mp4):
+    is_video = lower.endswith((".mp4", ".mov"))
+    if safe != filename or not (is_img or is_video):
         flask.abort(404)
     src = os.path.join(RES_DIR, safe)
     if not os.path.isfile(src):
@@ -730,12 +730,14 @@ def media(filename):
     # honours Range requests (conditional=True) so the browser can seek/stream
     # without downloading the whole file up front.
     safe = os.path.basename(filename)
-    if safe != filename or not safe.lower().endswith(".mp4"):
+    lower = safe.lower()
+    if safe != filename or not lower.endswith((".mp4", ".mov")):
         flask.abort(404)
     src = os.path.join(RES_DIR, safe)
     if not os.path.isfile(src):
         flask.abort(404)
-    return flask.send_file(src, mimetype="video/mp4", max_age=86400, conditional=True)
+    mime = "video/quicktime" if lower.endswith(".mov") else "video/mp4"
+    return flask.send_file(src, mimetype=mime, max_age=86400, conditional=True)
 
 @app.before_request
 def refresh_session():
