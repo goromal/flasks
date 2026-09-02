@@ -15,7 +15,7 @@ def test_scan_stamps_counts_rankable_only():
 
 def test_is_rankable_extensions():
     for name in ("a.txt", "a.png", "a.PNG", "a.jpg", "a.JPEG", "a.heic",
-                 "a.HEIC", "a.heif", "a.mp4"):
+                 "a.HEIC", "a.heif", "a.mp4", "a.mov", "a.MOV"):
         assert rankops.is_rankable(name), name
     for name in ("a.webm", "a.gif", "a.log", "heic", "a.heic.log"):
         assert not rankops.is_rankable(name), name

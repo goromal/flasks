@@ -519,6 +519,47 @@
             box-shadow: 0 2px 8px rgba(0,0,0,0.1);
         }
 
+        .upload-section {
+            margin: 20px 0;
+            padding: 20px;
+            background-color: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .upload-section h2 {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #495057;
+            margin: 0 0 6px 0;
+        }
+
+        .upload-hint {
+            font-size: 0.9rem;
+            color: #6c757d;
+            margin: 0 0 14px 0;
+        }
+
+        .upload-controls {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            flex-wrap: wrap;
+        }
+
+        .upload-input {
+            flex: 1;
+            min-width: 200px;
+            font-size: 0.95rem;
+            color: #212529;
+        }
+
+        .upload-controls .btn { flex: none; }
+
+        @media (max-width: 767px) {
+            .upload-controls .btn { width: 100%; }
+        }
+
         .stampables-config h2 {
             font-size: 1.2rem;
             font-weight: 600;
@@ -684,6 +725,18 @@
         {% endif %}
         {% endwith %}
 
+        {% if root == "" %}
+        <div class="upload-section">
+            <h2>Upload Media</h2>
+            <p class="upload-hint">Add images (PNG, JPG, HEIC) or videos (MP4, MOV) to the stampables directory.</p>
+            <div class="upload-controls">
+                <input type="file" id="uploadInput" class="upload-input"
+                       accept=".png,.jpg,.jpeg,.heic,.heif,.mp4,.mov,image/*,video/mp4,video/quicktime" multiple>
+                <button class="btn" id="uploadBtn" onclick="uploadFiles()">Upload</button>
+            </div>
+        </div>
+        {% endif %}
+
         {% if root.startswith('restamp/') %}
         <div class="autoplay-bar">
             <label>
@@ -822,7 +875,7 @@
 
         <div class="image-container">
             <video id="currentVideo" controls loop preload="metadata" playsinline>
-                <source src="{{ file }}#t=0.001" type="video/mp4" />
+                <source src="{{ file }}#t=0.001" type="{% if file.lower().endswith('.mov') %}video/quicktime{% else %}video/mp4{% endif %}" />
             </video>
             <canvas id="videoCropCanvas"></canvas>
         </div>
@@ -950,6 +1003,36 @@
 
         function hideLoading() {
             document.getElementById('loadingOverlay').classList.remove('active');
+        }
+
+        // ===== UPLOAD =====
+
+        function uploadFiles() {
+            const input = document.getElementById('uploadInput');
+            if (!input || !input.files || input.files.length === 0) {
+                showStatus('Error: No files selected', true);
+                return;
+            }
+            const fd = new FormData();
+            for (const file of input.files) fd.append('files', file);
+            showLoading('Uploading ' + input.files.length + ' file(s)...');
+            // Let the browser set the multipart Content-Type (with boundary).
+            fetch('{{ urlroot }}api/upload', { method: 'POST', body: fd })
+            .then(r => r.json())
+            .then(data => {
+                hideLoading();
+                if (data.success) {
+                    let msg = 'Uploaded ' + data.uploaded.length + ' file(s)';
+                    if (data.errors && data.errors.length) {
+                        msg += ' (' + data.errors.length + ' skipped: ' + data.errors.join('; ') + ')';
+                    }
+                    showStatus(msg);
+                    setTimeout(() => location.reload(), 1500);
+                } else {
+                    showStatus('Error: ' + (data.error || 'Upload failed'), true);
+                }
+            })
+            .catch(err => { hideLoading(); showStatus('Error: ' + err.message, true); });
         }
 
         // ===== FILENAME HELPER =====

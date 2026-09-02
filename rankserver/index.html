@@ -568,7 +568,7 @@
         <div class="rankables-config">
             <h2>Rankables Directory</h2>
             <p class="help">Choose where the <code>rankables</code> symlink should point. The selected
-               directory's files (<code>.txt</code> / <code>.png</code> / <code>.jpg</code> / <code>.heic</code> / <code>.mp4</code>) become the items you rank.</p>
+               directory's files (<code>.txt</code> / <code>.png</code> / <code>.jpg</code> / <code>.heic</code> / <code>.mp4</code> / <code>.mov</code>) become the items you rank.</p>
             <div class="rankables-realpath">
                 <span class="realpath-label">Current real path:</span>
                 <span class="realpath-value" id="rankablesRealPath">Loading...</span>
@@ -634,7 +634,7 @@
                 <div class="compare-media">
                     {% if l.endswith('.txt') %}
                     <span class="txt-name">{{ l }}</span>
-                    {% elif l.endswith('.mp4') %}
+                    {% elif l.endswith(('.mp4', '.mov')) %}
                     <video src="{{ urlroot }}media/{{ l }}#t=0.001" controls loop preload="metadata" playsinline></video>
                     {% else %}
                     <img src="{{ urlroot }}thumb/{{ l }}?w=1200" decoding="async" alt="" />
@@ -648,7 +648,7 @@
                 <div class="compare-media">
                     {% if r.endswith('.txt') %}
                     <span class="txt-name">{{ r }}</span>
-                    {% elif r.endswith('.mp4') %}
+                    {% elif r.endswith(('.mp4', '.mov')) %}
                     <video src="{{ urlroot }}media/{{ r }}#t=0.001" controls loop preload="metadata" playsinline></video>
                     {% else %}
                     <img src="{{ urlroot }}thumb/{{ r }}?w=1200" decoding="async" alt="" />
@@ -668,7 +668,7 @@
                 <li>
                     {% if item.endswith('.txt') %}
                     <span class="rank-txt">{{ item }}</span>
-                    {% elif item.endswith('.mp4') %}
+                    {% elif item.endswith(('.mp4', '.mov')) %}
                     <span class="rank-media rank-video-poster" data-full="{{ urlroot }}media/{{ item }}" data-type="video">
                         <img src="{{ urlroot }}thumb/{{ item }}?w=240" loading="lazy" decoding="async" alt="" />
                     </span>

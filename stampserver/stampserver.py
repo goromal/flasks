@@ -18,6 +18,7 @@ import cv2
 from urllib.parse import quote
 from imageops import (
     HEIF_EXTS,
+    IMAGE_EXTS,
     fill_white_rect,
     image_format,
     is_image,
@@ -27,6 +28,20 @@ from imageops import (
 from fileops import unique_suffixed_name, validate_stamp_name
 
 STAMP_RE = re.compile(r"stamped\.(.*?)\.")
+
+# Video containers the server can surface and edit. MOV (QuickTime) is treated
+# like MP4 -- ffmpeg/OpenCV handle either container, and it plays natively in
+# Safari (the same browser assumption HEIC already relies on).
+VIDEO_EXTS = (".mp4", ".mov")
+
+# Extensions the server can surface and stamp: every editable image plus the
+# supported video containers. Uploads are restricted to these so a freshly
+# added file actually shows up in the stamping rotation.
+UPLOAD_EXTS = IMAGE_EXTS + VIDEO_EXTS
+
+
+def is_video(filename):
+    return filename.lower().endswith(VIDEO_EXTS)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--port", action="store", type=int, default=5000, help="Port to run the server on")
@@ -115,7 +130,7 @@ class StampServer:
                     self.filelist.append((file.strip(), "JPG"))
                 elif file.lower().endswith(HEIF_EXTS):
                     self.filelist.append((file.strip(), "HEIC"))
-                elif file.lower().endswith(".mp4"):
+                elif file.lower().endswith(VIDEO_EXTS):
                     self.filelist.append((file.strip(), "MP4"))
             shuffle(self.filelist)
         if len(self.filelist) == 0:
@@ -137,7 +152,7 @@ class StampServer:
                         self.filelist.append((file.strip(), "JPG"))
                     elif file.lower().endswith(HEIF_EXTS):
                         self.filelist.append((file.strip(), "HEIC"))
-                    elif file.lower().endswith(".mp4"):
+                    elif file.lower().endswith(VIDEO_EXTS):
                         self.filelist.append((file.strip(), "MP4"))
             shuffle(self.filelist)
         if len(self.filelist) == 0:
@@ -398,6 +413,59 @@ def set_stampables_dir():
         return flask.jsonify({'success': True, 'real_path': new_target})
     except Exception as e:
         return flask.jsonify({'success': False, 'error': str(e)}), 500
+
+@bp.route("/api/upload", methods=["POST"])
+@flask_login.login_required
+def upload_media():
+    """Save uploaded image/video files into the stampables directory.
+
+    Accepts a multipart form with one or more files under the "files" field.
+    Each file must have a recognised extension (see UPLOAD_EXTS) and a plain
+    basename -- anything with a path separator or a reserved 'stamped.' prefix
+    is rejected so an upload can never escape RES_DIR or masquerade as an
+    already-stamped file. Colliding names get a numeric suffix rather than
+    overwriting an existing file.
+    """
+    files = flask.request.files.getlist("files")
+    if not files:
+        return flask.jsonify({'success': False, 'error': 'No files provided'}), 400
+    if not os.path.isdir(RES_DIR):
+        return flask.jsonify({'success': False, 'error': f'Data directory non-existent or broken: {RES_DIR}'}), 500
+
+    uploaded = []
+    errors = []
+    for f in files:
+        raw = f.filename or ""
+        safe = os.path.basename(raw)
+        if not safe or safe in (".", "..") or safe != raw:
+            errors.append(f"{raw or '(unnamed)'}: invalid filename")
+            continue
+        if not safe.lower().endswith(UPLOAD_EXTS):
+            errors.append(f"{safe}: unsupported file type")
+            continue
+        if safe.startswith("stamped."):
+            errors.append(f"{safe}: filename may not start with 'stamped.'")
+            continue
+
+        base, ext = os.path.splitext(safe)
+        dest_name = safe
+        counter = 1
+        while os.path.exists(os.path.join(RES_DIR, dest_name)):
+            counter += 1
+            dest_name = f"{base}_{counter}{ext}"
+        try:
+            f.save(os.path.join(RES_DIR, dest_name))
+            uploaded.append(dest_name)
+        except Exception as e:
+            errors.append(f"{safe}: {e}")
+
+    if not uploaded:
+        return flask.jsonify({'success': False, 'error': '; '.join(errors) or 'No files uploaded', 'errors': errors}), 400
+
+    # Drop the cached, shuffled file list so the newly uploaded files are picked
+    # up the next time the page loads.
+    stampserver.reset()
+    return flask.jsonify({'success': True, 'uploaded': uploaded, 'errors': errors})
 
 @bp.route("/api/rotate-image", methods=["POST"])
 @flask_login.login_required
@@ -675,8 +743,8 @@ def save_screenshot_api():
         if not os.path.exists(file_path):
             return flask.jsonify({'success': False, 'error': f'File not found: {filename}'}), 404
 
-        if not (filename.lower().endswith('.mp4') or filename.lower().endswith('.webm')):
-            return flask.jsonify({'success': False, 'error': 'Only MP4 and WEBM files can have screenshots taken'}), 400
+        if not (is_video(filename) or filename.lower().endswith('.webm')):
+            return flask.jsonify({'success': False, 'error': 'Only MP4, MOV, and WEBM files can have screenshots taken'}), 400
 
         # Open video with OpenCV
         cap = cv2.VideoCapture(file_path)
@@ -738,8 +806,8 @@ def duplicate_video_api():
         if not os.path.exists(file_path):
             return flask.jsonify({'success': False, 'error': f'File not found: {filename}'}), 404
 
-        if not filename.lower().endswith('.mp4'):
-            return flask.jsonify({'success': False, 'error': 'Only MP4 files can be duplicated'}), 400
+        if not is_video(filename):
+            return flask.jsonify({'success': False, 'error': 'Only MP4 and MOV files can be duplicated'}), 400
 
         base_name = os.path.splitext(filename)[0]
         extension = os.path.splitext(filename)[1]
@@ -786,8 +854,8 @@ def rotate_video_api():
         if not os.path.exists(file_path):
             return flask.jsonify({'success': False, 'error': f'File not found: {filename}'}), 404
 
-        if not filename.lower().endswith('.mp4'):
-            return flask.jsonify({'success': False, 'error': 'Only MP4 files can be rotated'}), 400
+        if not is_video(filename):
+            return flask.jsonify({'success': False, 'error': 'Only MP4 and MOV files can be rotated'}), 400
 
         normalized = ((int(degrees) % 360) + 360) % 360
         if normalized == 90:
@@ -799,7 +867,9 @@ def rotate_video_api():
         else:
             return flask.jsonify({'success': False, 'error': f'Unsupported rotation: {degrees}°'}), 400
 
-        temp_path = file_path + '.tmp.mp4'
+        # Keep the source container (.mp4 or .mov): ffmpeg picks the muxer from
+        # the temp file's extension, so a .mov must not be re-wrapped as .mp4.
+        temp_path = file_path + '.tmp' + os.path.splitext(file_path)[1]
         result = subprocess.run(
             ['ffmpeg', '-i', file_path, '-vf', vf, '-c:a', 'copy', temp_path, '-y'],
             capture_output=True, text=True
@@ -835,13 +905,13 @@ def crop_video_api():
         if not os.path.exists(file_path):
             return flask.jsonify({'success': False, 'error': f'File not found: {filename}'}), 404
 
-        if not filename.lower().endswith('.mp4'):
-            return flask.jsonify({'success': False, 'error': 'Only MP4 files can be cropped'}), 400
+        if not is_video(filename):
+            return flask.jsonify({'success': False, 'error': 'Only MP4 and MOV files can be cropped'}), 400
 
         if width <= 0 or height <= 0:
             return flask.jsonify({'success': False, 'error': 'Width and height must be positive'}), 400
 
-        temp_path = file_path + '.tmp.mp4'
+        temp_path = file_path + '.tmp' + os.path.splitext(file_path)[1]
         result = subprocess.run(
             ['ffmpeg', '-i', file_path, '-vf', f'crop={width}:{height}:{x}:{y}',
              '-c:a', 'copy', temp_path, '-y'],
@@ -879,8 +949,8 @@ def trim_video_api():
         if not os.path.exists(file_path):
             return flask.jsonify({'success': False, 'error': f'File not found: {filename}'}), 404
 
-        if not filename.lower().endswith('.mp4'):
-            return flask.jsonify({'success': False, 'error': 'Only MP4 files can be trimmed'}), 400
+        if not is_video(filename):
+            return flask.jsonify({'success': False, 'error': 'Only MP4 and MOV files can be trimmed'}), 400
 
         cap = cv2.VideoCapture(file_path)
         if not cap.isOpened():
@@ -909,7 +979,7 @@ def trim_video_api():
         if not segments:
             return flask.jsonify({'success': False, 'error': 'No valid segments formed from edit points'}), 400
 
-        temp_path = file_path + '.tmp.mp4'
+        temp_path = file_path + '.tmp' + os.path.splitext(file_path)[1]
 
         # Detect whether the video has an audio stream
         probe = subprocess.run(
