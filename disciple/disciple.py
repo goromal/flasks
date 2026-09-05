@@ -306,7 +306,13 @@ def study():
           AND id NOT IN (SELECT group_id FROM group_processed)
         ORDER BY RANDOM() LIMIT 1
     """).fetchone()
-    all_tags = [r["name"] for r in db.execute("SELECT name FROM tags ORDER BY name").fetchall()]
+    # Name + usage count, so the tag picker can show how established each tag is
+    # (same shape as manage_tags). Rows stay usable after db.close().
+    all_tags = db.execute("""
+        SELECT t.name, COUNT(gt.group_id) as count
+        FROM tags t LEFT JOIN group_tags gt ON gt.tag_id = t.id
+        GROUP BY t.id ORDER BY t.name
+    """).fetchall()
     if not row:
         total = db.execute(
             "SELECT COUNT(*) FROM verse_groups WHERE is_christ_group=1"
