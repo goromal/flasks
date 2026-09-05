@@ -14,11 +14,18 @@
       border: 1px solid #ccc; border-radius: 4px; font-size: 15px;
       font-family: monospace; height: 120px; resize: vertical;
     }
-    select {
+    select, input[type="date"] {
       width: 100%; padding: 9px 10px; box-sizing: border-box;
       border: 1px solid #ccc; border-radius: 4px; font-size: 15px;
       font-family: monospace; background: #fff;
     }
+    .opt { font-weight: normal; color: #888; font-size: 13px; }
+    .check-label {
+      display: flex; align-items: center; gap: 8px;
+      margin: 14px 0 4px; font-weight: bold;
+    }
+    .check-label input { width: auto; margin: 0; }
+    .check-label code { font-family: monospace; font-size: 13px; }
     button[type="submit"] {
       margin-top: 14px; padding: 10px 28px; background: #0066cc;
       color: white; border: none; border-radius: 4px; font-size: 16px; cursor: pointer;
@@ -51,13 +58,16 @@
 
   <form id="intake-form" onsubmit="sendMessage(event)">
     <label for="prefix">Prefix</label>
-    <select id="prefix" onchange="applyPrefix(this)">
+    <select id="prefix" onchange="syncPrefixUi()">
       <option value="">&mdash; prepend a prefix &mdash;</option>
       <optgroup label="Priority">
         <option value="P0">P0 &mdash; must do today</option>
         <option value="P1">P1 &mdash; must do within a week</option>
         <option value="P2">P2 &mdash; must do within a month</option>
         <option value="P3">P3 &mdash; should do eventually</option>
+      </optgroup>
+      <optgroup label="Journal">
+        <option value="journal">journal &mdash; add a journal entry</option>
       </optgroup>
       {% if categories %}
       <optgroup label="Keywords">
@@ -67,6 +77,16 @@
       </optgroup>
       {% endif %}
     </select>
+
+    <div id="journal-date-row" style="display:none;">
+      <label for="journal_date">Journal Date <span class="opt">(optional &mdash; defaults to today)</span></label>
+      <input type="date" id="journal_date">
+    </div>
+
+    <label class="check-label">
+      <input type="checkbox" id="action_flag">
+      Action item <span class="opt">(inserts <code>action:</code> before the message)</span>
+    </label>
 
     <label for="msg">Message</label>
     <textarea id="msg" name="msg" required placeholder="Type your message here…"></textarea>
@@ -139,42 +159,38 @@
   </div>
 
   <script>
-    // Every prefix the dropdown offers. The required trailing colon is what keeps
-    // overlapping keywords apart — "expense" does not match "expenses: lunch",
-    // because what follows "expense" there is an "s", not a colon.
-    const PREFIXES = Array.from(document.querySelectorAll('#prefix option'))
-      .map(o => o.value)
-      .filter(Boolean);
-
-    function prefixPattern(tag) {
-      return new RegExp('^' + tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ':\\s*', 'i');
+    // The date picker only means anything to goromail after a "journal:" prefix.
+    function syncPrefixUi() {
+      const isJournal = document.getElementById('prefix').value === 'journal';
+      document.getElementById('journal-date-row').style.display = isJournal ? '' : 'none';
     }
 
-    // Prepend "<TAG>: " to whatever is in the message field. If the text already
-    // carries one of the known prefixes, that one is REPLACED rather than stacked
-    // on top — "P0: P1: buy milk" would just be a malformed message.
-    function applyPrefix(select) {
-      const tag = select.value;
-      select.selectedIndex = 0; // snap back to the placeholder
-      if (!tag) return;
+    // Build the string that actually gets sent:
+    //   "<TAG>: " + "mm/dd/yyyy: " (journal only) + "action: " + <message>
+    // The message box is never rewritten - it holds the content and nothing else,
+    // so the prefix is applied silently at submit time.
+    function composeMessage() {
+      const tag = document.getElementById('prefix').value;
+      const date = document.getElementById('journal_date').value; // "yyyy-mm-dd" or ""
+      const action = document.getElementById('action_flag').checked;
+      const body = document.getElementById('msg').value.trim();
 
-      const msg = document.getElementById('msg');
-      let text = msg.value.replace(/^\s+/, '');
-      for (const p of PREFIXES) {
-        if (prefixPattern(p).test(text)) {
-          text = text.replace(prefixPattern(p), '');
-          break;
-        }
+      let prefix = '';
+      if (tag) prefix += tag + ': ';
+      if (tag === 'journal' && date) {
+        // goromail wants mm/dd/yyyy right after "journal:". Split the ISO value by
+        // hand rather than going through Date(), which parses it as UTC and would
+        // land on the previous day anywhere west of Greenwich.
+        const parts = date.split('-');
+        prefix += parts[1] + '/' + parts[2] + '/' + parts[0] + ': ';
       }
-
-      msg.value = tag + ': ' + text;
-      msg.focus();
-      msg.setSelectionRange(msg.value.length, msg.value.length); // caret at the end
+      if (action) prefix += 'action: ';
+      return prefix + body;
     }
 
     async function sendMessage(event) {
       event.preventDefault();
-      const text = document.getElementById('msg').value.trim();
+      const text = composeMessage();
       const btn = document.getElementById('submit-btn');
       const status = document.getElementById('status');
 
@@ -193,6 +209,7 @@
           status.textContent = 'Sent.';
           status.className = 'ok';
           document.getElementById('intake-form').reset();
+          syncPrefixUi(); // reset() clears the select, so hide the journal date again
           setTimeout(() => { status.textContent = ''; status.className = ''; }, 2500);
         } else {
           status.textContent = 'Error: ' + (data.error || 'unknown');
