@@ -39,11 +39,24 @@
         <input type="text" name="tags" id="tags"
                value="{{ group.tags | join(', ') }}"
                list="tag-suggestions" autocomplete="off">
+        {# The datalist only helps for the FIRST tag: a datalist filters against the
+           whole field value, so once it reads "faith, " nothing matches any more.
+           The picker below is the one that works at any position. #}
         <datalist id="tag-suggestions">
           {% for t in all_tags %}
-            <option value="{{ t }}">
+            <option value="{{ t.name }}">
           {% endfor %}
         </datalist>
+        {% if all_tags %}
+          <select id="tag-picker" aria-label="Add an existing tag" style="margin-top:6px;">
+            <option value="">&#8212; add an existing tag &#8212;</option>
+            {% for t in all_tags %}
+              <option value="{{ t.name }}" data-label="{{ t.name }} ({{ t.count }})">
+                {{ t.name }} ({{ t.count }})
+              </option>
+            {% endfor %}
+          </select>
+        {% endif %}
       </div>
       <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
         <button type="submit" class="btn btn-primary">Mark as Processed</button>
@@ -64,6 +77,50 @@
       </form>
     </div>
   </div>
+
+  <script>
+    (function () {
+      var field = document.getElementById('tags');
+      var picker = document.getElementById('tag-picker');
+      if (!field || !picker) return;
+
+      /* The tags field is one comma-separated string; read it back as a set so we
+         never append a duplicate, however the tag got in there. */
+      function current() {
+        var have = Object.create(null);
+        field.value.split(',').forEach(function (part) {
+          var name = part.trim().toLowerCase();
+          if (name) have[name] = true;
+        });
+        return have;
+      }
+
+      /* Tick the tags already on this passage. Re-run on input, not just at load:
+         the server-rendered state goes stale the moment the field is hand-edited. */
+      function sync() {
+        var have = current();
+        Array.prototype.forEach.call(picker.options, function (opt) {
+          if (!opt.value) return;
+          opt.textContent = opt.dataset.label + (have[opt.value.toLowerCase()] ? ' ✓' : '');
+        });
+      }
+
+      picker.addEventListener('change', function () {
+        var name = picker.value;
+        picker.selectedIndex = 0; // snap back to the placeholder
+        if (!name) return;
+        if (!current()[name.toLowerCase()]) {
+          var value = field.value.trim().replace(/,\s*$/, '');
+          field.value = value ? value + ', ' + name : name;
+        }
+        sync();
+        field.focus();
+      });
+
+      field.addEventListener('input', sync);
+      sync();
+    })();
+  </script>
 {% endif %}
 
 {% endblock %}

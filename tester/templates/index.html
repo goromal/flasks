@@ -1,6 +1,33 @@
 {% extends "base.html" %}
 {% block title %}Tester — Dashboard{% endblock %}
 
+{% block extra_head %}
+<style>
+    /* Same tab idiom as the Create Exam page. */
+    .type-tabs { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+    .type-tab {
+        padding: 10px 20px;
+        border-radius: 6px;
+        border: 2px solid #ddd;
+        background: white;
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 0.9em;
+        color: #555;
+        transition: all 0.15s;
+    }
+    .type-tab.active { border-color: #2c3e50; background: #2c3e50; color: white; }
+    .tab-count {
+        font-weight: 500;
+        font-size: 0.85em;
+        opacity: 0.7;
+        margin-left: 4px;
+    }
+    .type-section { display: none; }
+    .type-section.active { display: block; }
+</style>
+{% endblock %}
+
 {% block content %}
 <h1>Exam Dashboard</h1>
 
@@ -11,14 +38,29 @@
 </div>
 {% else %}
 
+{# Only types that actually have exams get a tab. #}
 {% set types = [('rote','Rote'),('multiple_choice','Multiple Choice'),('short_answer','Short Answer')] %}
+{% set groups = [] %}
 {% for type_key, type_label in types %}
-{% set group = exams | selectattr('exam_type','eq',type_key) | list %}
-{% if group %}
+    {% set group = exams | selectattr('exam_type','eq',type_key) | list %}
+    {% if group %}{% set _ = groups.append((type_key, type_label, group)) %}{% endif %}
+{% endfor %}
+
+<div class="type-tabs">
+    {% for type_key, type_label, group in groups %}
+    <button type="button" class="type-tab {% if loop.first %}active{% endif %}"
+            data-type="{{ type_key }}" onclick="selectType('{{ type_key }}')">
+        {{ type_label }}<span class="tab-count">{{ group | length }}</span>
+    </button>
+    {% endfor %}
+</div>
+
+{# The first section is active server-side so the dashboard still shows exams if
+   the script never runs — otherwise every section stays display:none and the page
+   looks empty. #}
+{% for type_key, type_label, group in groups %}
+<div class="type-section {% if loop.first %}active{% endif %}" data-type="{{ type_key }}">
 <div class="card">
-    <h2>
-        <span class="badge badge-{{ type_key }}">{{ type_label }}</span>
-    </h2>
     <table style="width:100%; border-collapse:collapse; font-size:0.9em;">
         <thead>
             <tr style="border-bottom:2px solid #eee; text-align:left; color:#666; font-size:0.85em; text-transform:uppercase; letter-spacing:0.5px;">
@@ -57,7 +99,37 @@
         </tbody>
     </table>
 </div>
-{% endif %}
+</div>
 {% endfor %}
+
+<script>
+    var TAB_KEY = 'tester-dashboard-type';
+
+    function selectType(type) {
+        var matched = false;
+        document.querySelectorAll('.type-tab').forEach(function (btn) {
+            var on = btn.dataset.type === type;
+            btn.classList.toggle('active', on);
+            if (on) matched = true;
+        });
+        document.querySelectorAll('.type-section').forEach(function (sec) {
+            sec.classList.toggle('active', sec.dataset.type === type);
+        });
+        // Remember the tab so returning here (deleting an exam redirects to the
+        // dashboard, losing any URL fragment) doesn't dump you back on the first one.
+        if (matched) { try { localStorage.setItem(TAB_KEY, type); } catch (e) {} }
+        return matched;
+    }
+
+    (function () {
+        var first = document.querySelector('.type-tab');
+        if (!first) return;
+        var saved = null;
+        try { saved = localStorage.getItem(TAB_KEY); } catch (e) {}
+        // The remembered type can vanish (delete the last exam of a type), so fall
+        // back to whichever tab is actually here.
+        if (!saved || !selectType(saved)) selectType(first.dataset.type);
+    })();
+</script>
 {% endif %}
 {% endblock %}
