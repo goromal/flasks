@@ -67,6 +67,8 @@ def test_snapshot_is_one_multicall_and_flattens(monkeypatch):
     assert sent[0]["method"] == "system.multicall"
     names = [c["methodName"] for c in sent[0]["params"][0]]
     assert names == ["aria2.tellActive", "aria2.tellWaiting", "aria2.tellStopped"]
+    for c in sent[0]["params"][0]:
+        assert c["params"][0] == "token:s3cret"
     assert [d["gid"] for d in out] == ["a", "b"]
 
 
