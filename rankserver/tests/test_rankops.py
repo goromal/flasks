@@ -96,6 +96,15 @@ def _mid_state():
     )
 
 
+def test_unsorted_remaining_counts_pending_ranges():
+    state, _ = _mid_state()
+    # pending (0,2) is 3 elements, active (4,5) is 2; position 3 is final.
+    assert rankops.unsorted_remaining(state) == 5
+    assert rankops.unsorted_remaining(dict(state, sorted=1, top=UMAX)) == 0
+    # a settled-but-unmarked state (empty stack) counts as nothing pending
+    assert rankops.unsorted_remaining(dict(state, top=UMAX)) == 0
+
+
 def test_remove_outside_active_preserves_progress():
     state, fmap = _mid_state()
     # remove pos=1 (arr[1] == 2 -> file f2): inside pending (0,2), not active

@@ -304,6 +304,9 @@ class RankServer:
     def getRankList(self):
         return self.rev_rank_list
 
+    def unsortedRemaining(self):
+        return rankops.unsorted_remaining(state_to_dict(self.state))
+
     def getCompFiles(self):
         rightfile = self.file_map[self.state.arr[self.state.p]]
         if self.state.l == int(ComparatorLeft.I):
@@ -447,7 +450,7 @@ def index():
         return flask.render_template("index.html", urlroot=urlroot, intro=False,
                                      datadir=SHORT_RESDIR, err=True, done=False,
                                      msg=msg, rlist=[], l="", r="", warn=warn,
-                                     insert_note="")
+                                     progress_note="")
     rlist = rankserver.getRankList()
     if rankserver.sortingComplete():
         if rankserver.insertionPending():
@@ -460,23 +463,26 @@ def index():
                                          intro=False, datadir=SHORT_RESDIR,
                                          err=False, done=False, msg="",
                                          rlist=rlist, l=l, r=r, warn=warn,
-                                         insert_note=note)
+                                         progress_note=note)
         return flask.render_template("index.html", urlroot=urlroot, intro=False,
                                      datadir=SHORT_RESDIR, err=False, done=True,
                                      msg="", rlist=rlist, l="", r="", warn=warn,
-                                     insert_note="")
+                                     progress_note="")
     l, r = rankserver.getCompFiles()
+    remaining = rankserver.unsortedRemaining()
+    note = "Sorting — {} item{} still unsorted".format(
+        remaining, "" if remaining == 1 else "s")
     return flask.render_template("index.html", urlroot=urlroot, intro=False,
                                  datadir=SHORT_RESDIR, err=False, done=False,
                                  msg="", rlist=rlist, l=l, r=r, warn=warn,
-                                 insert_note="")
+                                 progress_note=note)
 
 @bp.route("/intro", methods=["GET"])
 @flask_login.login_required
 def intro():
     global urlroot
     global SHORT_RESDIR
-    return flask.render_template("index.html", urlroot=urlroot, intro=True, datadir=SHORT_RESDIR, err=False, done=False, msg="", rlist=[], l="", r="", warn="", insert_note="")
+    return flask.render_template("index.html", urlroot=urlroot, intro=True, datadir=SHORT_RESDIR, err=False, done=False, msg="", rlist=[], l="", r="", warn="", progress_note="")
 
 @bp.route("/api/rankables-info", methods=["GET"])
 @flask_login.login_required
