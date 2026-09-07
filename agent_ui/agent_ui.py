@@ -9,8 +9,17 @@ import subprocess
 from pathlib import Path
 from urllib.parse import quote
 
-from flask import Blueprint, Flask, abort, flash, make_response, redirect, render_template, request, url_for
-
+from flask import (
+    Blueprint,
+    Flask,
+    abort,
+    flash,
+    make_response,
+    redirect,
+    render_template,
+    request,
+    url_for,
+)
 
 RESERVED_DEVRC_KEYS = {"dev_dir", "data_dir", "pkgs_dir", "pkgs_var"}
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]*$")
@@ -185,7 +194,11 @@ class WorkspaceCli:
                 timeout=900,
             )
         except subprocess.CalledProcessError as error:
-            detail = error.stderr.strip() or error.stdout.strip() or "Workspace operation failed"
+            detail = (
+                error.stderr.strip()
+                or error.stdout.strip()
+                or "Workspace operation failed"
+            )
             try:
                 detail = json.loads(detail)["error"]
             except (ValueError, KeyError, TypeError):
@@ -282,7 +295,9 @@ def create_app(
                 )
                 return response
             error = "Invalid access token"
-        return render_template("main.html", login=True, error=error, subdomain=subdomain), 401 if error else 200
+        return render_template(
+            "main.html", login=True, error=error, subdomain=subdomain
+        ), 401 if error else 200
 
     @bp.route("/auth-check")
     def auth_check():
@@ -363,7 +378,9 @@ def create_app(
         }
         if action not in action_args:
             abort(400)
-        return run_workspace_action(action, *action_args[action], redirect_workspace=workspace)
+        return run_workspace_action(
+            action, *action_args[action], redirect_workspace=workspace
+        )
 
     @bp.route("/workspaces/<workspace>/shell", methods=["POST"])
     def workspace_shell(workspace):
@@ -389,7 +406,9 @@ def create_app(
         if redirect_workspace:
             known = {item["name"] for item in configured_workspaces()}
             if redirect_workspace in known:
-                return redirect(url_for("agent_ui.workspace_detail", workspace=redirect_workspace))
+                return redirect(
+                    url_for("agent_ui.workspace_detail", workspace=redirect_workspace)
+                )
         return redirect(url_for("agent_ui.workspace_index"))
 
     @bp.route("/sessions", methods=["POST"])
@@ -431,7 +450,9 @@ def create_app(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Workspace-aware terminal agent launcher")
+    parser = argparse.ArgumentParser(
+        description="Workspace-aware terminal agent launcher"
+    )
     parser.add_argument("--port", type=int, default=6767)
     parser.add_argument("--subdomain", default="/agents")
     parser.add_argument("--devrc", default="~/.devrc")

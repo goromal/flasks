@@ -3,7 +3,6 @@ import sys
 
 import pytest
 
-
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from agent_ui import create_app, parse_devrc
@@ -36,8 +35,18 @@ class FakeWorkspaces:
 
     def list(self):
         return [
-            {"name": "ui", "sources": ["anixpkgs", "flasks"], "root": "/dev/ui", "exists": True},
-            {"name": "tasking", "sources": ["anixpkgs", "task-tools"], "root": "/dev/tasking", "exists": True},
+            {
+                "name": "ui",
+                "sources": ["anixpkgs", "flasks"],
+                "root": "/dev/ui",
+                "exists": True,
+            },
+            {
+                "name": "tasking",
+                "sources": ["anixpkgs", "task-tools"],
+                "root": "/dev/tasking",
+                "exists": True,
+            },
         ]
 
     def status(self, workspace):
@@ -218,12 +227,18 @@ def test_existing_session_actions(configured_app):
     login(client)
     csrf_token = csrf(client)
 
-    assert client.post(
-        f"/agents/sessions/{name}/interrupt", data={"_csrf": csrf_token}
-    ).status_code == 302
-    assert client.post(
-        f"/agents/sessions/{name}/terminate", data={"_csrf": csrf_token}
-    ).status_code == 302
+    assert (
+        client.post(
+            f"/agents/sessions/{name}/interrupt", data={"_csrf": csrf_token}
+        ).status_code
+        == 302
+    )
+    assert (
+        client.post(
+            f"/agents/sessions/{name}/terminate", data={"_csrf": csrf_token}
+        ).status_code
+        == 302
+    )
     assert manager.interrupted == [name]
     assert manager.terminated == [name]
 
@@ -276,13 +291,20 @@ def test_workspace_actions_require_known_workspace_and_csrf(configured_app):
     app, _, workspaces = configured_app
     client = app.test_client()
     login(client)
-    assert client.post(
-        "/agents/workspaces/ui/actions", data={"action": "push", "repository": "anixpkgs"}
-    ).status_code == 403
-    assert client.post(
-        "/agents/workspaces/unknown/actions",
-        data={"_csrf": csrf(client), "action": "push", "repository": "anixpkgs"},
-    ).status_code == 404
+    assert (
+        client.post(
+            "/agents/workspaces/ui/actions",
+            data={"action": "push", "repository": "anixpkgs"},
+        ).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            "/agents/workspaces/unknown/actions",
+            data={"_csrf": csrf(client), "action": "push", "repository": "anixpkgs"},
+        ).status_code
+        == 404
+    )
     assert workspaces.actions == []
 
 
@@ -290,9 +312,7 @@ def test_workspace_shell_uses_persistent_terminal(configured_app):
     app, sessions, _ = configured_app
     client = app.test_client()
     login(client)
-    response = client.post(
-        "/agents/workspaces/ui/shell", data={"_csrf": csrf(client)}
-    )
+    response = client.post("/agents/workspaces/ui/shell", data={"_csrf": csrf(client)})
     assert response.status_code == 302
     assert response.headers["Location"].endswith(
         "/agents/terminal/?arg=agent-ui-ui--shell--0123abcd"
