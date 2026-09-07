@@ -268,3 +268,23 @@ def test_list_dirs_missing_path_is_404(ctx):
 def test_routes_are_under_the_prefix(ctx):
     client = ctx[0]
     assert client.get("/api/downloads").status_code == 404
+
+
+def test_add_rejects_empty_dest(ctx):
+    client, st, aria2, _, tmp_path = ctx
+    body = add_body(tmp_path)
+    body["dest"] = ""
+    resp = client.post(PREFIX + "/api/add", json=body)
+    assert resp.status_code == 400
+    assert st.list() == []
+    assert aria2.added == []
+
+
+def test_add_rejects_missing_dest_key(ctx):
+    client, st, aria2, _, tmp_path = ctx
+    body = add_body(tmp_path)
+    del body["dest"]
+    resp = client.post(PREFIX + "/api/add", json=body)
+    assert resp.status_code == 400
+    assert st.list() == []
+    assert aria2.added == []

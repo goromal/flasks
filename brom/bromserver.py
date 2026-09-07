@@ -52,10 +52,13 @@ def create_app(st, aria2, subdomain="/brom"):
         magnet = (data.get("magnet") or "").strip()
         info_hash = (data.get("info_hash") or "").strip().lower()
         name = (data.get("name") or "").strip() or "untitled"
-        dest = os.path.realpath((data.get("dest") or "").strip())
+        dest_raw = (data.get("dest") or "").strip()
 
         if not magnet or not info_hash:
             return flask.jsonify({"error": "Missing magnet or info_hash"}), 400
+        if not dest_raw:
+            return flask.jsonify({"error": "Missing destination"}), 400
+        dest = os.path.realpath(dest_raw)
         if not os.path.isdir(dest):
             return flask.jsonify({"error": "Not a directory: " + dest}), 400
         if not os.access(dest, os.W_OK):
