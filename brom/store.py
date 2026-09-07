@@ -7,7 +7,7 @@ them (see index_snapshot).
 import os
 import sqlite3
 import time
-from threading import Lock
+from threading import RLock
 
 #: Statuses that reconcile() no longer touches.
 TERMINAL = ("complete", "error", "cancelled", "interrupted")
@@ -83,7 +83,7 @@ class Store:
         os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        self._lock = Lock()
+        self._lock = RLock()   # reconcile holds it across _apply/_miss
         with self._lock, self._conn:
             self._conn.executescript(SCHEMA)
 
@@ -163,14 +163,14 @@ class Store:
         now = int(time.time())
         with self._lock:
             rows = self._conn.execute("SELECT * FROM downloads").fetchall()
-        for row in rows:
-            if row["status"] in TERMINAL:
-                continue
-            entry = by_hash.get(row["info_hash"]) or by_gid.get(row["gid"] or "")
-            if entry is None:
-                self._miss(row, now)
-            else:
-                self._apply(row, entry, now)
+            for row in rows:
+                if row["status"] in TERMINAL:
+                    continue
+                entry = by_hash.get(row["info_hash"]) or by_gid.get(row["gid"] or "")
+                if entry is None:
+                    self._miss(row, now)
+                else:
+                    self._apply(row, entry, now)
 
     def _apply(self, row, entry, now):
         followed = entry.get("followedBy") or []

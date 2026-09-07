@@ -1,5 +1,7 @@
 import os
 import sys
+import threading
+import time
 
 import pytest
 
@@ -244,4 +246,37 @@ def test_set_status_marks_cancelled(tmp_path):
     assert s.get(did)["status"] == "cancelled"
     # Terminal rows are no longer touched by reconcile.
     s.reconcile([entry("g", "active", bittorrent=torrent())])
+    assert s.get(did)["status"] == "cancelled"
+
+
+def test_reconcile_does_not_clobber_concurrent_status_change(tmp_path):
+    """A cancel landing mid-reconcile must survive.
+
+    reconcile() holds the lock across its whole row loop; without that, a
+    Flask thread's set_status() can land between the SELECT and _apply's
+    UPDATE and be silently overwritten.
+    """
+    s = make(tmp_path)
+    did = add(s, gid="g")
+    s.reconcile([entry("g", "active", bittorrent=torrent())])
+
+    inside = threading.Event()
+    original_apply = s._apply
+
+    def slow_apply(row, e, now):
+        inside.set()
+        time.sleep(0.2)          # window a concurrent cancel could land in
+        return original_apply(row, e, now)
+
+    s._apply = slow_apply
+
+    def canceller():
+        inside.wait(2.0)
+        s.set_status(did, "cancelled")
+
+    t = threading.Thread(target=canceller)
+    t.start()
+    s.reconcile([entry("g", "active", bittorrent=torrent())])
+    t.join(5.0)
+
     assert s.get(did)["status"] == "cancelled"
