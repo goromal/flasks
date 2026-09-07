@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Terminal</title>
+  <link rel="icon" type="image/svg+xml" href="{{ subdomain }}/favicon.svg">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #10151d; color: #e8edf2; font: 16px/1.45 system-ui, sans-serif; }
+    main { width: min(860px, calc(100% - 28px)); margin: 40px auto; }
+    .panel { background: #18212c; border: 1px solid #2d3b4c; border-radius: 14px; padding: 22px; box-shadow: 0 16px 40px #0005; }
+    h1 { margin: 0 0 8px; font-size: 1.7rem; }
+    h2 { margin: 28px 0 12px; font-size: 1.1rem; color: #a9bdd1; }
+    p { color: #a9b5c2; }
+    form.launch { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end; }
+    label { display: grid; gap: 6px; color: #b8c7d6; font-size: .9rem; }
+    select, input { width: 100%; border: 1px solid #3a4b5e; border-radius: 8px; background: #0f151d; color: #eef4f8; padding: 10px 12px; font: inherit; }
+    button, .button { border: 0; border-radius: 8px; padding: 10px 15px; background: #2f81f7; color: white; font: inherit; font-weight: 650; text-decoration: none; cursor: pointer; display: inline-block; }
+    button.secondary { background: #3a4858; }
+    button.danger { background: #b64242; }
+    .sessions { display: grid; gap: 10px; }
+    .session { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 13px; background: #111923; border: 1px solid #2b3948; border-radius: 10px; }
+    .session strong { text-transform: capitalize; }
+    .session small { display: block; color: #91a2b3; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .actions form { margin: 0; }
+    .empty { border: 1px dashed #405064; border-radius: 10px; padding: 18px; color: #91a2b3; }
+    .error { color: #ff9a9a; }
+    .login { max-width: 480px; margin: 80px auto; }
+    .login form { display: grid; gap: 14px; }
+    @media (max-width: 680px) {
+      main { margin: 18px auto; }
+      form.launch { grid-template-columns: 1fr; }
+      .session { align-items: flex-start; flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+{% if login %}
+  <main class="login">
+    <section class="panel">
+      <h1>Agent Terminal</h1>
+      <p>Enter this machine's agent UI access token.</p>
+      {% if error %}<p class="error">{{ error }}</p>{% endif %}
+      <form method="post" action="{{ subdomain }}/login">
+        <label>Access token<input name="token" type="password" required autofocus autocomplete="current-password"></label>
+        <button type="submit">Sign in</button>
+      </form>
+    </section>
+  </main>
+{% else %}
+  <main>
+    <section class="panel">
+      <h1>Agent Terminal</h1>
+      <p>Start a real Claude or Codex terminal inside one of this machine's configured devshell workspaces.</p>
+      <form class="launch" method="post" action="{{ subdomain }}/sessions">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <label>Workspace
+          <select name="workspace" required>
+            {% for workspace in workspaces %}
+              <option value="{{ workspace.name }}">{{ workspace.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Agent
+          <select name="agent" required>
+            {% for agent in agents %}<option value="{{ agent }}">{{ agent }}</option>{% endfor %}
+          </select>
+        </label>
+        <button type="submit" {% if not workspaces or not agents %}disabled{% endif %}>New session</button>
+      </form>
+
+      <h2>Active sessions</h2>
+      <div class="sessions">
+        {% for session in sessions %}
+          <article class="session">
+            <div><strong>{{ session.agent }}</strong> in {{ session.workspace }}<small>{{ "attached" if session.attached else "detached" }}</small></div>
+            <div class="actions">
+              <a class="button" href="{{ subdomain }}/terminal/?arg={{ session.name|urlencode }}">Attach</a>
+              <form method="post" action="{{ subdomain }}/sessions/{{ session.name }}/interrupt">
+                <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+                <button class="secondary" type="submit">Ctrl+C</button>
+              </form>
+              <form method="post" action="{{ subdomain }}/sessions/{{ session.name }}/terminate" onsubmit="return confirm('Terminate this agent session?')">
+                <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+                <button class="danger" type="submit">Terminate</button>
+              </form>
+            </div>
+          </article>
+        {% else %}
+          <div class="empty">No active agent sessions.</div>
+        {% endfor %}
+      </div>
+    </section>
+  </main>
+{% endif %}
+</body>
+</html>
