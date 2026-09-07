@@ -212,23 +212,38 @@
             border: 2px solid #f5c6cb;
         }
 
+        /* Shrink-wraps the media so the card hugs it on both axes. This keeps the
+           absolutely-positioned crop/draw canvases (top:0/left:0) aligned with
+           the image once a tall image is scaled down and no longer fills the
+           container's width. */
         .image-container {
             position: relative;
             display: block;
+            width: fit-content;
             max-width: 100%;
-            margin: 20px 0;
+            margin: 20px auto;
             background-color: #ffffff;
             border-radius: 12px;
             overflow: hidden;
             box-shadow: 0 2px 8px rgba(0,0,0,0.1);
         }
 
+        /* Scale the media down to fit the viewing window on both axes. width/height
+           stay auto so the element's box tracks the rendered pixels exactly (no
+           object-fit letterboxing) — the canvas overlays and the
+           natural/offset scale factors used when applying edits depend on that.
+           The reserve subtracted from the viewport height covers the nav, title
+           and collapsed controls above the media; the max() floor keeps the media
+           usable on very short windows. The dvh copy wins where supported and is
+           ignored elsewhere. */
         .image-container img,
         .image-container video {
             display: block;
-            width: 100%;
+            width: auto;
             height: auto;
             max-width: 100%;
+            max-height: max(280px, calc(100vh - 220px));
+            max-height: max(280px, calc(100dvh - 220px));
         }
 
         #cropCanvas,
