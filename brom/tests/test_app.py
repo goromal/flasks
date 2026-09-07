@@ -288,3 +288,14 @@ def test_add_rejects_missing_dest_key(ctx):
     assert resp.status_code == 400
     assert st.list() == []
     assert aria2.added == []
+
+
+def test_index_serves_page_with_expected_hooks(ctx):
+    client = ctx[0]
+    resp = client.get(PREFIX + "/")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    for hook in ["id=\"terms\"", "id=\"category\"", "id=\"sort\"",
+                 "id=\"banner\"", "/api/search", "/api/downloads",
+                 "/api/list-dirs", "clear-finished"]:
+        assert hook in body, hook
