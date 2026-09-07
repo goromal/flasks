@@ -688,8 +688,8 @@
         function openPicker(result) {
             pending = result;
             document.getElementById('pendingName').textContent = result.name;
-            document.getElementById('pickerModal').classList.add('active');
             browseTo('/');
+            showModal();
         }
 
         function hideModal() {
@@ -718,7 +718,13 @@
                 renderPicker(body);       // body.parent may be null at "/"
             } catch (e) {
                 setError(e.message);
-                list.innerHTML = '<li><span class="dir-list-empty">' + e.message + '</span></li>';
+                list.innerHTML = '';
+                const li = document.createElement('li');
+                const span = document.createElement('span');
+                span.className = 'dir-list-empty';
+                span.textContent = e.message;
+                li.appendChild(span);
+                list.appendChild(li);
             }
         }
 

@@ -295,7 +295,10 @@ def test_index_serves_page_with_expected_hooks(ctx):
     resp = client.get(PREFIX + "/")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
-    for hook in ["id=\"terms\"", "id=\"category\"", "id=\"sort\"",
-                 "id=\"banner\"", "/api/search", "/api/downloads",
-                 "/api/list-dirs", "clear-finished"]:
+    for hook in ['id="terms"', 'id="category"', 'id="sort"', 'id="banner"',
+                 'id="error"', 'id="resultsBody"', 'id="downloadsBody"',
+                 'id="pendingName"', 'id="pickerModal"', 'id="dirList"',
+                 'id="pickerCurrentPath"', 'id="pickerUpBtn"',
+                 "/api/search", "/api/downloads", "/api/list-dirs",
+                 "clear-finished"]:
         assert hook in body, hook
