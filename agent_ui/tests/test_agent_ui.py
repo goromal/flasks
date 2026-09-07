@@ -30,6 +30,46 @@ class FakeSessions:
         self.terminated.append(name)
 
 
+class FakeWorkspaces:
+    def __init__(self):
+        self.actions = []
+
+    def list(self):
+        return [
+            {"name": "ui", "sources": ["anixpkgs", "flasks"], "root": "/dev/ui", "exists": True},
+            {"name": "tasking", "sources": ["anixpkgs", "task-tools"], "root": "/dev/tasking", "exists": True},
+        ]
+
+    def status(self, workspace):
+        return {
+            "name": workspace,
+            "root": f"/dev/{workspace}",
+            "sources": ["anixpkgs", "flasks"],
+            "scripts": ["helper"],
+            "repositories": [
+                {
+                    "name": "anixpkgs",
+                    "path": f"/dev/{workspace}/sources/anixpkgs",
+                    "present": True,
+                    "configured": True,
+                    "branch": "dev/example",
+                    "head": "0123abcdef",
+                    "clean": True,
+                    "upstream": "origin/dev/example",
+                    "ahead": 1,
+                    "behind": 0,
+                    "local": True,
+                    "saved_branch": "dev/example",
+                    "remote": "git@example/anixpkgs",
+                }
+            ],
+        }
+
+    def run(self, action, *args):
+        self.actions.append((action, *args))
+        return {"message": f"ran {action}"}
+
+
 @pytest.fixture
 def configured_app(tmp_path):
     devrc = tmp_path / "devrc"
@@ -44,6 +84,7 @@ def configured_app(tmp_path):
     token_file = tmp_path / "token"
     token_file.write_text("test-token\n", encoding="utf-8")
     manager = FakeSessions()
+    workspace_manager = FakeWorkspaces()
     app = create_app(
         subdomain="/agents",
         devrc=str(devrc),
@@ -51,9 +92,10 @@ def configured_app(tmp_path):
         token_file=str(token_file),
         secure_cookie=False,
         session_manager=manager,
+        workspace_manager=workspace_manager,
     )
     app.config.update(TESTING=True)
-    return app, manager
+    return app, manager, workspace_manager
 
 
 def login(client, token="test-token"):
@@ -85,21 +127,21 @@ def test_parse_devrc_returns_only_workspaces(tmp_path):
 
 
 def test_index_requires_login(configured_app):
-    app, _ = configured_app
+    app, _, _ = configured_app
     response = app.test_client().get("/agents/")
     assert response.status_code == 302
     assert response.headers["Location"].endswith("/agents/login")
 
 
 def test_login_rejects_wrong_token(configured_app):
-    app, _ = configured_app
+    app, _, _ = configured_app
     response = login(app.test_client(), "wrong")
     assert response.status_code == 401
     assert b"Invalid access token" in response.data
 
 
 def test_login_lists_workspaces_and_agents(configured_app):
-    app, _ = configured_app
+    app, _, _ = configured_app
     client = app.test_client()
     assert login(client).status_code == 302
     response = client.get("/agents/")
@@ -111,7 +153,7 @@ def test_login_lists_workspaces_and_agents(configured_app):
 
 
 def test_auth_check_works_for_nginx_subrequest(configured_app):
-    app, _ = configured_app
+    app, _, _ = configured_app
     client = app.test_client()
     assert client.get("/agents/auth-check").status_code == 401
     login(client)
@@ -119,7 +161,7 @@ def test_auth_check_works_for_nginx_subrequest(configured_app):
 
 
 def test_start_session_redirects_to_terminal(configured_app):
-    app, manager = configured_app
+    app, manager, _ = configured_app
     client = app.test_client()
     login(client)
     response = client.post(
@@ -138,7 +180,7 @@ def test_start_session_redirects_to_terminal(configured_app):
     [("unknown", "claude"), ("ui", "shell"), ("../../tmp", "codex")],
 )
 def test_start_session_rejects_unconfigured_values(configured_app, workspace, agent):
-    app, manager = configured_app
+    app, manager, _ = configured_app
     client = app.test_client()
     login(client)
     response = client.post(
@@ -150,7 +192,7 @@ def test_start_session_rejects_unconfigured_values(configured_app, workspace, ag
 
 
 def test_mutations_require_csrf(configured_app):
-    app, manager = configured_app
+    app, manager, _ = configured_app
     client = app.test_client()
     login(client)
     response = client.post(
@@ -161,7 +203,7 @@ def test_mutations_require_csrf(configured_app):
 
 
 def test_existing_session_actions(configured_app):
-    app, manager = configured_app
+    app, manager, _ = configured_app
     name = "agent-ui-ui--claude--0123abcd"
     manager.active = [
         {
@@ -187,7 +229,7 @@ def test_existing_session_actions(configured_app):
 
 
 def test_unknown_session_cannot_be_controlled(configured_app):
-    app, manager = configured_app
+    app, manager, _ = configured_app
     client = app.test_client()
     login(client)
     response = client.post(
@@ -196,3 +238,63 @@ def test_unknown_session_cannot_be_controlled(configured_app):
     )
     assert response.status_code == 404
     assert manager.terminated == []
+
+
+def test_workspace_pages_show_status(configured_app):
+    app, _, _ = configured_app
+    client = app.test_client()
+    login(client)
+
+    listing = client.get("/agents/workspaces/")
+    assert listing.status_code == 200
+    assert b"tasking" in listing.data
+
+    detail = client.get("/agents/workspaces/ui")
+    assert detail.status_code == 200
+    assert b"dev/example" in detail.data
+    assert b"helper" in detail.data
+
+
+def test_workspace_action_invokes_devshellctl(configured_app):
+    app, _, workspaces = configured_app
+    client = app.test_client()
+    login(client)
+    response = client.post(
+        "/agents/workspaces/ui/actions",
+        data={
+            "_csrf": csrf(client),
+            "action": "branch-create",
+            "repository": "anixpkgs",
+            "branch": "dev/new",
+        },
+    )
+    assert response.status_code == 302
+    assert workspaces.actions == [("branch-create", "ui", "anixpkgs", "dev/new")]
+
+
+def test_workspace_actions_require_known_workspace_and_csrf(configured_app):
+    app, _, workspaces = configured_app
+    client = app.test_client()
+    login(client)
+    assert client.post(
+        "/agents/workspaces/ui/actions", data={"action": "push", "repository": "anixpkgs"}
+    ).status_code == 403
+    assert client.post(
+        "/agents/workspaces/unknown/actions",
+        data={"_csrf": csrf(client), "action": "push", "repository": "anixpkgs"},
+    ).status_code == 404
+    assert workspaces.actions == []
+
+
+def test_workspace_shell_uses_persistent_terminal(configured_app):
+    app, sessions, _ = configured_app
+    client = app.test_client()
+    login(client)
+    response = client.post(
+        "/agents/workspaces/ui/shell", data={"_csrf": csrf(client)}
+    )
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith(
+        "/agents/terminal/?arg=agent-ui-ui--shell--0123abcd"
+    )
+    assert sessions.started == [("ui", "shell")]

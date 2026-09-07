@@ -29,6 +29,9 @@
     .error { color: #ff9a9a; }
     .login { max-width: 480px; margin: 80px auto; }
     .login form { display: grid; gap: 14px; }
+    nav { display: flex; gap: 8px; margin-bottom: 14px; }
+    nav a { color: #a9bdd1; padding: 7px 11px; border-radius: 7px; text-decoration: none; }
+    nav a.active { color: white; background: #263548; }
     @media (max-width: 680px) {
       main { margin: 18px auto; }
       form.launch { grid-template-columns: 1fr; }
@@ -51,6 +54,7 @@
   </main>
 {% else %}
   <main>
+    <nav><a class="active" href="{{ subdomain }}/">Agents</a><a href="{{ subdomain }}/workspaces/">Workspaces</a></nav>
     <section class="panel">
       <h1>Agent Terminal</h1>
       <p>Start a real Claude or Codex terminal inside one of this machine's configured devshell workspaces.</p>

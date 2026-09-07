@@ -1,6 +1,7 @@
 import argparse
 import hashlib
 import hmac
+import json
 import os
 import re
 import secrets
@@ -8,14 +9,14 @@ import subprocess
 from pathlib import Path
 from urllib.parse import quote
 
-from flask import Blueprint, Flask, abort, make_response, redirect, render_template, request, url_for
+from flask import Blueprint, Flask, abort, flash, make_response, redirect, render_template, request, url_for
 
 
 RESERVED_DEVRC_KEYS = {"dev_dir", "data_dir", "pkgs_dir", "pkgs_var"}
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]*$")
 SESSION_NAME = re.compile(
     r"^agent-ui-(?P<workspace>[A-Za-z0-9_][A-Za-z0-9_-]*)"
-    r"--(?P<agent>claude|codex)--(?P<id>[0-9a-f]{8})$"
+    r"--(?P<agent>claude|codex|shell)--(?P<id>[0-9a-f]{8})$"
 )
 
 
@@ -148,6 +149,56 @@ class TmuxSessions:
             raise ValueError("invalid session name")
 
 
+class WorkspaceCommandError(Exception):
+    pass
+
+
+class WorkspaceCli:
+    def __init__(self, command="devshellctl", devrc="~/.devrc", history="~/.devhist"):
+        self.command = command
+        self.devrc = os.path.expanduser(devrc)
+        self.history = os.path.expanduser(history)
+
+    def list(self):
+        return self._call("list")
+
+    def status(self, workspace):
+        return self._call("status", workspace)
+
+    def run(self, action, *args):
+        return self._call(action, *args)
+
+    def _call(self, *args):
+        try:
+            result = subprocess.run(
+                [
+                    self.command,
+                    "--devrc",
+                    self.devrc,
+                    "--history",
+                    self.history,
+                    *args,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=900,
+            )
+        except subprocess.CalledProcessError as error:
+            detail = error.stderr.strip() or error.stdout.strip() or "Workspace operation failed"
+            try:
+                detail = json.loads(detail)["error"]
+            except (ValueError, KeyError, TypeError):
+                pass
+            raise WorkspaceCommandError(detail) from error
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise WorkspaceCommandError(str(error)) from error
+        try:
+            return json.loads(result.stdout)
+        except ValueError as error:
+            raise WorkspaceCommandError("Invalid response from devshellctl") from error
+
+
 def create_app(
     subdomain="/agents",
     devrc="~/.devrc",
@@ -155,8 +206,11 @@ def create_app(
     token_file="~/.local/state/agent-ui/token",
     tmux_bin="tmux",
     session_command="agent-ui-session",
+    workspace_command="devshellctl",
+    history="~/.devhist",
     secure_cookie=True,
     session_manager=None,
+    workspace_manager=None,
 ):
     allowed_agents = tuple(agent for agent in agents if agent in {"claude", "codex"})
     auth_token = _ensure_token(token_file)
@@ -164,8 +218,18 @@ def create_app(
     cookie_name = "agent_ui_token"
     cookie_path = f"{subdomain}/" if subdomain else "/"
     sessions = session_manager or TmuxSessions(tmux_bin, session_command)
+    workspaces = workspace_manager or WorkspaceCli(workspace_command, devrc, history)
+    session_types = (*allowed_agents, "shell")
 
     app = Flask(__name__)
+    app.secret_key = hmac.new(auth_token.encode(), b"session", hashlib.sha256).digest()
+    app.config.update(
+        SESSION_COOKIE_NAME="agent_ui_session",
+        SESSION_COOKIE_PATH=cookie_path,
+        SESSION_COOKIE_SECURE=secure_cookie,
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Strict",
+    )
     bp = Blueprint("agent_ui", __name__, url_prefix=subdomain)
 
     def authenticated():
@@ -186,7 +250,7 @@ def create_app(
     def require_session(name):
         known = {
             session["name"]
-            for session in sessions.list(configured_workspaces(), allowed_agents)
+            for session in sessions.list(configured_workspaces(), session_types)
         }
         if name not in known:
             abort(404)
@@ -232,10 +296,101 @@ def create_app(
             login=False,
             workspaces=workspaces,
             agents=allowed_agents,
-            sessions=sessions.list(workspaces, allowed_agents),
+            sessions=sessions.list(workspaces, session_types),
             csrf_token=csrf_token,
             subdomain=subdomain,
         )
+
+    @bp.route("/workspaces/")
+    def workspace_index():
+        try:
+            configured = workspaces.list()
+        except WorkspaceCommandError as error:
+            configured = []
+            flash(str(error), "error")
+        return render_template(
+            "workspaces.html",
+            detail=None,
+            workspaces=configured,
+            agents=allowed_agents,
+            csrf_token=csrf_token,
+            subdomain=subdomain,
+        )
+
+    @bp.route("/workspaces/<workspace>")
+    def workspace_detail(workspace):
+        require_workspace(workspace)
+        try:
+            detail = workspaces.status(workspace)
+        except WorkspaceCommandError as error:
+            flash(str(error), "error")
+            return redirect(url_for("agent_ui.workspace_index"))
+        return render_template(
+            "workspaces.html",
+            detail=detail,
+            workspaces=None,
+            agents=allowed_agents,
+            csrf_token=csrf_token,
+            subdomain=subdomain,
+        )
+
+    @bp.route("/workspaces/create", methods=["POST"])
+    def create_workspace():
+        require_csrf()
+        workspace = request.form.get("workspace", "")
+        if not SAFE_NAME.fullmatch(workspace):
+            abort(400)
+        return run_workspace_action("create", workspace, redirect_workspace=workspace)
+
+    @bp.route("/workspaces/<workspace>/actions", methods=["POST"])
+    def workspace_action(workspace):
+        require_csrf()
+        require_workspace(workspace)
+        action = request.form.get("action", "")
+        repository = request.form.get("repository", "")
+        branch = request.form.get("branch", "")
+        name = request.form.get("name", "")
+        value = request.form.get("value", "")
+        action_args = {
+            "save-branch": (workspace, repository),
+            "branch-create": (workspace, repository, branch),
+            "checkout": (workspace, repository, branch),
+            "push": (workspace, repository),
+            "sync": (workspace, repository),
+            "rebase-push": (workspace, repository),
+            "add-source": (workspace, name, value),
+            "add-script": (workspace, name, value),
+        }
+        if action not in action_args:
+            abort(400)
+        return run_workspace_action(action, *action_args[action], redirect_workspace=workspace)
+
+    @bp.route("/workspaces/<workspace>/shell", methods=["POST"])
+    def workspace_shell(workspace):
+        require_csrf()
+        require_workspace(workspace)
+        try:
+            name = sessions.start(workspace, "shell")
+        except subprocess.CalledProcessError:
+            abort(500)
+        return redirect(f"{subdomain}/terminal/?arg={quote(name)}")
+
+    def require_workspace(workspace):
+        known = {item["name"] for item in configured_workspaces()}
+        if workspace not in known:
+            abort(404)
+
+    def run_workspace_action(action, *args, redirect_workspace=None):
+        try:
+            result = workspaces.run(action, *args)
+            flash(result.get("message", "Workspace updated"), "success")
+        except WorkspaceCommandError as error:
+            flash(str(error), "error")
+        if redirect_workspace:
+            known = {item["name"] for item in configured_workspaces()}
+            if redirect_workspace in known:
+                return redirect(url_for("agent_ui.workspace_detail", workspace=redirect_workspace))
+        return redirect(url_for("agent_ui.workspace_index"))
 
     @bp.route("/sessions", methods=["POST"])
     def start_session():
@@ -284,6 +439,8 @@ def main():
     parser.add_argument("--token-file", default="~/.local/state/agent-ui/token")
     parser.add_argument("--tmux-bin", default="tmux")
     parser.add_argument("--session-command", default="agent-ui-session")
+    parser.add_argument("--workspace-command", default="devshellctl")
+    parser.add_argument("--history", default="~/.devhist")
     args = parser.parse_args()
 
     app = create_app(
@@ -293,6 +450,8 @@ def main():
         token_file=args.token_file,
         tmux_bin=args.tmux_bin,
         session_command=args.session_command,
+        workspace_command=args.workspace_command,
+        history=args.history,
     )
     app.run(host="127.0.0.1", port=args.port, debug=False, threaded=True)
 
