@@ -243,8 +243,8 @@ def create_app(
 
     def configured_workspaces():
         try:
-            return parse_devrc(devrc)
-        except OSError:
+            return workspaces.list()
+        except WorkspaceCommandError:
             return []
 
     def require_session(name):
