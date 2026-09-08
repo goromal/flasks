@@ -20,7 +20,17 @@ class FakeSessions:
 
     def start(self, workspace, agent):
         self.started.append((workspace, agent))
-        return f"agent-ui-{workspace}--{agent}--0123abcd"
+        name = f"agent-ui-{workspace}--{agent}--0123abcd"
+        self.active.append(
+            {
+                "name": name,
+                "workspace": workspace,
+                "agent": agent,
+                "created": 1,
+                "attached": 0,
+            }
+        )
+        return name
 
     def interrupt(self, name):
         self.interrupted.append(name)
@@ -179,7 +189,7 @@ def test_start_session_redirects_to_terminal(configured_app):
     )
     assert response.status_code == 302
     assert response.headers["Location"].endswith(
-        "/agents/terminal/?arg=agent-ui-ui--codex--0123abcd"
+        "/agents/sessions/agent-ui-ui--codex--0123abcd/terminal"
     )
     assert manager.started == [("ui", "codex")]
 
@@ -315,6 +325,19 @@ def test_workspace_shell_uses_persistent_terminal(configured_app):
     response = client.post("/agents/workspaces/ui/shell", data={"_csrf": csrf(client)})
     assert response.status_code == 302
     assert response.headers["Location"].endswith(
-        "/agents/terminal/?arg=agent-ui-ui--shell--0123abcd"
+        "/agents/sessions/agent-ui-ui--shell--0123abcd/terminal"
     )
     assert sessions.started == [("ui", "shell")]
+
+
+def test_terminal_page_has_agents_navigation_and_embeds_ttyd(configured_app):
+    app, sessions, _ = configured_app
+    client = app.test_client()
+    login(client)
+    name = sessions.start("ui", "claude")
+
+    response = client.get(f"/agents/sessions/{name}/terminal")
+
+    assert response.status_code == 200
+    assert b'class="agents-link" href="/agents/"' in response.data
+    assert f"/agents/terminal/?arg={name}".encode() in response.data

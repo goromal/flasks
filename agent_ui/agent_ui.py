@@ -7,7 +7,6 @@ import re
 import secrets
 import subprocess
 from pathlib import Path
-from urllib.parse import quote
 
 from flask import (
     Blueprint,
@@ -390,7 +389,7 @@ def create_app(
             name = sessions.start(workspace, "shell")
         except subprocess.CalledProcessError:
             abort(500)
-        return redirect(f"{subdomain}/terminal/?arg={quote(name)}")
+        return redirect(url_for("agent_ui.terminal", name=name))
 
     def require_workspace(workspace):
         known = {item["name"] for item in configured_workspaces()}
@@ -423,7 +422,16 @@ def create_app(
             name = sessions.start(workspace, agent)
         except subprocess.CalledProcessError:
             abort(500)
-        return redirect(f"{subdomain}/terminal/?arg={quote(name)}")
+        return redirect(url_for("agent_ui.terminal", name=name))
+
+    @bp.route("/sessions/<name>/terminal")
+    def terminal(name):
+        require_session(name)
+        return render_template(
+            "terminal.html",
+            name=name,
+            subdomain=subdomain,
+        )
 
     @bp.route("/sessions/<name>/interrupt", methods=["POST"])
     def interrupt_session(name):

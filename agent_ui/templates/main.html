@@ -81,7 +81,7 @@
           <article class="session">
             <div><strong>{{ session.agent }}</strong> in {{ session.workspace }}<small>{{ "attached" if session.attached else "detached" }}</small></div>
             <div class="actions">
-              <a class="button" href="{{ subdomain }}/terminal/?arg={{ session.name|urlencode }}">Attach</a>
+              <a class="button" href="{{ subdomain }}/sessions/{{ session.name|urlencode }}/terminal">Attach</a>
               <form method="post" action="{{ subdomain }}/sessions/{{ session.name }}/interrupt">
                 <input type="hidden" name="_csrf" value="{{ csrf_token }}">
                 <button class="secondary" type="submit">Ctrl+C</button>

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Terminal</title>
+  <style>
+    html, body, iframe { width: 100%; height: 100%; margin: 0; border: 0; background: #000; }
+    .agents-link {
+      position: fixed;
+      z-index: 10;
+      top: 12px;
+      right: 18px;
+      padding: 8px 13px;
+      border: 1px solid #526173;
+      border-radius: 8px;
+      background: #18212ee8;
+      box-shadow: 0 4px 14px #0008;
+      color: #eef4f8;
+      font: 650 14px/1.2 system-ui, sans-serif;
+      text-decoration: none;
+    }
+    .agents-link:hover { background: #263548; }
+  </style>
+</head>
+<body>
+  <a class="agents-link" href="{{ subdomain }}/">Agents</a>
+  <iframe src="{{ subdomain }}/terminal/?arg={{ name|urlencode }}" title="Agent terminal"></iframe>
+</body>
+</html>
