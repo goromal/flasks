@@ -5,7 +5,9 @@ JSON-RPC, and history to SQLite. This module wires those together and owns no
 logic of its own beyond request validation.
 """
 import argparse
+import logging
 import os
+import re
 import threading
 import time
 
@@ -19,7 +21,30 @@ import store
 POLL_INTERVAL_S = 2.0
 
 
-def create_app(st, aria2, subdomain="/brom"):
+class Aria2Health:
+    """Liveness published by the poller, read by the /api/downloads route.
+
+    The route must not reconcile: spec 5 requires the browser to read the DB
+    only, so that N open tabs cannot advance missing_polls N times per cycle
+    and collapse the interrupted grace window.
+    """
+
+    def __init__(self):
+        self._up = True
+        self._lock = threading.Lock()
+
+    def set(self, up):
+        with self._lock:
+            self._up = up
+
+    def get(self):
+        with self._lock:
+            return self._up
+
+
+def create_app(st, aria2, subdomain="/brom", health=None):
+    if health is None:
+        health = Aria2Health()
     subdomain = subdomain.rstrip("/")
     app = flask.Flask(__name__, static_url_path=subdomain)
     bp = flask.Blueprint("brom", __name__)
@@ -56,6 +81,8 @@ def create_app(st, aria2, subdomain="/brom"):
 
         if not magnet or not info_hash:
             return flask.jsonify({"error": "Missing magnet or info_hash"}), 400
+        if not re.fullmatch(r"[0-9a-f]{40}", info_hash):
+            return flask.jsonify({"error": "Malformed info_hash"}), 400
         if not dest_raw:
             return flask.jsonify({"error": "Missing destination"}), 400
         dest = os.path.realpath(dest_raw)
@@ -88,12 +115,7 @@ def create_app(st, aria2, subdomain="/brom"):
 
     @bp.route("/api/downloads")
     def downloads():
-        up = True
-        try:
-            st.reconcile(aria2.snapshot())
-        except aria2rpc.Aria2Error:
-            up = False
-        return flask.jsonify({"downloads": st.list(), "aria2_up": up})
+        return flask.jsonify({"downloads": st.list(), "aria2_up": health.get()})
 
     def _control(did, action):
         row = st.get(did)
@@ -130,6 +152,11 @@ def create_app(st, aria2, subdomain="/brom"):
         row = st.get(did)
         if row is None:
             return flask.jsonify({"error": "No such download"}), 404
+        if row["status"] not in store.TERMINAL:
+            return (
+                flask.jsonify({"error": "Download is still active"}),
+                409,
+            )
         _purge(row["gid"])
         st.delete(did)
         return flask.jsonify({"ok": True})
@@ -179,12 +206,16 @@ def create_app(st, aria2, subdomain="/brom"):
     return app
 
 
-def poll_forever(st, aria2, interval=POLL_INTERVAL_S):
+def poll_forever(st, aria2, health, interval=POLL_INTERVAL_S):
     while True:
         try:
             st.reconcile(aria2.snapshot())
+            health.set(True)
         except aria2rpc.Aria2Error:
-            pass
+            health.set(False)
+        except Exception:
+            # The poller is the only reconciler; it must never die silently.
+            logging.exception("brom poller iteration failed")
         time.sleep(interval)
 
 
@@ -206,12 +237,13 @@ def run():
 
     st = store.Store(os.path.join(args.data_dir, "brom.db"))
     aria2 = aria2rpc.Aria2Client(args.aria2_url, secret)
+    health = Aria2Health()
 
     threading.Thread(
-        target=poll_forever, args=(st, aria2), daemon=True
+        target=poll_forever, args=(st, aria2, health), daemon=True
     ).start()
 
-    app = create_app(st, aria2, subdomain=args.subdomain)
+    app = create_app(st, aria2, subdomain=args.subdomain, health=health)
     app.run(host="127.0.0.1", port=args.port, debug=False)
 
 

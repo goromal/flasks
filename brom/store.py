@@ -175,7 +175,7 @@ class Store:
     def _apply(self, row, entry, now):
         followed = entry.get("followedBy") or []
         gid = followed[0] if followed else entry["gid"]
-        has_meta = bool(entry.get("bittorrent"))
+        has_meta = bool((entry.get("bittorrent") or {}).get("info"))
         status = _ARIA2_STATUS.get(entry.get("status"), row["status"])
 
         if followed:

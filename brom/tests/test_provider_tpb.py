@@ -109,6 +109,17 @@ def test_category_and_sort_reach_the_cli(monkeypatch):
     assert cmd[-1] == "bunny"
 
 
+def test_term_starting_with_dash_is_passed_after_separator(monkeypatch):
+    """Without a `--` separator, a term like `-foo` is parsed by argparse as
+    an option and ichabod exits 2, surfacing as a 502 with a usage message."""
+    calls = fake_run(monkeypatch, FakeProc(stdout=json.dumps(PAYLOAD)))
+    provider_tpb.search("-foo bar")
+    cmd = calls[0]
+    assert "--" in cmd
+    sep = cmd.index("--")
+    assert cmd[sep + 1:] == ["-foo", "bar"]
+
+
 def test_registry_lookup():
     assert providers.get("tpb") is not None
     with pytest.raises(providers.SearchError):

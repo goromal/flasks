@@ -24,6 +24,7 @@ class FakeAria2:
         self.purged = []
         self.purge_fails = False
         self.snap = []
+        self.snapshot_calls = 0
 
     def _check(self):
         if not self.up:
@@ -52,6 +53,7 @@ class FakeAria2:
         self.purged.append(gid)
 
     def snapshot(self):
+        self.snapshot_calls += 1
         self._check()
         return self.snap
 
@@ -73,8 +75,10 @@ def ctx(tmp_path, monkeypatch):
     provider = FakeProvider()
     monkeypatch.setattr(providers, "get", lambda name=None: provider)
     st = store.Store(str(tmp_path / "brom.db"))
-    app = bromserver.create_app(st, aria2, subdomain=PREFIX)
+    health = bromserver.Aria2Health()
+    app = bromserver.create_app(st, aria2, subdomain=PREFIX, health=health)
     app.config["TESTING"] = True
+    app.brom_health = health  # exposed for tests that drive liveness directly
     return app.test_client(), st, aria2, provider, tmp_path
 
 
@@ -163,15 +167,33 @@ def test_add_when_aria2_down_is_503_and_writes_nothing(ctx):
 
 
 def test_downloads_reports_aria2_up_flag(ctx):
+    """The route reads liveness published by the poller; it does not
+    reconcile (spec 5). Drive the health flag the way poll_forever would."""
     client, st, aria2, _, tmp_path = ctx
     dest = tmp_path / "dl"
     dest.mkdir()
     client.post(PREFIX + "/api/add", json=add_body(dest))
+    health = client.application.brom_health
     assert client.get(PREFIX + "/api/downloads").get_json()["aria2_up"] is True
     aria2.up = False
+    health.set(False)
     body = client.get(PREFIX + "/api/downloads").get_json()
     assert body["aria2_up"] is False
     assert len(body["downloads"]) == 1
+
+
+def test_downloads_route_does_not_reconcile(ctx):
+    """Spec 5: the browser reads the DB only. If the route reconciled, N
+    open tabs would advance missing_polls N times per 2s cycle and collapse
+    the interrupted grace window."""
+    client, st, aria2, _, tmp_path = ctx
+    dest = tmp_path / "dl"
+    dest.mkdir()
+    client.post(PREFIX + "/api/add", json=add_body(dest))
+    assert aria2.snapshot_calls == 0
+    client.get(PREFIX + "/api/downloads")
+    client.get(PREFIX + "/api/downloads")
+    assert aria2.snapshot_calls == 0
 
 
 def test_cancel_sets_cancelled(ctx):
@@ -203,6 +225,7 @@ def test_delete_removes_row_and_leaves_file(ctx):
     payload = dest / "movie.mkv"
     payload.write_text("bytes")
     did = client.post(PREFIX + "/api/add", json=add_body(dest)).get_json()["id"]
+    st.set_status(did, "complete")
     assert client.delete("{}/api/downloads/{}".format(PREFIX, did)).status_code == 200
     assert st.get(did) is None
     assert payload.exists()
@@ -214,6 +237,7 @@ def test_delete_succeeds_when_purge_fails(ctx):
     dest.mkdir()
     aria2.purge_fails = True
     did = client.post(PREFIX + "/api/add", json=add_body(dest)).get_json()["id"]
+    st.set_status(did, "complete")
     assert client.delete("{}/api/downloads/{}".format(PREFIX, did)).status_code == 200
     assert st.get(did) is None
 
@@ -221,6 +245,21 @@ def test_delete_succeeds_when_purge_fails(ctx):
 def test_delete_unknown_id_is_404(ctx):
     client = ctx[0]
     assert client.delete(PREFIX + "/api/downloads/999").status_code == 404
+
+
+def test_delete_non_terminal_row_is_409(ctx):
+    """Fix 8: deleting a live row would remove the record while the aria2
+    download keeps running untracked (remove_download_result fails silently
+    and gid is lost). Guard on TERMINAL status."""
+    client, st, aria2, _, tmp_path = ctx
+    dest = tmp_path / "dl"
+    dest.mkdir()
+    did = client.post(PREFIX + "/api/add", json=add_body(dest)).get_json()["id"]
+    assert st.get(did)["status"] == "queued"
+    resp = client.delete("{}/api/downloads/{}".format(PREFIX, did))
+    assert resp.status_code == 409
+    assert st.get(did) is not None
+    assert aria2.purged == []
 
 
 def test_clear_finished_spares_active_rows(ctx):
@@ -235,7 +274,7 @@ def test_clear_finished_spares_active_rows(ctx):
         {"gid": live["gid"], "status": "active", "infoHash": "dd" * 20,
          "bittorrent": {"info": {"name": "Live"}}},
     ]
-    client.get(PREFIX + "/api/downloads")  # reconcile
+    st.reconcile(aria2.snapshot())  # the route no longer reconciles (spec 5)
     resp = client.post(PREFIX + "/api/downloads/clear-finished")
     assert resp.status_code == 200
     assert resp.get_json()["cleared"] == 1
@@ -288,6 +327,69 @@ def test_add_rejects_missing_dest_key(ctx):
     assert resp.status_code == 400
     assert st.list() == []
     assert aria2.added == []
+
+
+def test_add_rejects_malformed_info_hash(ctx):
+    """info_hash is the durable join key (spec 5.2). A hand-made request with
+    a bad hash must be rejected before it reaches the store or aria2, or the
+    row would never be reconciled and would go interrupted while the
+    download runs untracked."""
+    client, st, aria2, _, tmp_path = ctx
+    dest = tmp_path / "dl"
+    dest.mkdir()
+    body = add_body(dest, info_hash="not-a-valid-hash")
+    resp = client.post(PREFIX + "/api/add", json=body)
+    assert resp.status_code == 400
+    assert st.list() == []
+    assert aria2.added == []
+
+
+class _StopPolling(Exception):
+    """Sentinel to break out of poll_forever's `while True` in tests."""
+
+
+def test_poll_forever_survives_non_aria2_errors(monkeypatch):
+    """Fix 4: fix 3 makes poll_forever the sole reconciler, so a stray
+    KeyError/ValueError/sqlite3.Error from a malformed aria2 entry must not
+    kill the daemon thread silently -- it should log and keep polling."""
+
+    class FlakyAria2:
+        def __init__(self):
+            self.calls = 0
+
+        def snapshot(self):
+            self.calls += 1
+            if self.calls == 1:
+                raise ValueError("bad totalLength")
+            return []
+
+    class FakeStore:
+        def __init__(self):
+            self.reconciled = 0
+
+        def reconcile(self, snapshot):
+            self.reconciled += 1
+
+    st = FakeStore()
+    aria2 = FlakyAria2()
+    health = bromserver.Aria2Health()
+    health.set(False)
+
+    sleeps = {"n": 0}
+
+    def fake_sleep(_):
+        sleeps["n"] += 1
+        if sleeps["n"] >= 2:
+            raise _StopPolling()
+
+    monkeypatch.setattr(bromserver.time, "sleep", fake_sleep)
+
+    with pytest.raises(_StopPolling):
+        bromserver.poll_forever(st, aria2, health, interval=0)
+
+    assert aria2.calls == 2
+    assert st.reconciled == 1  # the second iteration reconciled fine
+    assert health.get() is True  # ... and published liveness
 
 
 def test_index_serves_page_with_expected_hooks(ctx):

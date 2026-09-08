@@ -27,7 +27,7 @@ def search(terms, category=0, sort=None):
     cmd = [ICHABOD, "--json", "--disable-colors", "-c", str(category)]
     if sort:
         cmd += ["-s", str(sort)]
-    cmd += terms.split()
+    cmd += ["--"] + terms.split()
 
     try:
         proc = subprocess.run(

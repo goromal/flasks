@@ -121,6 +121,18 @@ def test_metadata_phase_reports_metadata_status(tmp_path):
     assert s.get(did)["status"] == "metadata"
 
 
+def test_metadata_phase_with_announcelist_only_is_not_complete(tmp_path):
+    """aria2 1.37 reports bittorrent={"announceList": []} during the metadata
+    phase: the key is present but info is absent. Checking the key rather than
+    bittorrent.info made the spec 5.1 rule-2 guard inert."""
+    s = make(tmp_path)
+    did = add(s, gid="gid-meta")
+    s.reconcile([entry("gid-meta", "complete", bittorrent={"announceList": []})])
+    row = s.get(did)
+    assert row["status"] == "metadata"
+    assert row["completed_at"] is None
+
+
 def test_completion_stamps_completed_at(tmp_path):
     s = make(tmp_path)
     did = add(s, gid="gid-content")

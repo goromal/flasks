@@ -89,11 +89,11 @@ class Aria2Client:
             {"methodName": "aria2.tellActive", "params": [self._token, STATUS_KEYS]},
             {
                 "methodName": "aria2.tellWaiting",
-                "params": [self._token, 0, 100, STATUS_KEYS],
+                "params": [self._token, 0, 1000, STATUS_KEYS],
             },
             {
                 "methodName": "aria2.tellStopped",
-                "params": [self._token, 0, 100, STATUS_KEYS],
+                "params": [self._token, 0, 1000, STATUS_KEYS],
             },
         ]
         groups = self._post(
