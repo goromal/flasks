@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Workspace Console</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #10151d; color: #e8edf2; font: 15px/1.45 system-ui, sans-serif; }
+    main { width: min(1180px, calc(100% - 28px)); margin: 32px auto; }
+    nav { display: flex; gap: 8px; margin-bottom: 14px; }
+    nav a { color: #a9bdd1; padding: 7px 11px; border-radius: 7px; text-decoration: none; }
+    nav a.active { color: white; background: #263548; }
+    .panel { background: #18212c; border: 1px solid #2d3b4c; border-radius: 14px; padding: 22px; box-shadow: 0 16px 40px #0005; }
+    h1 { margin: 0 0 6px; font-size: 1.7rem; }
+    h2 { margin: 26px 0 12px; font-size: 1.1rem; color: #a9bdd1; }
+    h3 { margin: 0; font-size: 1rem; }
+    p, small { color: #9fafbf; }
+    code { color: #bdd8f2; }
+    a { color: #72adff; }
+    form { margin: 0; }
+    input { border: 1px solid #3a4b5e; border-radius: 8px; background: #0f151d; color: #eef4f8; padding: 9px 11px; font: inherit; min-width: 0; }
+    button, .button { border: 0; border-radius: 8px; padding: 9px 13px; background: #2f81f7; color: white; font: inherit; font-weight: 650; text-decoration: none; cursor: pointer; display: inline-block; }
+    button.secondary, .button.secondary { background: #3a4858; }
+    button.warning { background: #95651d; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    .toolbar, .inline, .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .toolbar { justify-content: space-between; margin-bottom: 18px; }
+    .workspace-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+    .workspace { padding: 15px; background: #111923; border: 1px solid #2b3948; border-radius: 10px; text-decoration: none; color: inherit; }
+    .workspace:hover { border-color: #4b6d91; }
+    .workspace small { display: block; margin-top: 5px; }
+    .repo-list { display: grid; gap: 10px; }
+    .repo { padding: 14px; background: #111923; border: 1px solid #2b3948; border-radius: 10px; }
+    .repo-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+    .meta { display: flex; flex-wrap: wrap; gap: 6px; margin: 7px 0 11px; }
+    .badge { border-radius: 99px; padding: 2px 8px; background: #2b3948; color: #b9c9d8; font-size: .78rem; }
+    .badge.good { background: #194d37; color: #a9e8c8; }
+    .badge.bad { background: #632f34; color: #ffc1c5; }
+    .branch-form { display: grid; grid-template-columns: minmax(150px, 260px) auto auto; gap: 8px; margin-top: 9px; }
+    .add-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .add-card { padding: 14px; border: 1px solid #2b3948; border-radius: 10px; }
+    .add-card form { display: grid; gap: 8px; }
+    .notice { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; background: #194d37; color: #bdebd2; }
+    .notice.error { background: #632f34; color: #ffd0d3; }
+    .empty { padding: 16px; border: 1px dashed #405064; border-radius: 9px; color: #91a2b3; }
+    @media (max-width: 720px) {
+      main { margin: 18px auto; }
+      .add-grid { grid-template-columns: 1fr; }
+      .branch-form { grid-template-columns: 1fr; }
+      .repo-head { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <nav><a href="{{ subdomain }}/">Agents</a><a class="active" href="{{ subdomain }}/workspaces/">Workspaces</a></nav>
+    {% for category, message in get_flashed_messages(with_categories=true) %}
+      <p class="notice {{ category }}">{{ message }}</p>
+    {% endfor %}
+    <section class="panel">
+      {% if detail %}
+        <div class="toolbar">
+          <div><h1>{{ detail.name }}</h1><small><code>{{ detail.root }}</code></small></div>
+          <div class="actions">
+            <form method="post" action="{{ subdomain }}/workspaces/{{ detail.name }}/shell">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+              <button type="submit">Open shell</button>
+            </form>
+            {% for agent in agents %}
+              <form method="post" action="{{ subdomain }}/sessions">
+                <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+                <input type="hidden" name="workspace" value="{{ detail.name }}">
+                <input type="hidden" name="agent" value="{{ agent }}">
+                <button class="secondary" type="submit">Open {{ agent|capitalize }}</button>
+              </form>
+            {% endfor %}
+          </div>
+        </div>
+
+        <h2>Repositories</h2>
+        <div class="repo-list">
+          {% for repo in detail.repositories %}
+            <article class="repo">
+              {% if repo.present %}
+                <div class="repo-head">
+                  <div>
+                    <h3>{{ repo.name }}</h3>
+                    <div class="meta">
+                      <span class="badge {{ 'good' if repo.clean else 'bad' }}">{{ 'clean' if repo.clean else 'dirty' }}</span>
+                      <span class="badge">{{ repo.branch }}</span>
+                      <span class="badge">{{ repo.head[:7] }}</span>
+                      {% if repo.upstream %}<span class="badge">↑{{ repo.ahead }} ↓{{ repo.behind }}</span>{% else %}<span class="badge bad">no upstream</span>{% endif %}
+                      {% if repo.saved_branch %}<span class="badge {{ 'good' if repo.saved_branch == repo.branch else '' }}">saved: {{ repo.saved_branch }}</span>{% endif %}
+                    </div>
+                  </div>
+                  <div class="actions">
+                    <form method="post" action="{{ subdomain }}/workspaces/{{ detail.name }}/actions">
+                      <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="save-branch"><input type="hidden" name="repository" value="{{ repo.name }}">
+                      <button class="secondary" type="submit">Save branch</button>
+                    </form>
+                    <form method="post" action="{{ subdomain }}/workspaces/{{ detail.name }}/actions" onsubmit="return confirm('Push the current branch to origin?')">
+                      <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="push"><input type="hidden" name="repository" value="{{ repo.name }}">
+                      <button class="secondary" type="submit">Push</button>
+                    </form>
+                    <form method="post" action="{{ subdomain }}/workspaces/{{ detail.name }}/actions" onsubmit="return confirm('Switch to the saved branch and fast-forward it?')">
+                      <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="sync"><input type="hidden" name="repository" value="{{ repo.name }}">
+                      <button class="secondary" type="submit" {% if not repo.saved_branch or not repo.clean %}disabled{% endif %}>Sync saved</button>
+                    </form>
+                    <form method="post" action="{{ subdomain }}/workspaces/{{ detail.name }}/actions" onsubmit="return confirm('Rebase and push the current branch?')">
+                      <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="rebase-push"><input type="hidden" name="repository" value="{{ repo.name }}">
+                      <button class="warning" type="submit" {% if not repo.clean %}disabled{% endif %}>Rebase + push</button>
+                    </form>
+                  </div>
+                </div>
+                <form class="branch-form" method="post" action="{{ subdomain }}/workspaces/{{ detail.name }}/actions">
+                  <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="repository" value="{{ repo.name }}">
+                  <input name="branch" required placeholder="branch name">
+                  <button class="secondary" name="action" value="branch-create" type="submit">Create</button>
+                  <button class="secondary" name="action" value="checkout" type="submit" {% if not repo.clean %}disabled{% endif %}>Checkout</button>
+                </form>
+              {% else %}
+                <h3>{{ repo.name }}</h3><p>Configured but not present. Run workspace setup after checking its source definition.</p>
+              {% endif %}
+            </article>
+          {% else %}
+            <div class="empty">No repositories found.</div>
+          {% endfor %}
+        </div>
+
+        <h2>Add to workspace</h2>
+        <div class="add-grid">
+          <div class="add-card"><h3>Repository</h3><p>Use an existing devrc name, or provide a URL for a new definition.</p>
+            <form method="post" action="{{ subdomain }}/workspaces/{{ detail.name }}/actions">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="add-source">
+              <input name="name" required placeholder="repository name"><input name="value" placeholder="git URL (if new)"><button type="submit">Add repository</button>
+            </form>
+          </div>
+          <div class="add-card"><h3>Script</h3><p>Use an existing devrc name, or provide a data-relative path for a new definition.</p>
+            <form method="post" action="{{ subdomain }}/workspaces/{{ detail.name }}/actions">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="add-script">
+              <input name="name" required placeholder="script name"><input name="value" placeholder="data-relative path (if new)"><button type="submit">Add script</button>
+            </form>
+          </div>
+        </div>
+        {% if detail.scripts %}<h2>Installed scripts</h2><p><code>{{ detail.scripts|join(', ') }}</code></p>{% endif %}
+      {% else %}
+        <div class="toolbar"><div><h1>Workspaces</h1><p>Inspect and manage this machine's devshell workspaces.</p></div></div>
+        <div class="workspace-grid">
+          {% for workspace in workspaces %}
+            <a class="workspace" href="{{ subdomain }}/workspaces/{{ workspace.name }}"><h3>{{ workspace.name }}</h3><small>{{ workspace.sources|length }} configured items · {{ 'ready' if workspace.exists else 'not built' }}</small></a>
+          {% else %}<div class="empty">No configured workspaces.</div>{% endfor %}
+        </div>
+        <h2>Create workspace</h2>
+        <form class="inline" method="post" action="{{ subdomain }}/workspaces/create">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input name="workspace" required pattern="[A-Za-z0-9_][A-Za-z0-9_-]*" placeholder="workspace name"><button type="submit">Create</button>
+        </form>
+      {% endif %}
+    </section>
+  </main>
+</body>
+</html>
