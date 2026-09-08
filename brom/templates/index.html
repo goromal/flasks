@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Torrent Search</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f8f9fa;
+            color: #212529;
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 20px 15px 60px 15px;
+        }
+
+        h1 {
+            color: #212529;
+            margin: 0 0 24px 0;
+            font-size: 2rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        h2 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #495057;
+            margin: 0 0 14px 0;
+        }
+
+        @media (max-width: 767px) {
+            h1 { font-size: 1.5rem; }
+            .container { padding: 15px 10px 40px 10px; }
+        }
+
+        /* Cards */
+        .card {
+            background: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+
+        .search-row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 4px;
+        }
+
+        #terms {
+            flex: 2;
+            min-width: 200px;
+            padding: 12px 16px;
+            font-size: 1rem;
+            font-family: inherit;
+            border: 2px solid #ced4da;
+            border-radius: 8px;
+            transition: border-color 0.2s;
+            min-height: 48px;
+        }
+
+        #terms:focus {
+            outline: none;
+            border-color: #4e73df;
+            box-shadow: 0 0 0 3px rgba(78,115,223,0.15);
+        }
+
+        select {
+            padding: 12px 14px;
+            font-size: 1rem;
+            font-family: inherit;
+            border: 2px solid #ced4da;
+            border-radius: 8px;
+            min-height: 48px;
+            background-color: #fff;
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 12px 24px;
+            cursor: pointer;
+            background-color: #4e73df;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 500;
+            transition: background-color 0.2s ease, box-shadow 0.2s ease;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            min-height: 48px;
+            touch-action: manipulation;
+            white-space: nowrap;
+        }
+
+        .btn:hover {
+            background-color: #2e59d9;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        }
+
+        .btn:active { opacity: 0.85; }
+
+        .btn:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+        }
+
+        .btn-green {
+            background-color: #1cc88a;
+        }
+        .btn-green:hover { background-color: #17a673; }
+
+        .btn-danger {
+            background-color: #e74a3b;
+        }
+        .btn-danger:hover { background-color: #d32f2f; }
+
+        .btn-secondary {
+            background-color: #6c757d;
+        }
+        .btn-secondary:hover { background-color: #5a6268; }
+
+        .btn-sm {
+            padding: 6px 14px;
+            min-height: 32px;
+            font-size: 0.85rem;
+        }
+
+        /* Error message */
+        .error-message {
+            padding: 14px 18px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            display: none;
+            font-size: 1rem;
+            font-weight: 500;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 2px solid #f5c6cb;
+        }
+
+        .error-message.active { display: block; }
+
+        /* aria2-down banner */
+        .banner {
+            padding: 14px 18px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 500;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+            background-color: #fff3cd;
+            color: #856404;
+            border: 2px solid #ffe69c;
+        }
+
+        .banner[hidden] { display: none; }
+
+        /* Tables */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.92rem;
+        }
+
+        .table-scroll {
+            overflow-x: auto;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 10px 8px;
+            border-bottom: 1px solid #e9ecef;
+            vertical-align: middle;
+        }
+
+        th {
+            color: #6c757d;
+            font-weight: 600;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            white-space: nowrap;
+        }
+
+        td.name-cell {
+            max-width: 380px;
+            word-break: break-word;
+        }
+
+        td.num {
+            text-align: right;
+            white-space: nowrap;
+        }
+
+        .empty-row td {
+            text-align: center;
+            color: #6c757d;
+            padding: 24px 8px;
+        }
+
+        .row-actions {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        /* Progress bar */
+        .progress-track {
+            width: 100%;
+            min-width: 120px;
+            height: 18px;
+            background: #e9ecef;
+            border-radius: 9px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: #4e73df;
+            border-radius: 9px;
+            transition: width 0.3s ease;
+        }
+
+        .progress-label {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.72rem;
+            color: #212529;
+            font-weight: 600;
+        }
+
+        .progress-track.indeterminate .progress-fill {
+            width: 100%;
+            background: repeating-linear-gradient(
+                45deg,
+                #b7c6f5,
+                #b7c6f5 10px,
+                #dbe3fa 10px,
+                #dbe3fa 20px
+            );
+            animation: indeterminate-slide 1s linear infinite;
+        }
+
+        @keyframes indeterminate-slide {
+            from { background-position: 0 0; }
+            to { background-position: 28px 0; }
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: capitalize;
+            background: #e9ecef;
+            color: #495057;
+        }
+
+        .status-downloading { background: #d4edda; color: #155724; }
+        .status-paused { background: #fff3cd; color: #856404; }
+        .status-metadata { background: #cce5ff; color: #004085; }
+        .status-queued { background: #e2e3e5; color: #383d41; }
+        .status-complete { background: #d1e7dd; color: #0f5132; }
+        .status-error, .status-interrupted { background: #f8d7da; color: #721c24; }
+        .status-cancelled { background: #e9ecef; color: #6c757d; }
+
+        .error-text {
+            color: #e74a3b;
+            font-size: 0.8rem;
+        }
+
+        /* Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.55);
+            z-index: 8000;
+            justify-content: center;
+            align-items: center;
+            padding: 16px;
+        }
+
+        .modal-overlay.active { display: flex; }
+
+        .modal-box {
+            background: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+            width: 100%;
+            max-width: 560px;
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 18px 20px 14px 20px;
+            border-bottom: 2px solid #e9ecef;
+        }
+
+        .modal-header h2 {
+            margin: 0;
+            font-size: 1.15rem;
+            font-weight: 600;
+            color: #212529;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 1.4rem;
+            cursor: pointer;
+            color: #6c757d;
+            line-height: 1;
+            padding: 4px 8px;
+            border-radius: 4px;
+            transition: color 0.15s;
+        }
+
+        .modal-close:hover { color: #212529; }
+
+        .modal-body {
+            flex: 1;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            padding: 16px 20px;
+        }
+
+        .modal-body .pending-name {
+            font-size: 0.9rem;
+            color: #495057;
+            margin: 0 0 12px 0;
+            word-break: break-word;
+        }
+
+        /* Dir picker */
+        .dir-picker {
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+            overflow: hidden;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+
+        .dir-picker-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 14px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e9ecef;
+            flex-wrap: wrap;
+            flex-shrink: 0;
+        }
+
+        .dir-picker-path {
+            font-family: monospace;
+            font-size: 0.9rem;
+            color: #495057;
+            flex: 1;
+            word-break: break-all;
+        }
+
+        .dir-list {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+            overflow-y: auto;
+            flex: 1;
+            min-height: 120px;
+            max-height: 260px;
+        }
+
+        .dir-list li + li {
+            border-top: 1px solid #f1f3f5;
+        }
+
+        .dir-list-empty {
+            padding: 24px 16px;
+            color: #6c757d;
+            font-size: 0.95rem;
+            text-align: center;
+            display: block;
+        }
+
+        .dir-btn {
+            width: 100%;
+            padding: 10px 16px;
+            text-align: left;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 0.95rem;
+            color: #212529;
+            transition: background-color 0.15s;
+            touch-action: manipulation;
+        }
+
+        .dir-btn:hover { background-color: #e9f0ff; }
+        .dir-btn:active { background-color: #d0e0ff; }
+
+        .dir-btn::before {
+            content: '\1F4C1 ';
+            font-size: 0.9rem;
+        }
+
+        .dir-picker-actions {
+            display: flex;
+            gap: 10px;
+            padding: 12px 14px;
+            background: #f8f9fa;
+            border-top: 1px solid #e9ecef;
+            flex-wrap: wrap;
+            flex-shrink: 0;
+        }
+
+        .dir-picker-actions .btn {
+            flex: 1;
+            min-width: 100px;
+        }
+
+        .downloads-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Destination picker modal -->
+    <div class="modal-overlay" id="pickerModal" onclick="handleModalOverlayClick(event)">
+        <div class="modal-box">
+            <div class="modal-header">
+                <h2>Choose destination</h2>
+                <button class="modal-close" onclick="hideModal()" title="Cancel">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="pending-name" id="pendingName"></p>
+                <div class="dir-picker">
+                    <div class="dir-picker-header">
+                        <span class="dir-picker-path" id="pickerCurrentPath">/</span>
+                        <button class="btn btn-secondary btn-sm" id="pickerUpBtn" onclick="pickerNavigateUp()">&#8593; Up</button>
+                    </div>
+                    <ul class="dir-list" id="dirList">
+                        <li><span class="dir-list-empty">Loading...</span></li>
+                    </ul>
+                    <div class="dir-picker-actions">
+                        <button class="btn btn-danger btn-sm" onclick="hideModal()">Cancel</button>
+                        <button class="btn btn-green btn-sm" onclick="confirmDest()">Download here</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <h1>Torrent Search</h1>
+
+        <div class="error-message" id="error"></div>
+
+        <!-- Search card -->
+        <div class="card">
+            <h2>Search</h2>
+            <div class="search-row">
+                <input
+                    type="text"
+                    id="terms"
+                    placeholder="Search terms..."
+                    autocomplete="off"
+                    autocorrect="off"
+                    spellcheck="false"
+                />
+                <select id="category"></select>
+                <select id="sort"></select>
+                <button class="btn" id="searchBtn" onclick="search()">Search</button>
+            </div>
+            <div class="table-scroll">
+                <table id="resultsTable">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th class="num">Size</th>
+                            <th class="num">Seeders</th>
+                            <th class="num">Leechers</th>
+                            <th>Category</th>
+                            <th>Uploaded</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="resultsBody">
+                        <tr class="empty-row"><td colspan="7">No results yet.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Downloads card -->
+        <div class="card">
+            <div class="downloads-header">
+                <h2 style="margin:0;">Downloads</h2>
+                <button class="btn btn-secondary btn-sm" onclick="clearFinished()">Clear finished</button>
+            </div>
+            <div class="banner" id="banner" hidden>
+                aria2 is unreachable. Existing downloads are shown below, but new
+                downloads cannot be added or controlled until it comes back.
+            </div>
+            <div class="table-scroll">
+                <table id="downloadsTable">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Progress</th>
+                            <th class="num">Speed</th>
+                            <th>Status</th>
+                            <th>Dest</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="downloadsBody">
+                        <tr class="empty-row"><td colspan="6">No downloads yet.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const PREFIX = window.location.pathname.replace(/\/$/, '');
+        const TERMINAL = ['complete', 'error', 'cancelled', 'interrupted'];
+
+        const CATEGORIES = [
+            ['All', 0], ['Audio', 100], ['Audio/Music', 101], ['Audio/Audio books', 102],
+            ['Video', 200], ['Video/Movies', 201], ['Video/HD - Movies', 207],
+            ['Video/TV shows', 205], ['Video/HD - TV shows', 208],
+            ['Applications', 300], ['Games', 400], ['Other/E-books', 601],
+        ];
+
+        const SORTS = ['SeedersDsc', 'SizeDsc', 'SizeAsc', 'DateDsc', 'TitleAsc'];
+
+        const CATEGORY_LABELS = Object.fromEntries(CATEGORIES.map(([label, value]) => [value, label]));
+
+        let pending = null;   // the SearchResult awaiting a destination
+        let cwd = '/';
+        let pickerParent = null;
+
+        function setError(msg) {
+            const el = document.getElementById('error');
+            if (!msg) {
+                el.textContent = '';
+                el.classList.remove('active');
+                return;
+            }
+            el.textContent = msg;
+            el.classList.add('active');
+        }
+
+        function populateSelects() {
+            const categorySel = document.getElementById('category');
+            CATEGORIES.forEach(([label, value]) => {
+                const opt = document.createElement('option');
+                opt.value = value;
+                opt.textContent = label;
+                categorySel.appendChild(opt);
+            });
+
+            const sortSel = document.getElementById('sort');
+            SORTS.forEach((name) => {
+                const opt = document.createElement('option');
+                opt.value = name;
+                opt.textContent = name;
+                sortSel.appendChild(opt);
+            });
+        }
+
+        async function api(path, opts) {
+            const resp = await fetch(PREFIX + path, opts);
+            const body = await resp.json().catch(() => ({ error: 'Bad response' }));
+            if (!resp.ok) throw new Error(body.error || ('HTTP ' + resp.status));
+            return body;
+        }
+
+        // ===== SEARCH =====
+
+        async function search() {
+            const terms = document.getElementById('terms').value;
+            setError('');
+            try {
+                const { results } = await api('/api/search', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        terms,
+                        category: Number(document.getElementById('category').value),
+                        sort: document.getElementById('sort').value,
+                    }),
+                });
+                renderResults(results);   // empty array => "No results"
+            } catch (e) { setError(e.message); }
+        }
+
+        document.getElementById('terms').addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') search();
+        });
+
+        function renderResults(results) {
+            const body = document.getElementById('resultsBody');
+            body.innerHTML = '';
+            if (!results || results.length === 0) {
+                body.innerHTML = '<tr class="empty-row"><td colspan="7">No results.</td></tr>';
+                return;
+            }
+            results.forEach((r) => {
+                const tr = document.createElement('tr');
+
+                const nameTd = document.createElement('td');
+                nameTd.className = 'name-cell';
+                nameTd.textContent = r.name;
+                tr.appendChild(nameTd);
+
+                const sizeTd = document.createElement('td');
+                sizeTd.className = 'num';
+                sizeTd.textContent = r.size;
+                tr.appendChild(sizeTd);
+
+                const seedersTd = document.createElement('td');
+                seedersTd.className = 'num';
+                seedersTd.textContent = r.seeders;
+                tr.appendChild(seedersTd);
+
+                const leechersTd = document.createElement('td');
+                leechersTd.className = 'num';
+                leechersTd.textContent = r.leechers;
+                tr.appendChild(leechersTd);
+
+                const catTd = document.createElement('td');
+                catTd.textContent = CATEGORY_LABELS[r.category] || r.category;
+                tr.appendChild(catTd);
+
+                const uploadedTd = document.createElement('td');
+                uploadedTd.textContent = r.uploaded;
+                tr.appendChild(uploadedTd);
+
+                const actionTd = document.createElement('td');
+                const addBtn = document.createElement('button');
+                addBtn.className = 'btn btn-sm';
+                addBtn.textContent = 'Add';
+                addBtn.onclick = () => openPicker(r);
+                actionTd.appendChild(addBtn);
+                tr.appendChild(actionTd);
+
+                body.appendChild(tr);
+            });
+        }
+
+        // ===== DESTINATION PICKER =====
+
+        function openPicker(result) {
+            pending = result;
+            document.getElementById('pendingName').textContent = result.name;
+            browseTo('/');
+            showModal();
+        }
+
+        function hideModal() {
+            document.getElementById('pickerModal').classList.remove('active');
+            pending = null;
+        }
+
+        function showModal() {
+            document.getElementById('pickerModal').classList.add('active');
+        }
+
+        function handleModalOverlayClick(e) {
+            if (e.target === document.getElementById('pickerModal')) hideModal();
+        }
+
+        async function browseTo(path) {
+            const list = document.getElementById('dirList');
+            list.innerHTML = '<li><span class="dir-list-empty">Loading...</span></li>';
+            try {
+                const body = await api('/api/list-dirs', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path }),
+                });
+                cwd = body.path;
+                renderPicker(body);       // body.parent may be null at "/"
+            } catch (e) {
+                setError(e.message);
+                list.innerHTML = '';
+                const li = document.createElement('li');
+                const span = document.createElement('span');
+                span.className = 'dir-list-empty';
+                span.textContent = e.message;
+                li.appendChild(span);
+                list.appendChild(li);
+            }
+        }
+
+        function renderPicker(body) {
+            pickerParent = body.parent;
+            document.getElementById('pickerCurrentPath').textContent = body.path;
+            document.getElementById('pickerUpBtn').disabled = body.parent === null;
+
+            const list = document.getElementById('dirList');
+            list.innerHTML = '';
+            if (!body.dirs || body.dirs.length === 0) {
+                list.innerHTML = '<li><span class="dir-list-empty">No subdirectories</span></li>';
+                return;
+            }
+            body.dirs.forEach((dir) => {
+                const li = document.createElement('li');
+                const btn = document.createElement('button');
+                btn.className = 'dir-btn';
+                btn.textContent = dir;
+                const fullPath = body.path === '/' ? '/' + dir : body.path + '/' + dir;
+                btn.onclick = () => browseTo(fullPath);
+                li.appendChild(btn);
+                list.appendChild(li);
+            });
+        }
+
+        function pickerNavigateUp() {
+            if (pickerParent === null || pickerParent === undefined) return;
+            browseTo(pickerParent);
+        }
+
+        async function confirmDest() {
+            try {
+                await api('/api/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        magnet: pending.magnet,
+                        name: pending.name,
+                        info_hash: pending.info_hash,
+                        dest: cwd,
+                    }),
+                });
+                hideModal();
+                refresh();
+            } catch (e) { setError(e.message); }   // 409 duplicate lands here too
+        }
+
+        // ===== DOWNLOADS =====
+
+        async function refresh() {
+            try {
+                const { downloads, aria2_up } = await api('/api/downloads');
+                document.getElementById('banner').hidden = aria2_up;
+                renderDownloads(downloads);
+            } catch (e) { setError(e.message); }
+        }
+
+        // 'metadata' has total_bytes == 0 until aria2 fetches the torrent info, so
+        // render it as an indeterminate bar labelled "fetching metadata…" rather than
+        // dividing by zero.
+        function progress(row) {
+            if (row.status === 'metadata' || !row.total_bytes) return null;
+            return Math.round(100 * row.completed_bytes / row.total_bytes);
+        }
+
+        function formatSpeed(bytesPerSec) {
+            if (!bytesPerSec) return '';
+            const units = ['B/s', 'KiB/s', 'MiB/s', 'GiB/s'];
+            let val = bytesPerSec;
+            let i = 0;
+            while (val >= 1024 && i < units.length - 1) {
+                val /= 1024;
+                i++;
+            }
+            return val.toFixed(1) + ' ' + units[i];
+        }
+
+        function renderDownloads(downloads) {
+            const body = document.getElementById('downloadsBody');
+            body.innerHTML = '';
+            if (!downloads || downloads.length === 0) {
+                body.innerHTML = '<tr class="empty-row"><td colspan="6">No downloads yet.</td></tr>';
+                return;
+            }
+            downloads.forEach((row) => {
+                const tr = document.createElement('tr');
+
+                const nameTd = document.createElement('td');
+                nameTd.className = 'name-cell';
+                nameTd.textContent = row.name;
+                tr.appendChild(nameTd);
+
+                const progressTd = document.createElement('td');
+                progressTd.appendChild(renderProgressBar(row));
+                tr.appendChild(progressTd);
+
+                const speedTd = document.createElement('td');
+                speedTd.className = 'num';
+                speedTd.textContent = row.status === 'downloading' ? formatSpeed(row.download_speed) : '';
+                tr.appendChild(speedTd);
+
+                const statusTd = document.createElement('td');
+                const badge = document.createElement('span');
+                badge.className = 'status-badge status-' + row.status;
+                badge.textContent = row.status;
+                statusTd.appendChild(badge);
+                if (row.error) {
+                    const errDiv = document.createElement('div');
+                    errDiv.className = 'error-text';
+                    errDiv.textContent = row.error;
+                    statusTd.appendChild(errDiv);
+                }
+                tr.appendChild(statusTd);
+
+                const destTd = document.createElement('td');
+                destTd.className = 'name-cell';
+                destTd.textContent = row.dest;
+                tr.appendChild(destTd);
+
+                const actionTd = document.createElement('td');
+                actionTd.appendChild(renderRowActions(row));
+                tr.appendChild(actionTd);
+
+                body.appendChild(tr);
+            });
+        }
+
+        function renderProgressBar(row) {
+            const track = document.createElement('div');
+            track.className = 'progress-track';
+            const fill = document.createElement('div');
+            fill.className = 'progress-fill';
+            const label = document.createElement('div');
+            label.className = 'progress-label';
+
+            const pct = progress(row);
+            if (pct === null) {
+                track.classList.add('indeterminate');
+                label.textContent = row.status === 'metadata' ? 'fetching metadata…' : '';
+            } else {
+                fill.style.width = pct + '%';
+                label.textContent = pct + '%';
+            }
+            track.appendChild(fill);
+            track.appendChild(label);
+            return track;
+        }
+
+        function renderRowActions(row) {
+            const div = document.createElement('div');
+            div.className = 'row-actions';
+
+            if (TERMINAL.includes(row.status)) {
+                const btn = document.createElement('button');
+                btn.className = 'btn btn-secondary btn-sm';
+                btn.textContent = 'Clear';
+                btn.onclick = () => clearRow(row.id);
+                div.appendChild(btn);
+            } else {
+                if (row.status === 'paused') {
+                    const resumeBtn = document.createElement('button');
+                    resumeBtn.className = 'btn btn-green btn-sm';
+                    resumeBtn.textContent = 'Resume';
+                    resumeBtn.onclick = () => act(row.id, 'resume');
+                    div.appendChild(resumeBtn);
+                } else {
+                    const pauseBtn = document.createElement('button');
+                    pauseBtn.className = 'btn btn-secondary btn-sm';
+                    pauseBtn.textContent = 'Pause';
+                    pauseBtn.onclick = () => act(row.id, 'pause');
+                    div.appendChild(pauseBtn);
+                }
+                const cancelBtn = document.createElement('button');
+                cancelBtn.className = 'btn btn-danger btn-sm';
+                cancelBtn.textContent = 'Cancel';
+                cancelBtn.onclick = () => act(row.id, 'cancel');
+                div.appendChild(cancelBtn);
+            }
+            return div;
+        }
+
+        const act = (id, verb) =>
+            api('/api/downloads/' + id + '/' + verb, { method: 'POST' })
+                .then(refresh).catch(e => setError(e.message));
+
+        const clearRow = (id) =>
+            api('/api/downloads/' + id, { method: 'DELETE' })
+                .then(refresh).catch(e => setError(e.message));
+
+        const clearFinished = () =>
+            api('/api/downloads/clear-finished', { method: 'POST' })
+                .then(refresh).catch(e => setError(e.message));
+
+        populateSelects();
+        setInterval(refresh, 2000);
+        refresh();
+    </script>
+</body>
+
+</html>

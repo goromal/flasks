@@ -10,6 +10,7 @@ modules (`module.nix`) live in anixpkgs under `pkgs/python-packages/flasks/`.
 | --- | --- |
 | `anix-upgrade-ui` | Web UI for triggering anix-upgrade |
 | `authui` | Interface for remotely refreshing credentials |
+| `brom` | Web UI for searching and downloading torrents via aria2 |
 | `budget_ui` | Interface for doing the budget |
 | `cozy` | One-pager UI for generating images with ComfyUI workflows |
 | `disciple` | Book of Mormon Christ-reference study tool |
