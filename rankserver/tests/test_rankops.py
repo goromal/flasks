@@ -1,4 +1,5 @@
 import sys, os
+import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import rankops
 
@@ -94,6 +95,15 @@ def _mid_state():
          "p": 5, "i": 3, "j": 4, "l": 1, "c": 0},
         ["f0", "f1", "f2", "f3", "f4", "f5"],
     )
+
+
+def test_unsorted_remaining_counts_pending_ranges():
+    state, _ = _mid_state()
+    # pending (0,2) is 3 elements, active (4,5) is 2; position 3 is final.
+    assert rankops.unsorted_remaining(state) == 5
+    assert rankops.unsorted_remaining(dict(state, sorted=1, top=UMAX)) == 0
+    # a settled-but-unmarked state (empty stack) counts as nothing pending
+    assert rankops.unsorted_remaining(dict(state, top=UMAX)) == 0
 
 
 def test_remove_outside_active_preserves_progress():
@@ -265,6 +275,32 @@ def test_insertion_binary_search_converges_high():
     while not rankops.insertion_done(b):
         b = rankops.insertion_step(b, prefer_new=True)
     assert b["lo"] == 4  # always preferred -> inserts at the top
+
+
+def test_readjudication_removes_file_and_starts_full_binary_search():
+    state, fmap = _sorted_state()
+    s2, m2, active = rankops.readjudication_start(state, fmap, "f0")
+    assert m2 == ["f1", "f2", "f3"]
+    assert s2["arr"] == [2, 0, 1]
+    assert s2["n"] == 3 and s2["sorted"] == 1
+    assert active == {"file": "f0", "lo": 0, "hi": 3}
+    assert state["arr"] == [3, 1, 0, 2]
+    assert fmap == ["f0", "f1", "f2", "f3"]
+
+
+def test_readjudication_requires_completed_multi_item_ranking():
+    state, fmap = _sorted_state()
+    state["sorted"] = 0
+    with pytest.raises(ValueError, match="not sorted"):
+        rankops.readjudication_start(state, fmap, "f0")
+
+    singleton = dict(_sorted_state()[0], n=1, arr=[0], stack=[0])
+    with pytest.raises(ValueError, match="at least two"):
+        rankops.readjudication_start(singleton, ["only"], "only")
+
+    state, fmap = _sorted_state()
+    with pytest.raises(ValueError, match="not in"):
+        rankops.readjudication_start(state, fmap, "missing")
 
 
 def test_insertion_binary_search_converges_low():

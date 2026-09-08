@@ -173,6 +173,22 @@ def remove_index(state, file_map, k):
     return state, file_map, False
 
 
+def unsorted_remaining(state):
+    """Count the elements still sitting inside pending partitions.
+
+    Pending stack ranges are disjoint, and anything outside them is already
+    in its final position, so the sum of their sizes is the number of items
+    the base sort still has to place. Returns 0 once the sort has settled.
+    """
+    if state["sorted"] == 1 or state["top"] == UINT32_MAX:
+        return 0
+    total = 0
+    for t in range(0, state["top"], 2):
+        low, high = state["stack"][t], state["stack"][t + 1]
+        total += high - low + 1
+    return total
+
+
 def validate_state(state, file_map):
     """Sanity-check a post-surgery state. Returns (ok, msg)."""
     n = state["n"]
@@ -260,6 +276,21 @@ def insertion_mid(bounds):
 
 def insertion_done(bounds):
     return bounds["lo"] >= bounds["hi"]
+
+
+def readjudication_start(state, file_map, fname):
+    """Remove a settled file and return it as a binary-insertion candidate."""
+    if state["sorted"] != 1:
+        raise ValueError("ranking is not sorted")
+    if len(file_map) < 2:
+        raise ValueError("ranking needs at least two files")
+    try:
+        k = file_map.index(fname)
+    except ValueError:
+        raise ValueError("file is not in the settled ranking")
+    state, file_map, _ = remove_index(state, file_map, k)
+    active = {"file": fname, "lo": 0, "hi": state["n"]}
+    return state, file_map, active
 
 
 def insertion_step(bounds, prefer_new):

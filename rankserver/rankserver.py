@@ -304,6 +304,9 @@ class RankServer:
     def getRankList(self):
         return self.rev_rank_list
 
+    def unsortedRemaining(self):
+        return rankops.unsorted_remaining(state_to_dict(self.state))
+
     def getCompFiles(self):
         rightfile = self.file_map[self.state.arr[self.state.p]]
         if self.state.l == int(ComparatorLeft.I):
@@ -358,6 +361,24 @@ class RankServer:
         a = self.insertions["active"]
         mid = rankops.insertion_mid(a)
         return (a["file"], self.file_map[self.state.arr[mid]])
+
+    def startReadjudication(self, fname):
+        if self.insertionPending():
+            return (False, "Finish pending placements before re-adjudicating an item")
+        try:
+            d, fmap, active = rankops.readjudication_start(
+                state_to_dict(self.state), self.file_map, fname)
+        except ValueError as e:
+            return (False, str(e))
+        self.state = dict_to_state(d)
+        self.file_map = fmap
+        self.insertions["active"] = active
+        sres, smsg = self.save()
+        if not sres:
+            return (False, "re-adjudication save failed: {}".format(smsg))
+        self.config["insertions"] = self.insertions
+        save_config(self.config)
+        return (True, "")
 
     def submitInsertionChoice(self, prefer_new):
         a = self.insertions["active"]
@@ -422,7 +443,12 @@ def index():
     global urlroot
     post_err = ""
     if flask.request.method == "POST":
-        if rankserver.insertionActive():
+        if "readjudicate" in flask.request.form:
+            rres, rmsg = rankserver.startReadjudication(
+                flask.request.form["readjudicate"])
+            if not rres:
+                post_err = rmsg
+        elif rankserver.insertionActive():
             ires, imsg = rankserver.submitInsertionChoice(
                 "choose_l" in flask.request.form)
             if not ires:
@@ -447,36 +473,39 @@ def index():
         return flask.render_template("index.html", urlroot=urlroot, intro=False,
                                      datadir=SHORT_RESDIR, err=True, done=False,
                                      msg=msg, rlist=[], l="", r="", warn=warn,
-                                     insert_note="")
+                                     progress_note="")
     rlist = rankserver.getRankList()
     if rankserver.sortingComplete():
         if rankserver.insertionPending():
             if not rankserver.insertionActive():
                 rankserver.activateNextInsertion()
             l, r = rankserver.insertionCompFiles()
-            note = "Placing new file — {} more in queue".format(
+            note = "Binary-search placement — {} more in queue".format(
                 len(rankserver.insertions["queue"]))
             return flask.render_template("index.html", urlroot=urlroot,
                                          intro=False, datadir=SHORT_RESDIR,
                                          err=False, done=False, msg="",
                                          rlist=rlist, l=l, r=r, warn=warn,
-                                         insert_note=note)
+                                         progress_note=note)
         return flask.render_template("index.html", urlroot=urlroot, intro=False,
                                      datadir=SHORT_RESDIR, err=False, done=True,
                                      msg="", rlist=rlist, l="", r="", warn=warn,
-                                     insert_note="")
+                                     progress_note="")
     l, r = rankserver.getCompFiles()
+    remaining = rankserver.unsortedRemaining()
+    note = "Sorting — {} item{} still unsorted".format(
+        remaining, "" if remaining == 1 else "s")
     return flask.render_template("index.html", urlroot=urlroot, intro=False,
                                  datadir=SHORT_RESDIR, err=False, done=False,
                                  msg="", rlist=rlist, l=l, r=r, warn=warn,
-                                 insert_note="")
+                                 progress_note=note)
 
 @bp.route("/intro", methods=["GET"])
 @flask_login.login_required
 def intro():
     global urlroot
     global SHORT_RESDIR
-    return flask.render_template("index.html", urlroot=urlroot, intro=True, datadir=SHORT_RESDIR, err=False, done=False, msg="", rlist=[], l="", r="", warn="", insert_note="")
+    return flask.render_template("index.html", urlroot=urlroot, intro=True, datadir=SHORT_RESDIR, err=False, done=False, msg="", rlist=[], l="", r="", warn="", progress_note="")
 
 @bp.route("/api/rankables-info", methods=["GET"])
 @flask_login.login_required

@@ -270,6 +270,10 @@
 
         .rank-list li:last-child { border-bottom: none; }
 
+        .rank-list li form {
+            margin-left: auto;
+        }
+
         .rank-list li::before {
             content: counter(rank);
             flex-shrink: 0;
@@ -625,8 +629,8 @@
             </form>
         </div>
         {% else %}
-        {% if insert_note %}
-        <p class="compare-prompt" style="color: #1cc88a; font-weight: 600;">{{ insert_note }}</p>
+        {% if progress_note %}
+        <p class="compare-prompt" style="color: #1cc88a; font-weight: 600;">{{ progress_note }}</p>
         {% endif %}
         <p class="compare-prompt">Which do you prefer?</p>
         <div class="compare-row">
@@ -675,6 +679,11 @@
                     {% else %}
                     <img class="rank-media" src="{{ urlroot }}thumb/{{ item }}?w=240" loading="lazy" decoding="async" alt=""
                          data-full="{{ urlroot }}thumb/{{ item }}?w=1600" data-type="image" />
+                    {% endif %}
+                    {% if done and rlist|length > 1 %}
+                    <form action="{{ urlroot }}" method="POST" onsubmit="return confirm('Re-adjudicate this item?');">
+                        <button type="submit" class="btn btn-sm" name="readjudicate" value="{{ item }}">Re-rank</button>
+                    </form>
                     {% endif %}
                 </li>
                 {% endfor %}
