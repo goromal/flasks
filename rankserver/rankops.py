@@ -278,6 +278,21 @@ def insertion_done(bounds):
     return bounds["lo"] >= bounds["hi"]
 
 
+def readjudication_start(state, file_map, fname):
+    """Remove a settled file and return it as a binary-insertion candidate."""
+    if state["sorted"] != 1:
+        raise ValueError("ranking is not sorted")
+    if len(file_map) < 2:
+        raise ValueError("ranking needs at least two files")
+    try:
+        k = file_map.index(fname)
+    except ValueError:
+        raise ValueError("file is not in the settled ranking")
+    state, file_map, _ = remove_index(state, file_map, k)
+    active = {"file": fname, "lo": 0, "hi": state["n"]}
+    return state, file_map, active
+
+
 def insertion_step(bounds, prefer_new):
     """One binary-search comparison. prefer_new=True means the new file beat
     the element at position insertion_mid(bounds), so it belongs above it

@@ -362,6 +362,24 @@ class RankServer:
         mid = rankops.insertion_mid(a)
         return (a["file"], self.file_map[self.state.arr[mid]])
 
+    def startReadjudication(self, fname):
+        if self.insertionPending():
+            return (False, "Finish pending placements before re-adjudicating an item")
+        try:
+            d, fmap, active = rankops.readjudication_start(
+                state_to_dict(self.state), self.file_map, fname)
+        except ValueError as e:
+            return (False, str(e))
+        self.state = dict_to_state(d)
+        self.file_map = fmap
+        self.insertions["active"] = active
+        sres, smsg = self.save()
+        if not sres:
+            return (False, "re-adjudication save failed: {}".format(smsg))
+        self.config["insertions"] = self.insertions
+        save_config(self.config)
+        return (True, "")
+
     def submitInsertionChoice(self, prefer_new):
         a = self.insertions["active"]
         b = rankops.insertion_step(a, prefer_new)
@@ -425,7 +443,12 @@ def index():
     global urlroot
     post_err = ""
     if flask.request.method == "POST":
-        if rankserver.insertionActive():
+        if "readjudicate" in flask.request.form:
+            rres, rmsg = rankserver.startReadjudication(
+                flask.request.form["readjudicate"])
+            if not rres:
+                post_err = rmsg
+        elif rankserver.insertionActive():
             ires, imsg = rankserver.submitInsertionChoice(
                 "choose_l" in flask.request.form)
             if not ires:
@@ -457,7 +480,7 @@ def index():
             if not rankserver.insertionActive():
                 rankserver.activateNextInsertion()
             l, r = rankserver.insertionCompFiles()
-            note = "Placing new file — {} more in queue".format(
+            note = "Binary-search placement — {} more in queue".format(
                 len(rankserver.insertions["queue"]))
             return flask.render_template("index.html", urlroot=urlroot,
                                          intro=False, datadir=SHORT_RESDIR,
