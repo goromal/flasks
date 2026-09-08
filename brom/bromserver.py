@@ -206,16 +206,22 @@ def create_app(st, aria2, subdomain="/brom", health=None):
     return app
 
 
+def _poll_once(st, aria2, health):
+    """One reconcile cycle. Factored out so tests can drive exactly one
+    iteration instead of the real `while True` in poll_forever."""
+    try:
+        st.reconcile(aria2.snapshot())
+        health.set(True)
+    except aria2rpc.Aria2Error:
+        health.set(False)
+    except Exception:
+        # The poller is the only reconciler; it must never die silently.
+        logging.exception("brom poller iteration failed")
+
+
 def poll_forever(st, aria2, health, interval=POLL_INTERVAL_S):
     while True:
-        try:
-            st.reconcile(aria2.snapshot())
-            health.set(True)
-        except aria2rpc.Aria2Error:
-            health.set(False)
-        except Exception:
-            # The poller is the only reconciler; it must never die silently.
-            logging.exception("brom poller iteration failed")
+        _poll_once(st, aria2, health)
         time.sleep(interval)
 
 

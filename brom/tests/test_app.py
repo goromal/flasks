@@ -166,20 +166,44 @@ def test_add_when_aria2_down_is_503_and_writes_nothing(ctx):
     assert st.list() == []
 
 
-def test_downloads_reports_aria2_up_flag(ctx):
+def test_downloads_echoes_health_flag(ctx):
     """The route reads liveness published by the poller; it does not
-    reconcile (spec 5). Drive the health flag the way poll_forever would."""
+    reconcile (spec 5). This only proves the route plumbs `health.get()`
+    through to `aria2_up` -- it does NOT prove aria2_up reflects real aria2
+    liveness. That end-to-end chain (aria2 down -> poller sees Aria2Error ->
+    health.set(False) -> route reports aria2_up false) is covered by
+    test_aria2_error_in_poller_surfaces_as_aria2_down below."""
     client, st, aria2, _, tmp_path = ctx
     dest = tmp_path / "dl"
     dest.mkdir()
     client.post(PREFIX + "/api/add", json=add_body(dest))
     health = client.application.brom_health
     assert client.get(PREFIX + "/api/downloads").get_json()["aria2_up"] is True
-    aria2.up = False
     health.set(False)
     body = client.get(PREFIX + "/api/downloads").get_json()
     assert body["aria2_up"] is False
     assert len(body["downloads"]) == 1
+
+
+def test_aria2_error_in_poller_surfaces_as_aria2_down(ctx):
+    """The user-visible banner chain: aria2 unreachable -> poller catches
+    Aria2Error -> health.set(False) -> route reports aria2_up false.
+    Previously uncovered: the route no longer calls snapshot(), so flipping
+    aria2.up on the fake proves nothing about health on its own -- it has to
+    be driven through the poller's actual exception handling."""
+    client, st, aria2, _, tmp_path = ctx
+    health = client.application.brom_health
+    assert health.get() is True
+
+    aria2.up = False  # makes the fake's snapshot() raise Aria2Error
+    bromserver._poll_once(st, aria2, health)
+    assert health.get() is False
+    assert client.get(PREFIX + "/api/downloads").get_json()["aria2_up"] is False
+
+    aria2.up = True
+    bromserver._poll_once(st, aria2, health)
+    assert health.get() is True
+    assert client.get(PREFIX + "/api/downloads").get_json()["aria2_up"] is True
 
 
 def test_downloads_route_does_not_reconcile(ctx):
