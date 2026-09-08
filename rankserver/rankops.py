@@ -173,6 +173,22 @@ def remove_index(state, file_map, k):
     return state, file_map, False
 
 
+def unsorted_remaining(state):
+    """Count the elements still sitting inside pending partitions.
+
+    Pending stack ranges are disjoint, and anything outside them is already
+    in its final position, so the sum of their sizes is the number of items
+    the base sort still has to place. Returns 0 once the sort has settled.
+    """
+    if state["sorted"] == 1 or state["top"] == UINT32_MAX:
+        return 0
+    total = 0
+    for t in range(0, state["top"], 2):
+        low, high = state["stack"][t], state["stack"][t + 1]
+        total += high - low + 1
+    return total
+
+
 def validate_state(state, file_map):
     """Sanity-check a post-surgery state. Returns (ok, msg)."""
     n = state["n"]
