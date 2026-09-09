@@ -639,7 +639,7 @@
                     {% if l.endswith('.txt') %}
                     <span class="txt-name">{{ l }}</span>
                     {% elif l.endswith(('.mp4', '.mov')) %}
-                    <video src="{{ urlroot }}media/{{ l }}#t=0.001" controls loop preload="metadata" playsinline></video>
+                    <video src="{{ urlroot }}media/{{ l }}#t=0.001" controls autoplay loop muted preload="auto" playsinline></video>
                     {% else %}
                     <img src="{{ urlroot }}thumb/{{ l }}?w=1200" decoding="async" alt="" />
                     {% endif %}
@@ -653,7 +653,7 @@
                     {% if r.endswith('.txt') %}
                     <span class="txt-name">{{ r }}</span>
                     {% elif r.endswith(('.mp4', '.mov')) %}
-                    <video src="{{ urlroot }}media/{{ r }}#t=0.001" controls loop preload="metadata" playsinline></video>
+                    <video src="{{ urlroot }}media/{{ r }}#t=0.001" controls autoplay loop muted preload="auto" playsinline></video>
                     {% else %}
                     <img src="{{ urlroot }}thumb/{{ r }}?w=1200" decoding="async" alt="" />
                     {% endif %}
