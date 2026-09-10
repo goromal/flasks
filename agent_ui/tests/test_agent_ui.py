@@ -1,11 +1,15 @@
+import json
 import os
 import sys
 
 import pytest
+from werkzeug.security import generate_password_hash
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from agent_ui import create_app, parse_devrc
+
+TEST_PASSWORD = "test-password"
 
 
 class FakeSessions:
@@ -100,15 +104,23 @@ def configured_app(tmp_path):
         "<helper> = scripts/helper\n",
         encoding="utf-8",
     )
-    token_file = tmp_path / "token"
-    token_file.write_text("test-token\n", encoding="utf-8")
+    secrets_file = tmp_path / "secrets.json"
+    secrets_file.write_text(
+        json.dumps(
+            {
+                "secret_key": "test-secret-key",
+                "password_hash": generate_password_hash(TEST_PASSWORD),
+            }
+        ),
+        encoding="utf-8",
+    )
     manager = FakeSessions()
     workspace_manager = FakeWorkspaces()
     app = create_app(
         subdomain="/agents",
         devrc=str(devrc),
         agents=("claude", "codex"),
-        token_file=str(token_file),
+        secrets_file=str(secrets_file),
         secure_cookie=False,
         session_manager=manager,
         workspace_manager=workspace_manager,
@@ -117,8 +129,8 @@ def configured_app(tmp_path):
     return app, manager, workspace_manager
 
 
-def login(client, token="test-token"):
-    return client.post("/agents/login", data={"token": token})
+def login(client, password=TEST_PASSWORD):
+    return client.post("/agents/login", data={"password": password})
 
 
 def csrf(client):
@@ -152,11 +164,11 @@ def test_index_requires_login(configured_app):
     assert response.headers["Location"].endswith("/agents/login")
 
 
-def test_login_rejects_wrong_token(configured_app):
+def test_login_rejects_wrong_password(configured_app):
     app, _, _ = configured_app
     response = login(app.test_client(), "wrong")
     assert response.status_code == 401
-    assert b"Invalid access token" in response.data
+    assert b"Invalid password" in response.data
 
 
 def test_login_lists_workspaces_and_agents(configured_app):

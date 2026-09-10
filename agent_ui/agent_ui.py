@@ -6,19 +6,20 @@ import os
 import re
 import secrets
 import subprocess
-from pathlib import Path
+import sys
 
+import flask_login
 from flask import (
     Blueprint,
     Flask,
     abort,
     flash,
-    make_response,
     redirect,
     render_template,
     request,
     url_for,
 )
+from werkzeug.security import check_password_hash
 
 RESERVED_DEVRC_KEYS = {"dev_dir", "data_dir", "pkgs_dir", "pkgs_var"}
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]*$")
@@ -58,21 +59,19 @@ def parse_devrc(path):
     return workspaces
 
 
-def _ensure_token(path):
-    token_path = Path(os.path.expanduser(path))
-    token_path.parent.mkdir(parents=True, exist_ok=True)
+def _load_secrets(path):
+    """Load the shared secret_key and password_hash, mirroring stampserver."""
     try:
-        fd = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        pass
-    else:
-        with os.fdopen(fd, "w", encoding="utf-8") as token_file:
-            token_file.write(secrets.token_urlsafe(32) + "\n")
-
-    token = token_path.read_text(encoding="utf-8").strip()
-    if not token:
-        raise RuntimeError(f"empty authentication token: {token_path}")
-    return token
+        with open(os.path.expanduser(path), encoding="utf-8") as handle:
+            data = json.load(handle)
+    except OSError as error:
+        sys.exit(f"agent-ui: cannot read secrets file {path}: {error}")
+    except json.JSONDecodeError as error:
+        sys.exit(f"agent-ui: invalid JSON in secrets file {path}: {error}")
+    missing = [key for key in ("secret_key", "password_hash") if not data.get(key)]
+    if missing:
+        sys.exit(f"agent-ui: secrets file {path} missing keys: {', '.join(missing)}")
+    return data
 
 
 class TmuxSessions:
@@ -215,7 +214,7 @@ def create_app(
     subdomain="/agents",
     devrc="~/.devrc",
     agents=("claude", "codex"),
-    token_file="~/.local/state/agent-ui/token",
+    secrets_file="~/.config/agent-ui/secrets.json",
     tmux_bin="tmux",
     session_command="agent-ui-session",
     workspace_command="devshellctl",
@@ -225,16 +224,26 @@ def create_app(
     workspace_manager=None,
 ):
     allowed_agents = tuple(agent for agent in agents if agent in {"claude", "codex"})
-    auth_token = _ensure_token(token_file)
-    csrf_token = hmac.new(auth_token.encode(), b"csrf", hashlib.sha256).hexdigest()
-    cookie_name = "agent_ui_token"
+    app_secrets = _load_secrets(secrets_file)
+    secret_key = app_secrets["secret_key"].encode()
+    password_hash = app_secrets["password_hash"]
+    csrf_token = hmac.new(secret_key, b"csrf", hashlib.sha256).hexdigest()
     cookie_path = f"{subdomain}/" if subdomain else "/"
     sessions = session_manager or TmuxSessions(tmux_bin, session_command)
     workspaces = workspace_manager or WorkspaceCli(workspace_command, devrc, history)
     session_types = (*allowed_agents, "shell")
 
+    class User(flask_login.UserMixin):
+        def get_id(self):
+            return "agent-ui"
+
+        def check_password(self, password):
+            return bool(password) and check_password_hash(password_hash, password)
+
+    user = User()
+
     app = Flask(__name__)
-    app.secret_key = hmac.new(auth_token.encode(), b"session", hashlib.sha256).digest()
+    app.secret_key = secret_key
     app.config.update(
         SESSION_COOKIE_NAME="agent_ui_session",
         SESSION_COOKIE_PATH=cookie_path,
@@ -242,11 +251,16 @@ def create_app(
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Strict",
     )
-    bp = Blueprint("agent_ui", __name__, url_prefix=subdomain)
 
-    def authenticated():
-        candidate = request.cookies.get(cookie_name, "")
-        return bool(candidate) and hmac.compare_digest(candidate, auth_token)
+    login_manager = flask_login.LoginManager()
+    login_manager.init_app(app)
+    login_manager.login_view = "agent_ui.login"
+
+    @login_manager.user_loader
+    def load_user(user_id):
+        return user if user_id == user.get_id() else None
+
+    bp = Blueprint("agent_ui", __name__, url_prefix=subdomain)
 
     def require_csrf():
         candidate = request.form.get("_csrf", "")
@@ -271,7 +285,7 @@ def create_app(
     def check_authentication():
         if request.endpoint == "agent_ui.login":
             return None
-        if not authenticated():
+        if not flask_login.current_user.is_authenticated:
             if request.endpoint == "agent_ui.auth_check":
                 abort(401)
             return redirect(url_for("agent_ui.login"))
@@ -279,21 +293,14 @@ def create_app(
 
     @bp.route("/login", methods=["GET", "POST"])
     def login():
+        if flask_login.current_user.is_authenticated:
+            return redirect(url_for("agent_ui.index"))
         error = None
         if request.method == "POST":
-            candidate = request.form.get("token", "")
-            if hmac.compare_digest(candidate, auth_token):
-                response = make_response(redirect(url_for("agent_ui.index")))
-                response.set_cookie(
-                    cookie_name,
-                    auth_token,
-                    secure=secure_cookie,
-                    httponly=True,
-                    samesite="Strict",
-                    path=cookie_path,
-                )
-                return response
-            error = "Invalid access token"
+            if user.check_password(request.form.get("password", "")):
+                flask_login.login_user(user)
+                return redirect(url_for("agent_ui.index"))
+            error = "Invalid password"
         return render_template(
             "main.html", login=True, error=error, subdomain=subdomain
         ), 401 if error else 200
@@ -465,7 +472,11 @@ def main():
     parser.add_argument("--subdomain", default="/agents")
     parser.add_argument("--devrc", default="~/.devrc")
     parser.add_argument("--agent", action="append", dest="agents", default=[])
-    parser.add_argument("--token-file", default="~/.local/state/agent-ui/token")
+    parser.add_argument(
+        "--secrets-file",
+        required=True,
+        help="Path to JSON file with secret_key and password_hash",
+    )
     parser.add_argument("--tmux-bin", default="tmux")
     parser.add_argument("--session-command", default="agent-ui-session")
     parser.add_argument("--workspace-command", default="devshellctl")
@@ -476,7 +487,7 @@ def main():
         subdomain=args.subdomain,
         devrc=args.devrc,
         agents=args.agents,
-        token_file=args.token_file,
+        secrets_file=args.secrets_file,
         tmux_bin=args.tmux_bin,
         session_command=args.session_command,
         workspace_command=args.workspace_command,
