@@ -5,7 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Terminal</title>
   <style>
-    html, body, iframe { width: 100%; height: 100%; margin: 0; border: 0; background: #000; }
+    html, body { width: 100%; height: 100%; margin: 0; background: #000; }
+    body { display: flex; flex-direction: column; }
+    iframe { flex: 1 1 auto; width: 100%; border: 0; background: #000; }
     .agents-link {
       position: fixed;
       z-index: 10;
@@ -21,10 +23,91 @@
       text-decoration: none;
     }
     .agents-link:hover { background: #263548; }
+    /* On-screen keys for phones, which have no physical arrows/Esc/Tab. */
+    .keys {
+      flex: 0 0 auto;
+      display: flex;
+      gap: 6px;
+      padding: 6px;
+      background: #10151d;
+      border-top: 1px solid #2d3b4c;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .keys button {
+      flex: 1 0 auto;
+      min-width: 46px;
+      padding: 12px 10px;
+      border: 1px solid #3a4b5e;
+      border-radius: 8px;
+      background: #1b2634;
+      color: #eef4f8;
+      font: 650 16px/1 system-ui, sans-serif;
+      cursor: pointer;
+      touch-action: manipulation;
+      user-select: none;
+    }
+    .keys button:active { background: #2f81f7; }
   </style>
 </head>
 <body>
   <a class="agents-link" href="{{ subdomain }}/">Agents</a>
-  <iframe src="{{ subdomain }}/terminal/?arg={{ name|urlencode }}" title="Agent terminal"></iframe>
+  <iframe id="term" src="{{ subdomain }}/terminal/?arg={{ name|urlencode }}" title="Agent terminal"></iframe>
+  <nav class="keys" aria-label="Terminal keys">
+    <button type="button" data-key="Escape" data-code="27">Esc</button>
+    <button type="button" data-key="Tab" data-code="9">Tab</button>
+    <button type="button" data-key="ArrowUp" data-code="38">&uarr;</button>
+    <button type="button" data-key="ArrowDown" data-code="40">&darr;</button>
+    <button type="button" data-key="ArrowLeft" data-code="37">&larr;</button>
+    <button type="button" data-key="ArrowRight" data-code="39">&rarr;</button>
+    <button type="button" data-key="Enter" data-code="13">&crarr;</button>
+    <button type="button" data-key="c" data-code="67" data-ctrl="1">^C</button>
+  </nav>
+  <script>
+    (function () {
+      var iframe = document.getElementById("term");
+
+      // ttyd renders an xterm.js terminal; its keyboard handler lives on a
+      // hidden helper textarea. Dispatching a synthetic keydown there is how we
+      // feed arrows/Enter/Esc without a physical key. Same-origin (identical
+      // host + scheme + port under this subdomain) makes the frame reachable.
+      function textarea() {
+        try {
+          var doc = iframe.contentDocument;
+          if (!doc) return null;
+          return doc.querySelector(".xterm-helper-textarea") ||
+                 doc.querySelector("textarea");
+        } catch (err) {
+          return null;
+        }
+      }
+
+      function sendKey(key, code, ctrl) {
+        var ta = textarea();
+        if (!ta) return;
+        ta.focus();
+        var view = iframe.contentWindow;
+        var event = new view.KeyboardEvent("keydown", {
+          key: key,
+          ctrlKey: !!ctrl,
+          bubbles: true,
+          cancelable: true,
+        });
+        // The KeyboardEvent constructor ignores keyCode/which, but xterm's key
+        // evaluation relies on them -- pin them explicitly.
+        Object.defineProperty(event, "keyCode", { get: function () { return code; } });
+        Object.defineProperty(event, "which", { get: function () { return code; } });
+        ta.dispatchEvent(event);
+      }
+
+      var buttons = document.querySelectorAll(".keys button");
+      for (var i = 0; i < buttons.length; i++) {
+        buttons[i].addEventListener("click", function (evt) {
+          var el = evt.currentTarget;
+          sendKey(el.dataset.key, Number(el.dataset.code), el.dataset.ctrl === "1");
+        });
+      }
+    })();
+  </script>
 </body>
 </html>
