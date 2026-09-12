@@ -48,12 +48,14 @@
       user-select: none;
     }
     .keys button:active { background: #2f81f7; }
+    .keys button.active { background: #2f81f7; }
   </style>
 </head>
 <body>
   <a class="agents-link" href="{{ subdomain }}/">Agents</a>
   <iframe id="term" src="{{ subdomain }}/terminal/?arg={{ name|urlencode }}" title="Agent terminal"></iframe>
   <nav class="keys" aria-label="Terminal keys">
+    <button type="button" data-action="select" aria-pressed="false" title="Drag across terminal text to select it">Select</button>
     <button type="button" data-action="copy" title="Copy selected text, or the visible terminal">Copy</button>
     <button type="button" data-action="paste" title="Paste clipboard text into the terminal">Paste</button>
     <button type="button" data-key="Escape" data-code="27">Esc</button>
@@ -68,6 +70,10 @@
   <script>
     (function () {
       var iframe = document.getElementById("term");
+      var selectButton = document.querySelector('[data-action="select"]');
+      var selecting = false;
+      var selectionStart = null;
+      var selectionDocument = null;
 
       // ttyd renders an xterm.js terminal; its keyboard handler lives on a
       // hidden helper textarea. Dispatching a synthetic keydown there is how we
@@ -116,6 +122,74 @@
         while (lines.length && !lines[lines.length - 1]) lines.pop();
         return lines.join("\n");
       }
+
+      function setSelecting(enabled) {
+        selecting = enabled;
+        selectionStart = null;
+        selectButton.classList.toggle("active", enabled);
+        selectButton.setAttribute("aria-pressed", enabled ? "true" : "false");
+        selectButton.textContent = enabled ? "Drag text" : "Select";
+      }
+
+      function touchCell(term, touch) {
+        var screen = term.element && term.element.querySelector(".xterm-screen");
+        if (!screen) return null;
+        var rect = screen.getBoundingClientRect();
+        if (!rect.width || !rect.height) return null;
+        var column = Math.floor((touch.clientX - rect.left) * term.cols / rect.width);
+        var row = Math.floor((touch.clientY - rect.top) * term.rows / rect.height);
+        column = Math.max(0, Math.min(term.cols - 1, column));
+        row = Math.max(0, Math.min(term.rows - 1, row));
+        return { column: column, row: term.buffer.active.viewportY + row };
+      }
+
+      function updateTouchSelection(term, end) {
+        var startIndex = selectionStart.row * term.cols + selectionStart.column;
+        var endIndex = end.row * term.cols + end.column;
+        var first = Math.min(startIndex, endIndex);
+        var last = Math.max(startIndex, endIndex);
+        term.select(first % term.cols, Math.floor(first / term.cols), last - first + 1);
+      }
+
+      function handleSelectionTouch(evt, ending) {
+        if (!selecting) return;
+        var term = terminal();
+        var touches = ending ? evt.changedTouches : evt.touches;
+        var cell = term && touches.length ? touchCell(term, touches[0]) : null;
+        if (!cell) return;
+
+        evt.preventDefault();
+        evt.stopImmediatePropagation();
+        if (!selectionStart) selectionStart = cell;
+        updateTouchSelection(term, cell);
+        if (ending) setSelecting(false);
+      }
+
+      function installTouchSelection() {
+        var doc;
+        try {
+          doc = iframe.contentDocument;
+        } catch (err) {
+          return;
+        }
+        if (!doc || doc === selectionDocument) return;
+        selectionDocument = doc;
+        doc.addEventListener("touchstart", function (evt) {
+          handleSelectionTouch(evt, false);
+        }, { capture: true, passive: false });
+        doc.addEventListener("touchmove", function (evt) {
+          handleSelectionTouch(evt, false);
+        }, { capture: true, passive: false });
+        doc.addEventListener("touchend", function (evt) {
+          handleSelectionTouch(evt, true);
+        }, { capture: true, passive: false });
+        doc.addEventListener("touchcancel", function () {
+          if (selecting) setSelecting(false);
+        }, { capture: true });
+      }
+
+      iframe.addEventListener("load", installTouchSelection);
+      installTouchSelection();
 
       // Clipboard.writeText is unavailable outside secure contexts. Keep the
       // synchronous fallback for older mobile browsers as well.
@@ -220,6 +294,15 @@
         ta.dispatchEvent(event);
       }
 
+      selectButton.addEventListener("click", function () {
+        var term = terminal();
+        if (!term) {
+          flash(selectButton, "Not ready");
+          return;
+        }
+        term.clearSelection();
+        setSelecting(!selecting);
+      });
       document.querySelector('[data-action="copy"]').addEventListener("click", function (evt) {
         copy(evt.currentTarget);
       });
