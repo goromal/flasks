@@ -54,6 +54,8 @@
   <a class="agents-link" href="{{ subdomain }}/">Agents</a>
   <iframe id="term" src="{{ subdomain }}/terminal/?arg={{ name|urlencode }}" title="Agent terminal"></iframe>
   <nav class="keys" aria-label="Terminal keys">
+    <button type="button" data-action="copy" title="Copy selected text, or the visible terminal">Copy</button>
+    <button type="button" data-action="paste" title="Paste clipboard text into the terminal">Paste</button>
     <button type="button" data-key="Escape" data-code="27">Esc</button>
     <button type="button" data-key="Tab" data-code="9">Tab</button>
     <button type="button" data-key="ArrowUp" data-code="38">&uarr;</button>
@@ -82,6 +84,124 @@
         }
       }
 
+      function terminal() {
+        try {
+          return iframe.contentWindow.term || null;
+        } catch (err) {
+          return null;
+        }
+      }
+
+      function flash(button, message) {
+        var label = button.textContent;
+        button.textContent = message;
+        button.disabled = true;
+        window.setTimeout(function () {
+          button.textContent = label;
+          button.disabled = false;
+        }, 1200);
+      }
+
+      function terminalText(term) {
+        var selected = term.getSelection();
+        if (selected) return selected;
+
+        var buffer = term.buffer.active;
+        var lines = [];
+        var end = Math.min(buffer.length, buffer.viewportY + term.rows);
+        for (var row = buffer.viewportY; row < end; row++) {
+          var line = buffer.getLine(row);
+          lines.push(line ? line.translateToString(true) : "");
+        }
+        while (lines.length && !lines[lines.length - 1]) lines.pop();
+        return lines.join("\n");
+      }
+
+      // Clipboard.writeText is unavailable outside secure contexts. Keep the
+      // synchronous fallback for older mobile browsers as well.
+      function legacyCopy(text) {
+        var field = document.createElement("textarea");
+        field.value = text;
+        field.style.position = "fixed";
+        field.style.top = "0";
+        field.style.left = "0";
+        field.style.opacity = "0";
+        document.body.appendChild(field);
+        field.contentEditable = "true";
+        field.readOnly = false;
+
+        var range = document.createRange();
+        range.selectNodeContents(field);
+        var selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        field.setSelectionRange(0, text.length);
+
+        var copied = false;
+        try {
+          copied = document.execCommand("copy");
+        } catch (err) {
+          copied = false;
+        }
+        selection.removeAllRanges();
+        field.remove();
+        return copied;
+      }
+
+      function copy(button) {
+        var term = terminal();
+        if (!term) {
+          flash(button, "Not ready");
+          return;
+        }
+        var text = terminalText(term);
+        if (!text) {
+          flash(button, "Empty");
+          term.focus();
+          return;
+        }
+
+        function copied() {
+          flash(button, "Copied!");
+          term.focus();
+        }
+        function copyManually() {
+          if (legacyCopy(text)) copied();
+          else window.prompt("Copy the terminal text:", text);
+        }
+
+        if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(copied).catch(copyManually);
+        } else {
+          copyManually();
+        }
+      }
+
+      function paste(button) {
+        var term = terminal();
+        if (!term) {
+          flash(button, "Not ready");
+          return;
+        }
+
+        function insert(text) {
+          term.paste(text);
+          term.focus();
+          flash(button, "Pasted!");
+        }
+        function pasteManually() {
+          var text = window.prompt("Paste clipboard text into the terminal:");
+          if (text !== null) insert(text);
+          else term.focus();
+        }
+
+        if (window.isSecureContext && navigator.clipboard && navigator.clipboard.readText) {
+          navigator.clipboard.readText().then(insert).catch(pasteManually);
+        } else {
+          pasteManually();
+        }
+      }
+
       function sendKey(key, code, ctrl) {
         var ta = textarea();
         if (!ta) return;
@@ -100,7 +220,14 @@
         ta.dispatchEvent(event);
       }
 
-      var buttons = document.querySelectorAll(".keys button");
+      document.querySelector('[data-action="copy"]').addEventListener("click", function (evt) {
+        copy(evt.currentTarget);
+      });
+      document.querySelector('[data-action="paste"]').addEventListener("click", function (evt) {
+        paste(evt.currentTarget);
+      });
+
+      var buttons = document.querySelectorAll(".keys button[data-key]");
       for (var i = 0; i < buttons.length; i++) {
         buttons[i].addEventListener("click", function (evt) {
           var el = evt.currentTarget;

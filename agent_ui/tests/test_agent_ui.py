@@ -353,3 +353,7 @@ def test_terminal_page_has_agents_navigation_and_embeds_ttyd(configured_app):
     assert response.status_code == 200
     assert b'class="agents-link" href="/agents/"' in response.data
     assert f"/agents/terminal/?arg={name}".encode() in response.data
+    assert b'data-action="copy"' in response.data
+    assert b'data-action="paste"' in response.data
+    assert b"term.getSelection()" in response.data
+    assert b"term.paste(text)" in response.data
