@@ -309,6 +309,38 @@ def test_workspace_action_invokes_devshellctl(configured_app):
     assert workspaces.actions == [("branch-create", "ui", "anixpkgs", "dev/new")]
 
 
+def test_workspace_nuke_passes_branch_through(configured_app):
+    app, _, workspaces = configured_app
+    client = app.test_client()
+    login(client)
+    response = client.post(
+        "/agents/workspaces/ui/actions",
+        data={
+            "_csrf": csrf(client),
+            "action": "nuke",
+            "repository": "anixpkgs",
+            "branch": "",
+        },
+    )
+    assert response.status_code == 302
+    assert workspaces.actions == [("nuke", "ui", "anixpkgs", "")]
+
+
+def test_dirty_repository_keeps_actions_enabled(configured_app):
+    app, _, workspaces = configured_app
+    dirty = workspaces.status("ui")
+    dirty["repositories"][0]["clean"] = False
+    workspaces.status = lambda workspace: dirty
+    client = app.test_client()
+    login(client)
+
+    response = client.get("/agents/workspaces/ui")
+
+    assert response.status_code == 200
+    assert b" disabled>" not in response.data  # no grayed-out button markup
+    assert b'value="nuke"' in response.data
+
+
 def test_workspace_actions_require_known_workspace_and_csrf(configured_app):
     app, _, workspaces = configured_app
     client = app.test_client()

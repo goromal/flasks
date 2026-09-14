@@ -23,6 +23,7 @@
     button, .button { border: 0; border-radius: 8px; padding: 9px 13px; background: #2f81f7; color: white; font: inherit; font-weight: 650; text-decoration: none; cursor: pointer; display: inline-block; }
     button.secondary, .button.secondary { background: #3a4858; }
     button.warning { background: #95651d; }
+    button.danger { background: #b64242; }
     button:disabled { opacity: .45; cursor: not-allowed; }
     .toolbar, .inline, .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .toolbar { justify-content: space-between; margin-bottom: 18px; }
@@ -37,7 +38,7 @@
     .badge { border-radius: 99px; padding: 2px 8px; background: #2b3948; color: #b9c9d8; font-size: .78rem; }
     .badge.good { background: #194d37; color: #a9e8c8; }
     .badge.bad { background: #632f34; color: #ffc1c5; }
-    .branch-form { display: grid; grid-template-columns: minmax(150px, 260px) auto auto; gap: 8px; margin-top: 9px; }
+    .branch-form { display: grid; grid-template-columns: minmax(150px, 1fr) auto auto auto; gap: 8px; margin-top: 9px; }
     .add-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .add-card { padding: 14px; border: 1px solid #2b3948; border-radius: 10px; }
     .add-card form { display: grid; gap: 8px; }
@@ -105,11 +106,11 @@
                     </form>
                     <form method="post" action="{{ subdomain }}/workspaces/{{ detail.name }}/actions" onsubmit="return confirm('Switch to the saved branch and fast-forward it?')">
                       <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="sync"><input type="hidden" name="repository" value="{{ repo.name }}">
-                      <button class="secondary" type="submit" {% if not repo.saved_branch or not repo.clean %}disabled{% endif %}>Sync saved</button>
+                      <button class="secondary" type="submit" {% if not repo.saved_branch %}disabled{% endif %}>Sync saved</button>
                     </form>
                     <form method="post" action="{{ subdomain }}/workspaces/{{ detail.name }}/actions" onsubmit="return confirm('Rebase and push the current branch?')">
                       <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="rebase-push"><input type="hidden" name="repository" value="{{ repo.name }}">
-                      <button class="warning" type="submit" {% if not repo.clean %}disabled{% endif %}>Rebase + push</button>
+                      <button class="warning" type="submit">Rebase + push</button>
                     </form>
                   </div>
                 </div>
@@ -117,7 +118,10 @@
                   <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="repository" value="{{ repo.name }}">
                   <input name="branch" required placeholder="branch name">
                   <button class="secondary" name="action" value="branch-create" type="submit">Create</button>
-                  <button class="secondary" name="action" value="checkout" type="submit" {% if not repo.clean %}disabled{% endif %}>Checkout</button>
+                  <button class="secondary" name="action" value="checkout" type="submit">Checkout</button>
+                  <!-- formnovalidate: nuking with an empty branch box re-clones the current branch. -->
+                  <button class="danger" name="action" value="nuke" type="submit" formnovalidate
+                          onclick="return confirm('Delete {{ repo.name }} and re-clone it from origin? Uncommitted work and stashes are lost.')">Nuke</button>
                 </form>
               {% else %}
                 <h3>{{ repo.name }}</h3><p>Configured but not present. Run workspace setup after checking its source definition.</p>

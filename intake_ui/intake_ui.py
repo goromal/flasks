@@ -33,7 +33,9 @@ def _load_categories(csv_path):
                     categories.append(parts[0].strip())
     except FileNotFoundError:
         pass
-    return categories
+    # The CSV is grouped by Notion page, which is meaningless to someone
+    # scanning the dropdown; sort so keywords are findable by name.
+    return sorted(categories, key=str.casefold)
 
 
 def create_app(subdomain="", maildir=None, categories_csv=None):

@@ -376,6 +376,9 @@ def create_app(
             "save-branch": (workspace, repository),
             "branch-create": (workspace, repository, branch),
             "checkout": (workspace, repository, branch),
+            # Blank branch means "re-clone whatever is checked out now", which
+            # is what the devshell TUI does when its branch prompt is empty.
+            "nuke": (workspace, repository, branch),
             "push": (workspace, repository),
             "sync": (workspace, repository),
             "rebase-push": (workspace, repository),
