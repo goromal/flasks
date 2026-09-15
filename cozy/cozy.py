@@ -21,6 +21,7 @@ from comfyui_client import ComfyUIClient
 from job_store import JobStore, job_duration
 import crop
 import eta
+import fit
 import heif
 import image_refs
 import image_size
@@ -137,7 +138,7 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
                input_dir=None, output_dir=None, workflow_kinds=None,
                secret_key=None, password_hash=None, restart_cmd=None,
                prompt_db_dir=None, queue_store=None, scheduler=None,
-               api_token_hash=None):
+               api_token_hash=None, max_input_bytes=fit.DEFAULT_MAX_BYTES):
     global _PW_HASH, _API_TOKEN_HASH
     if password_hash is not None:
         _PW_HASH = password_hash
@@ -288,19 +289,39 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         path = os.path.join(workflow_dir, wf + ".api.json")
         if not os.path.exists(path):
             return flask.jsonify({"error": "workflow file missing"}), 400
-        if rect:
-            # Staged only now: everything above this point can still reject the
-            # request, and a rejected request must not leave an orphaned crop.
-            try:
-                image = crop.stage(input_dir, source_path, rect)
-            except OSError:
-                return flask.jsonify({"error": "cannot read input image"}), 400
-            staged_path = os.path.join(input_dir, image)
+        # Staged only now: everything above this point can still reject the
+        # request, and a rejected request must not leave an orphaned file.
+        fit_info = None
+        res = None
+        fit_from = None
+        try:
+            if rect:
+                image, res = crop.stage(input_dir, source_path, rect,
+                                        max_input_bytes)
+                staged_path = os.path.join(input_dir, image)
+                fit_from = [rect["w"], rect["h"]]
+            elif source_path:
+                rel, res = fit.stage_whole(input_dir, source_path,
+                                           max_input_bytes)
+                if rel:
+                    image = rel
+                    staged_path = os.path.join(input_dir, rel)
+                fit_from = list(dims) if dims else None
+        except OSError:
+            return flask.jsonify({"error": "cannot read input image"}), 400
+        if res is not None and res.resized:
+            fit_info = {"scale": res.scale, "to": list(res.size),
+                        "from": fit_from or list(res.size)}
+            # ETA history is keyed on what the model actually sees -- the same
+            # reason a crop is measured instead of its source. A resized input
+            # is fewer pixels, so recording the pre-resize count would drag
+            # this workflow's estimates the wrong way.
+            eta_pixels = res.size[0] * res.size[1]
         if not store.start(wf, path, prompt, width, height, image,
                            eta_pixels=eta_pixels, source_path=source_path,
                            rect=rect, staged_path=staged_path,
-                           basename=basename):
-            # Nothing will consume the crop we just staged.
+                           basename=basename, fit=fit_info):
+            # Nothing will consume the file we just staged.
             if staged_path:
                 try:
                     os.remove(staged_path)
@@ -327,6 +348,7 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
             "error": job.get("error"),
             "has_image": bool(state.get("output")),
             "has_crop": bool(state.get("crop_output")),
+            "fit": state.get("fit"),
             "duration": job_duration(job),
             "eta": eta_secs,
         })
@@ -376,6 +398,50 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         except OSError as e:
             return flask.jsonify({"error": str(e)}), 500
         return flask.jsonify({"value": rel, "label": rel})
+
+    @bp.route("/api/input-fit", methods=["GET"])
+    @flask_login.login_required
+    def input_fit():
+        """What the input-size ceiling will do to the current selection.
+
+        The browser cannot answer this itself the way it mirrors
+        normalize_rect: byte size is only knowable by encoding, so replaying
+        the server's own fit is the only honest preview. The rect is normalised
+        first, so the reported source size is the size the run will actually
+        crop -- otherwise the note would quote a number the user never sees
+        again.
+
+        Remote images are deliberately not supported: they do not exist on disk
+        until a job stages them, and fetching one over SSH on every pick would
+        make the picker unusable. Their resize is reported after the fact
+        instead, via the `fit` field on /api/status and on queue results.
+        """
+        args = flask.request.args
+        full = image_refs.resolve(input_dir, output_dir, args.get("name", ""))
+        if not full:
+            return flask.jsonify({"error": "not found"}), 404
+        dims = image_size.image_size(full)
+        if dims is None:
+            return flask.jsonify({"error": "cannot read input image"}), 400
+        rect = None
+        if all(args.get(k) is not None for k in ("x", "y", "w", "h")):
+            try:
+                rect = crop.normalize_rect(
+                    {k: args.get(k) for k in ("x", "y", "w", "h")},
+                    dims[0], dims[1])
+            except ValueError:
+                return flask.jsonify({"error": "invalid crop region"}), 400
+        try:
+            if rect:
+                res = crop.plan(full, rect, max_input_bytes)
+                src = [rect["w"], rect["h"]]
+            else:
+                res = fit.plan(full, max_input_bytes)
+                src = list(dims)
+        except OSError:
+            return flask.jsonify({"error": "cannot read input image"}), 400
+        return flask.jsonify({"resized": res.resized, "from": src,
+                              "to": list(res.size), "limit": max_input_bytes})
 
     @bp.route("/api/input-images", methods=["GET"])
     @flask_login.login_required
@@ -708,7 +774,7 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         # Staged remote images and staged crops are cozy's own artifacts; remove
         # them here rather than assuming the admin flush.sh scripts recurse into
         # subdirectories.
-        for sub in ("wormhole", crop.CROP_SUBDIR):
+        for sub in ("wormhole", crop.CROP_SUBDIR, fit.SUBDIR):
             shutil.rmtree(os.path.join(input_dir, sub), ignore_errors=True)
         # Run a flush.sh (if present) in the input and output dirs. The scripts
         # are placed there out-of-band by the admin; a missing one is a no-op, so
@@ -768,6 +834,11 @@ def run():
                              "'systemctl restart comfyui.service'); empty hides the restart button")
     parser.add_argument("--rest-gap", type=int, default=30,
                         help="Seconds to rest between queued jobs")
+    parser.add_argument("--max-input-bytes", type=int,
+                        default=fit.DEFAULT_MAX_BYTES,
+                        help="Byte ceiling on the image an edit workflow hands "
+                             "to ComfyUI; larger inputs are resized down. "
+                             "0 disables the ceiling")
     args = parser.parse_args()
 
     state_dir = args.state_dir or os.path.join(os.getcwd(), "cozy-state")
@@ -786,7 +857,8 @@ def run():
     qstore = queue_store.QueueStore(state_dir)
     scheduler = queue_store.Scheduler(
         qstore, ComfyUIClient(args.comfyui_url), workflow_dir, workflow_kinds,
-        input_dir, output_dir, run_lock, rest_gap=args.rest_gap)
+        input_dir, output_dir, run_lock, rest_gap=args.rest_gap,
+        max_input_bytes=args.max_input_bytes)
     scheduler.resume()
     secrets = _load_secrets(args.secrets_file)
     restart_cmd = shlex.split(args.comfyui_restart_cmd) if args.comfyui_restart_cmd else None
@@ -799,7 +871,8 @@ def run():
                      restart_cmd=restart_cmd,
                      prompt_db_dir=args.prompt_db_dir or os.path.join(state_dir, "prompts"),
                      queue_store=qstore, scheduler=scheduler,
-                     api_token_hash=secrets.get("api_token_hash"))
+                     api_token_hash=secrets.get("api_token_hash"),
+                     max_input_bytes=args.max_input_bytes)
     app.run(host="0.0.0.0", port=args.port)
 
 
