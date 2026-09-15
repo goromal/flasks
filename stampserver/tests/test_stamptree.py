@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from fileops import (
     build_stamped,
     files_at_path,
+    join_stamp_path,
     parse_stamped,
     rename_subtree,
     rename_to_path,
@@ -45,6 +46,12 @@ def test_split_stamp_path():
 def test_replace_segment():
     assert replace_segment(["a", "b", "c"], 1, "x") == ["a", "x", "c"]
     assert replace_segment(["a"], 0, "x") == ["x"]
+
+
+def test_join_stamp_path():
+    assert join_stamp_path(["a", "b"]) == "a/b"
+    assert join_stamp_path(["a"]) == "a"
+    assert join_stamp_path([""]) == ""
 
 
 LISTING = [
@@ -149,3 +156,75 @@ def test_rename_subtree_skips_collisions(tmp_path):
     renamed, skipped = rename_subtree(d, os.listdir(d), ["a"], "b")
     assert renamed == ["stamped.b.y.png"]
     assert skipped == ["stamped.a.x.png"]
+
+
+def test_rename_subtree_requires_nonempty_path(tmp_path):
+    d = str(tmp_path)
+    for name in LISTING:
+        _touch(d, name)
+    before = sorted(os.listdir(d))
+    with pytest.raises(ValueError):
+        rename_subtree(d, os.listdir(d), [], "z")
+    assert sorted(os.listdir(d)) == before
+
+
+def test_rename_to_path_rejects_invalid_segment(tmp_path):
+    d = str(tmp_path)
+    _touch(d, "stamped.a.x.png")
+    with pytest.raises(ValueError):
+        rename_to_path(d, "stamped.a.x.png", ["a", "b.c"])
+    with pytest.raises(ValueError):
+        rename_to_path(d, "stamped.a.x.png", ["a/b"])
+    assert os.listdir(d) == ["stamped.a.x.png"]
+
+
+def test_rename_subtree_rejects_invalid_segment(tmp_path):
+    d = str(tmp_path)
+    for name in LISTING:
+        _touch(d, name)
+    before = sorted(os.listdir(d))
+    with pytest.raises(ValueError):
+        rename_subtree(d, os.listdir(d), ["a"], "b.c")
+    assert sorted(os.listdir(d)) == before
+
+
+def test_rename_subtree_ignores_missing_and_non_regular_files(tmp_path):
+    d = str(tmp_path)
+    _touch(d, "stamped.a.x.png")
+    _touch(d, "stamped.a.y.png")
+    os.mkdir(os.path.join(d, "stamped.a.sub"))
+    listing = os.listdir(d) + ["stamped.a.ghost.png"]
+    renamed, skipped = rename_subtree(d, listing, ["a"], "z")
+    assert sorted(renamed) == ["stamped.z.x.png", "stamped.z.y.png"]
+    assert skipped == []
+    assert "stamped.a.sub" in os.listdir(d)
+    assert "stamped.z.sub" not in os.listdir(d)
+    assert "stamped.a.ghost.png" not in os.listdir(d)
+    assert "stamped.z.ghost.png" not in os.listdir(d)
+
+
+def test_rename_subtree_noop_when_segment_unchanged(tmp_path):
+    d = str(tmp_path)
+    for name in LISTING:
+        _touch(d, name)
+    before = sorted(os.listdir(d))
+    renamed, skipped = rename_subtree(d, os.listdir(d), ["a"], "a")
+    assert (renamed, skipped) == ([], [])
+    assert sorted(os.listdir(d)) == before
+
+
+def test_rename_subtree_copy_keeps_originals(tmp_path):
+    d = str(tmp_path)
+    for name in LISTING:
+        _touch(d, name)
+    before = sorted(os.listdir(d))
+    renamed, skipped = rename_subtree(d, os.listdir(d), ["a", "d"], "dogs", copy=True)
+    assert skipped == []
+    assert sorted(renamed) == [
+        "stamped.a.stamped.dogs.stamped.p.v.png",
+        "stamped.a.stamped.dogs.y.png",
+        "stamped.a.stamped.dogs.z.png",
+    ]
+    after = os.listdir(d)
+    assert all(name in after for name in before)
+    assert all(name in after for name in renamed)

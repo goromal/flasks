@@ -129,8 +129,14 @@ def rename_to_path(res_dir, filename, new_path, copy=False):
     """Give `filename` the stamp path `new_path`, keeping its base name.
 
     Returns the new filename. Raises FileExistsError (args[0] = the new
-    filename) rather than overwriting an existing file.
+    filename) rather than overwriting an existing file. Raises ValueError if
+    any segment of `new_path` contains "." or "/" (empty segments are still
+    allowed, for legacy ``stamped..x`` files). The no-overwrite guarantee is
+    best-effort -- it checks then renames, so a concurrent request could
+    still race and overwrite.
     """
+    if any("." in s or "/" in s for s in new_path):
+        raise ValueError(f"invalid stamp segment in {new_path!r}")
     _, base = parse_stamped(filename)
     new_name = build_stamped(new_path, base)
     if new_name == filename:
@@ -150,16 +156,34 @@ def rename_subtree(res_dir, listing, path, segment, copy=False):
     """Replace the last segment of `path` with `segment` for every file at
     `path` or deeper, keeping deeper segments. Returns (renamed, skipped):
     the new filenames, and the old filenames left alone because their
-    destination already existed."""
+    destination already existed (or vanished mid-rename).
+
+    Raises ValueError if `path` is empty (an empty path has no last segment
+    to replace, and would otherwise prepend `segment` to every file in
+    `listing`) or if `segment` contains "." or "/". Entries in `listing`
+    that are not regular files (already gone, or a directory that happens
+    to match the stamped-name pattern) are silently ignored -- they are not
+    renameable and appear in neither `renamed` nor `skipped`. A no-op
+    request (`segment == path[-1]`) returns ([], []) without touching the
+    filesystem.
+    """
+    if not path:
+        raise ValueError("rename_subtree requires a non-empty stamp path")
+    if "." in segment or "/" in segment:
+        raise ValueError(f"invalid stamp segment in {segment!r}")
+    if segment == path[-1]:
+        return [], []
     index = len(path) - 1
     renamed, skipped = [], []
     for name in sorted(listing):
         file_path, _ = parse_stamped(name)
         if file_path[:len(path)] != path:
             continue
+        if not os.path.isfile(os.path.join(res_dir, name)):
+            continue
         try:
             renamed.append(rename_to_path(
                 res_dir, name, replace_segment(file_path, index, segment), copy=copy))
-        except FileExistsError:
+        except (FileExistsError, FileNotFoundError):
             skipped.append(name)
     return renamed, skipped
