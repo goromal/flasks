@@ -858,16 +858,17 @@
                     if (data.error) { showStatus('Error: ' + data.error, true); return; }
                     const sel = document.getElementById('watchTagSelect');
                     sel.innerHTML = '';
-                    const tags = data.tags;
+                    const tags = data.tags.filter(([tag]) => !tag.split('/').some(s => s === ''));
                     if (tags.length === 0) {
                         showStatus('No stamped rankable files found in ' + _watchDir, true);
                         return;
                     }
                     tags.forEach(([tag, count]) => {
+                        if (tag.split('/').some(s => s === '')) return;
                         const depth = tag.split('/').length - 1;
                         const opt = document.createElement('option');
                         opt.value = tag;
-                        opt.textContent = '    '.repeat(depth) + tag + ' (' + count + ')';
+                        opt.textContent = '\u00a0\u00a0\u00a0\u00a0'.repeat(depth) + tag + ' (' + count + ')';
                         sel.appendChild(opt);
                     });
                     document.getElementById('watchTagRow').style.display = 'flex';

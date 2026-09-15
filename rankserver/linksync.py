@@ -54,7 +54,8 @@ def sync_links(res_dir, watches):
     for watch in watches:
         stamp_dir = watch.get("stamp_dir", "")
         tag = watch.get("stamp_tag", "")
-        if not stamp_dir or not tag:
+        if (not isinstance(stamp_dir, str) or not stamp_dir
+                or not isinstance(tag, str) or not tag):
             warnings.append("watch config incomplete; sync skipped for one entry")
             continue
         try:
@@ -107,11 +108,18 @@ def count_owned_links(res_dir, stamp_dir, tag):
     stamp_real = os.path.realpath(stamp_dir)
     tag_path = rankops.split_tag(tag)
     count = 0
-    for name in os.listdir(res_dir):
+    try:
+        names = os.listdir(res_dir)
+    except OSError:
+        return 0
+    for name in names:
         full = os.path.join(res_dir, name)
         if not os.path.islink(full):
             continue
-        target = _link_target(full)
+        try:
+            target = _link_target(full)
+        except OSError:
+            continue
         if os.path.realpath(os.path.dirname(target)) != stamp_real:
             continue
         path, _ = rankops.parse_stamped(os.path.basename(target))

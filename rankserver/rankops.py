@@ -68,6 +68,15 @@ def split_tag(tag):
     return tag.split("/")
 
 
+def valid_tag(tag):
+    """True iff `tag` is a non-empty str whose split_tag segments are all
+    non-empty and contain no '.'. Rejects legacy empty-segment stamps
+    ("", "t/") and anything a '/'-split could mistake for path traversal."""
+    if not isinstance(tag, str) or not tag:
+        return False
+    return all(segment and "." not in segment for segment in split_tag(tag))
+
+
 def path_under(path, tag_path):
     """True when `path` is `tag_path` or one of its descendants."""
     return len(path) >= len(tag_path) and path[:len(tag_path)] == tag_path

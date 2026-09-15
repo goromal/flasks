@@ -540,7 +540,7 @@ def set_watch_config():
         return flask.jsonify({"success": False, "error": "Stamp path is not a directory"}), 400
     if not tag:
         return flask.jsonify({"success": False, "error": "Missing stamp tag"}), 400
-    if any(segment == "" or "." in segment for segment in rankops.split_tag(tag)):
+    if not rankops.valid_tag(tag):
         return flask.jsonify({"success": False, "error": "Invalid stamp path"}), 400
     cfg, _ = load_config()
     watches = rankops.get_watches(cfg)

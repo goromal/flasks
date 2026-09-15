@@ -33,6 +33,16 @@ def test_identity_key_drops_sub_stamps():
     assert rankops.identity_key("plain.png") == "plain.png"
 
 
+@pytest.mark.parametrize("tag", ["t", "t/dogs", "my stamp/a b"])
+def test_valid_tag_accepts(tag):
+    assert rankops.valid_tag(tag)
+
+
+@pytest.mark.parametrize("tag", ["", "t/", "/t", "t//d", "a.b", "t/..", None, 5])
+def test_valid_tag_rejects(tag):
+    assert not rankops.valid_tag(tag)
+
+
 def test_path_under():
     assert rankops.path_under(["t", "dogs", "pups"], ["t", "dogs"])
     assert rankops.path_under(["t", "dogs"], ["t", "dogs"])

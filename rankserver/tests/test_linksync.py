@@ -230,3 +230,36 @@ def test_incomplete_watch_warns(tmp_path):
     res.mkdir()
     warnings = _sync(res, [{"stamp_dir": "", "stamp_tag": "t"}])
     assert any("incomplete" in w for w in warnings)
+
+
+def test_non_str_watch_fields_warn_incomplete(tmp_path):
+    stamp = tmp_path / "stamp"
+    res = tmp_path / "res"
+    stamp.mkdir()
+    res.mkdir()
+
+    warnings = _sync(res, [
+        {"stamp_dir": 5, "stamp_tag": "t"},
+        {"stamp_dir": str(stamp), "stamp_tag": 7},
+    ])
+
+    assert len([w for w in warnings if "incomplete" in w]) == 2
+
+
+def test_count_owned_links_missing_res_dir_returns_zero(tmp_path):
+    stamp = tmp_path / "stamp"
+    stamp.mkdir()
+    _touch(stamp / "stamped.t.a.png")
+
+    assert linksync.count_owned_links(str(tmp_path / "missing"), str(stamp), "t") == 0
+
+
+def test_sync_links_missing_res_dir_warns_without_raising(tmp_path):
+    stamp = tmp_path / "stamp"
+    stamp.mkdir()
+    _touch(stamp / "stamped.t.a.png")
+
+    warnings = linksync.sync_links(
+        str(tmp_path / "missing"), [{"stamp_dir": str(stamp), "stamp_tag": "t"}])
+
+    assert isinstance(warnings, list) and warnings
