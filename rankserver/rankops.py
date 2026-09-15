@@ -10,11 +10,8 @@ and list keys arr, stack.
 The stack holds flat (low, high) position pairs, valid up to index `top`
 inclusive; the active partition is (stack[top-1], stack[top]).
 """
-import re
-
 UINT32_MAX = 0xFFFFFFFF
 RANKABLE_EXTS = (".txt", ".png", ".jpg", ".jpeg", ".heic", ".heif", ".mp4", ".mov")
-STAMP_RE = re.compile(r"stamped\.(.*?)\.")
 # QuickSortState enum values (mirror sorting/Sorting.h); used by the
 # sort-state surgery functions added alongside the QuickSortState helpers.
 LEFT_J = 1
@@ -36,52 +33,135 @@ def get_watches(cfg):
     return [w for w in watches if isinstance(w, dict)]
 
 
-def stamp_prefix(tag):
-    return "stamped.{}.".format(tag)
+STAMP_PREFIX = "stamped."
+
+
+def parse_stamped(name):
+    """Split a filename into ``(stamp path, base)``.
+
+        photo.png                              -> ([], "photo.png")
+        stamped.animals.photo.png              -> (["animals"], "photo.png")
+        stamped.animals.stamped.dogs.photo.png -> (["animals", "dogs"], "photo.png")
+
+    Leading ``stamped.<segment>.`` pairs are stripped greedily while a
+    non-empty base remains; an empty segment is kept (legacy ``stamped..x``).
+
+    Keep in lockstep with stampserver/fileops.py:parse_stamped.
+    """
+    path = []
+    rest = name
+    while rest.startswith(STAMP_PREFIX):
+        segment, sep, remainder = rest[len(STAMP_PREFIX):].partition(".")
+        if not sep or not remainder:
+            break
+        path.append(segment)
+        rest = remainder
+    return path, rest
+
+
+def build_stamped(path, base):
+    return "".join(STAMP_PREFIX + segment + "." for segment in path) + base
+
+
+def split_tag(tag):
+    """A watch's stamp_tag is a '/'-joined stamp path; legacy tags have no '/'."""
+    return tag.split("/")
+
+
+def path_under(path, tag_path):
+    """True when `path` is `tag_path` or one of its descendants."""
+    return len(path) >= len(tag_path) and path[:len(tag_path)] == tag_path
+
+
+def identity_key(name):
+    """Rename-stable name for a stamped file: its root stamp plus base, with
+    sub-stamps dropped. Data-dir symlinks (and so the ranking) are keyed by
+    it, so sub-stamping a file never changes what the ranking sees."""
+    path, base = parse_stamped(name)
+    return build_stamped(path[:1], base) if path else name
 
 
 def scan_stamps(listing):
-    """Map stamp tag -> count of rankable files carrying it, sorted by count desc."""
-    tags = {}
+    """Map every stamp path prefix ('a', 'a/d', ...) -> count of rankable files
+    at that path or deeper. Ordered depth-first, siblings by count desc then
+    name, so a flat dropdown reads as a tree."""
+    counts = {}
     for f in listing:
         if not is_rankable(f):
             continue
-        m = STAMP_RE.match(f)
-        if m:
-            tags[m.group(1)] = tags.get(m.group(1), 0) + 1
-    return dict(sorted(tags.items(), key=lambda kv: kv[1], reverse=True))
+        path, _ = parse_stamped(f)
+        for depth in range(1, len(path) + 1):
+            key = "/".join(path[:depth])
+            counts[key] = counts.get(key, 0) + 1
+    children = {}
+    for key in counts:
+        parent = key.rpartition("/")[0] if "/" in key else None
+        children.setdefault(parent, []).append(key)
+    ordered = {}
+
+    def walk(parent):
+        for key in sorted(children.get(parent, []), key=lambda k: (-counts[k], k)):
+            ordered[key] = counts[key]
+            walk(key)
+
+    walk(None)
+    return ordered
 
 
 def plan_sync(stamp_files, data_entries, tag):
-    """Decide symlink operations to mirror tag-matching stamp files.
+    """Decide symlink operations to mirror a watched stamp path.
 
     stamp_files: iterable of filenames present in the watched stamp dir.
     data_entries: dict name -> entry describing the data-dir contents, where
         entry is {"type": "file"|"dir"|"symlink"} plus, for symlinks,
-        "owned" (target's parent resolves into the watched stamp dir) and
-        "dangling" (target no longer exists).
-    Returns (to_link, to_prune, warnings): names to symlink into the data
-    dir, owned dangling symlinks to remove, and human-readable warnings.
-    Linking is scoped to the given tag, but pruning covers owned dangling
-    symlinks of ANY tag: ownership is stamp-dir-based by design, so a file
-    restamped to a different tag still gets its dead link cleaned up.
+        "owned" (target's parent resolves into a watched stamp dir),
+        "dangling" (target no longer exists) and "target_name" (the target's
+        basename).
+    tag: '/'-joined stamp path; matches rankable files at that path or deeper.
+
+    Links are named by identity_key, so adding, changing or removing a
+    sub-stamp re-points the existing link instead of replacing it.
+
+    Returns a dict:
+      link:     {key: filename} for matches with no data-dir entry yet
+      retarget: {key: filename} for owned links whose target was renamed
+      keep:     set of keys already linked to the right file
+      prune:    owned dangling symlinks of ANY tag. Ownership is
+                stamp-dir-based, so a file restamped away still gets its dead
+                link cleaned up. The caller must not prune a key any watch
+                links, retargets or keeps.
+      warnings: human-readable strings
     Never proposes touching regular files, dirs, or foreign symlinks.
     """
-    prefix = stamp_prefix(tag)
-    to_link, to_prune, warnings = [], [], []
+    tag_path = split_tag(tag)
+    plan = {"link": {}, "retarget": {}, "keep": set(), "prune": [], "warnings": []}
+    claimed = {}
     for name in sorted(stamp_files):
-        if not (name.startswith(prefix) and is_rankable(name)):
+        if not is_rankable(name):
             continue
-        entry = data_entries.get(name)
+        path, _ = parse_stamped(name)
+        if not path_under(path, tag_path):
+            continue
+        key = identity_key(name)
+        if key in claimed:
+            plan["warnings"].append("{} and {} share identity {}; skipping {}".format(
+                claimed[key], name, key, name))
+            continue
+        claimed[key] = name
+        entry = data_entries.get(key)
         if entry is None:
-            to_link.append(name)
+            plan["link"][key] = name
         elif entry["type"] == "file":
-            warnings.append("Regular file blocks stamped name: {}".format(name))
-    for name in sorted(data_entries):
-        entry = data_entries[name]
-        if entry["type"] == "symlink" and entry.get("owned") and entry.get("dangling"):
-            to_prune.append(name)
-    return to_link, to_prune, warnings
+            plan["warnings"].append("Regular file blocks stamped name: {}".format(key))
+        elif entry["type"] == "symlink" and entry.get("owned"):
+            if entry.get("target_name") == name:
+                plan["keep"].add(key)
+            else:
+                plan["retarget"][key] = name
+    plan["prune"] = sorted(
+        name for name, entry in data_entries.items()
+        if entry["type"] == "symlink" and entry.get("owned") and entry.get("dangling"))
+    return plan
 
 
 def _active_range(state):

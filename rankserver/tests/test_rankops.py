@@ -40,47 +40,53 @@ def test_get_watches_normalizes_legacy_and_list():
     assert rankops.get_watches(both) == [{"stamp_dir": "/a", "stamp_tag": "x"}]
 
 
+def _link(target_name, owned=True, dangling=False):
+    return {"type": "symlink", "owned": owned, "dangling": dangling,
+            "target_name": target_name}
+
+
 def test_plan_sync_links_missing_matches():
-    to_link, to_prune, warns = rankops.plan_sync(
+    plan = rankops.plan_sync(
         ["stamped.t.a.png", "stamped.t.b.mp4", "stamped.u.c.png", "stamped.t.d.gif"],
         {}, "t")
-    assert to_link == ["stamped.t.a.png", "stamped.t.b.mp4"]
-    assert to_prune == []
-    assert warns == []
+    assert plan["link"] == {"stamped.t.a.png": "stamped.t.a.png",
+                            "stamped.t.b.mp4": "stamped.t.b.mp4"}
+    assert plan["retarget"] == {} and plan["prune"] == [] and plan["warnings"] == []
 
 
 def test_plan_sync_skips_already_linked():
-    entries = {"stamped.t.a.png": {"type": "symlink", "owned": True, "dangling": False}}
-    to_link, to_prune, warns = rankops.plan_sync(["stamped.t.a.png"], entries, "t")
-    assert to_link == [] and to_prune == [] and warns == []
+    entries = {"stamped.t.a.png": _link("stamped.t.a.png")}
+    plan = rankops.plan_sync(["stamped.t.a.png"], entries, "t")
+    assert plan["link"] == {} and plan["retarget"] == {} and plan["prune"] == []
+    assert plan["keep"] == {"stamped.t.a.png"} and plan["warnings"] == []
 
 
 def test_plan_sync_prunes_owned_dangling_only():
     entries = {
-        "stamped.t.a.png": {"type": "symlink", "owned": True, "dangling": True},
-        "stamped.t.b.png": {"type": "symlink", "owned": True, "dangling": False},
-        "foreign.png": {"type": "symlink", "owned": False, "dangling": True},
+        "stamped.t.a.png": _link("stamped.t.a.png", dangling=True),
+        "stamped.t.b.png": _link("stamped.t.b.png"),
+        "foreign.png": _link("foreign.png", owned=False, dangling=True),
         "regular.png": {"type": "file"},
         "somedir": {"type": "dir"},
     }
-    to_link, to_prune, warns = rankops.plan_sync([], entries, "t")
-    assert to_prune == ["stamped.t.a.png"]
-    assert to_link == [] and warns == []
+    plan = rankops.plan_sync([], entries, "t")
+    assert plan["prune"] == ["stamped.t.a.png"]
+    assert plan["link"] == {} and plan["warnings"] == []
 
 
 def test_plan_sync_prunes_owned_dangling_across_tags():
     # Ownership is stamp-dir-based, not tag-based: a dangling link left by a
     # different (or former) tag is still cleaned up.
-    entries = {"stamped.other.x.png": {"type": "symlink", "owned": True, "dangling": True}}
-    to_link, to_prune, warns = rankops.plan_sync([], entries, "t")
-    assert to_prune == ["stamped.other.x.png"]
+    entries = {"stamped.other.x.png": _link("stamped.other.x.png", dangling=True)}
+    plan = rankops.plan_sync([], entries, "t")
+    assert plan["prune"] == ["stamped.other.x.png"]
 
 
 def test_plan_sync_warns_on_blocking_regular_file():
     entries = {"stamped.t.a.png": {"type": "file"}}
-    to_link, to_prune, warns = rankops.plan_sync(["stamped.t.a.png"], entries, "t")
-    assert to_link == []
-    assert len(warns) == 1 and "stamped.t.a.png" in warns[0]
+    plan = rankops.plan_sync(["stamped.t.a.png"], entries, "t")
+    assert plan["link"] == {}
+    assert len(plan["warnings"]) == 1 and "stamped.t.a.png" in plan["warnings"][0]
 
 
 UMAX = rankops.UINT32_MAX
