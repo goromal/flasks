@@ -137,13 +137,19 @@ def plan_sync(stamp_files, data_entries, tag, stamp_dir):
     same-key file that isn't the one already linked, a live link that
     belongs to another watched dir, or an identity collision between two
     candidate files each produce a warning instead of a claim. A dangling
-    link whose recorded target is gone AND more than one current file now
-    shares its identity is held (kept, not retargeted or pruned) with a
-    warning instead of guessing which file inherits the rank -- retargeting
-    is only ever safe when a rename leaves exactly one candidate behind. An
-    owned symlink entry missing "target_dir" indicates a caller bug (it
-    cannot be compared against stamp_dir) and raises ValueError instead of
-    silently mis-classifying the link.
+    link whose recorded target is gone AND more than one current file in the
+    STAMP DIR AS A WHOLE now shares its identity is held (kept, not
+    retargeted or pruned) with a warning instead of guessing which file
+    inherits the rank -- retargeting is only ever safe when a rename leaves
+    exactly one candidate behind dir-wide. The dir-wide count (not just this
+    watch's tag-filtered candidates) matters because a narrow sub-path watch
+    can see only one matching file while the lost file in fact moved
+    elsewhere in the dir rather than vanishing -- from that watch's view
+    alone the "rename" looks unambiguous, but it would still swap the rank
+    onto a file that was never part of it. An owned symlink entry missing
+    "target_dir" indicates a caller bug (it cannot be compared against
+    stamp_dir) and raises ValueError instead of silently mis-classifying the
+    link.
 
     Returns a dict:
       link:     {key: filename} for matches with no data-dir entry yet
@@ -158,6 +164,17 @@ def plan_sync(stamp_files, data_entries, tag, stamp_dir):
     """
     tag_path = split_tag(tag)
     plan = {"link": {}, "retarget": {}, "keep": set(), "prune": [], "warnings": []}
+    # Identity groups over every rankable file in the dir, regardless of tag
+    # -- ambiguity has to be judged dir-wide: a narrow sub-path watch's own
+    # tag-filtered candidate list can look unambiguous (one match) even when
+    # the lost file actually just moved elsewhere in the dir rather than
+    # vanishing, still sharing the identity.
+    dir_keys = {}
+    for name in sorted(stamp_files):
+        if not is_rankable(name):
+            continue
+        dir_keys.setdefault(identity_key(name), []).append(name)
+
     candidates = {}
     for name in sorted(stamp_files):
         if not is_rankable(name):
@@ -175,17 +192,21 @@ def plan_sync(stamp_files, data_entries, tag, stamp_dir):
             raise ValueError("owned symlink entry {} lacks target_dir".format(key))
         ours = (entry is not None and entry["type"] == "symlink"
                 and entry.get("owned") and entry.get("target_dir") == stamp_dir)
-        lost_ambiguous = (ours and entry.get("dangling") and len(names) > 1
-                           and entry.get("target_name") not in names)
+        dir_names = dir_keys.get(key, [])
+        lost_ambiguous = (ours and entry.get("dangling")
+                           and entry.get("target_name") not in names
+                           and len(dir_names) > 1)
         if lost_ambiguous:
             # The renamed-away file's replacement can't be told apart from a
-            # pre-existing collision; picking either would silently hand the
-            # established rank to the wrong photo. Hold it instead.
+            # pre-existing (or since-moved-elsewhere) collision; picking any
+            # one would silently hand the established rank to the wrong
+            # photo. Hold it instead.
             plan["keep"].add(key)
             plan["warnings"].append(
                 "{} lost its file {} and {} files now share its identity ({}); "
-                "not relinking until only one remains".format(
-                    key, entry.get("target_name"), len(names), ", ".join(names)))
+                "not relinking until only one remains -- remove or re-root "
+                "the file that was not previously ranked".format(
+                    key, entry.get("target_name"), len(dir_names), ", ".join(dir_names)))
             continue
 
         if ours and entry.get("target_name") in names:

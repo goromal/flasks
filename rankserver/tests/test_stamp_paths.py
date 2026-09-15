@@ -280,3 +280,32 @@ def test_merge_plans_ambiguous_dangling_link_held_regardless_of_watch_order():
     merged = _plans_both_orders((files, entries, "a", "/s"), (files, entries, "a/d", "/s"))
     assert merged["retarget"] == {} and merged["link"] == {}
     assert merged["prune"] == []
+
+
+def test_plan_sync_narrow_watch_holds_when_lost_file_left_its_subtree():
+    # The link's target (photo 1) was renamed out of the a/c watch entirely
+    # (to stamped.a.stamped.e.x.png). From a/c's tag-filtered view the only
+    # candidate is photo 2 (the pups file) -- a single match, which would
+    # normally be an unambiguous retarget. But photo 1 didn't vanish: it
+    # still exists in the dir, just outside this watch's subtree, still
+    # sharing the same identity. Retargeting to photo 2 would silently swap
+    # the established rank onto a file that was never part of it.
+    entries = {"stamped.a.x.png": _link("stamped.a.stamped.c.x.png", dangling=True)}
+    stamp_files = ["stamped.a.stamped.c.stamped.p.x.png", "stamped.a.stamped.e.x.png"]
+    plan = rankops.plan_sync(stamp_files, entries, "a/c", "/s")
+    assert plan["retarget"] == {}
+    assert plan["keep"] == {"stamped.a.x.png"}
+    warn = " ".join(plan["warnings"])
+    assert "not relinking" in warn
+    assert "stamped.a.stamped.c.stamped.p.x.png" in warn
+    assert "stamped.a.stamped.e.x.png" in warn
+
+
+def test_plan_sync_retargets_when_exactly_one_file_shares_identity_dirwide():
+    # Contrast case: the lost file's replacement is the ONLY file anywhere
+    # in the dir sharing its identity -- unambiguous, so it still retargets.
+    entries = {"stamped.a.x.png": _link("stamped.a.stamped.c.x.png", dangling=True)}
+    stamp_files = ["stamped.a.stamped.c.stamped.p.x.png"]
+    plan = rankops.plan_sync(stamp_files, entries, "a/c", "/s")
+    assert plan["retarget"] == {"stamped.a.x.png": "stamped.a.stamped.c.stamped.p.x.png"}
+    assert plan["keep"] == set()
