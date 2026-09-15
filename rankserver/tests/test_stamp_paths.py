@@ -57,20 +57,20 @@ def test_scan_stamps_hierarchical_depth_first():
     ]
 
 
-def _link(target_name, owned=True, dangling=False):
+def _link(target_name, owned=True, dangling=False, target_dir="/s"):
     return {"type": "symlink", "owned": owned, "dangling": dangling,
-            "target_name": target_name}
+            "target_name": target_name, "target_dir": target_dir}
 
 
 def test_plan_sync_sub_stamped_file_links_under_identity_key():
-    plan = rankops.plan_sync(["stamped.t.stamped.dogs.a.png"], {}, "t")
+    plan = rankops.plan_sync(["stamped.t.stamped.dogs.a.png"], {}, "t", "/s")
     assert plan["link"] == {"stamped.t.a.png": "stamped.t.stamped.dogs.a.png"}
 
 
 def test_plan_sync_retargets_renamed_sub_stamp():
     # The link still points at the pre-sub-stamp name, which no longer exists.
     entries = {"stamped.t.a.png": _link("stamped.t.a.png", dangling=True)}
-    plan = rankops.plan_sync(["stamped.t.stamped.dogs.a.png"], entries, "t")
+    plan = rankops.plan_sync(["stamped.t.stamped.dogs.a.png"], entries, "t", "/s")
     assert plan["retarget"] == {"stamped.t.a.png": "stamped.t.stamped.dogs.a.png"}
     assert plan["link"] == {} and plan["keep"] == set()
     # Still offered for pruning; sync_symlinks subtracts claimed keys.
@@ -79,7 +79,7 @@ def test_plan_sync_retargets_renamed_sub_stamp():
 
 def test_plan_sync_retargets_removed_sub_stamp():
     entries = {"stamped.t.a.png": _link("stamped.t.stamped.dogs.a.png", dangling=True)}
-    plan = rankops.plan_sync(["stamped.t.a.png"], entries, "t")
+    plan = rankops.plan_sync(["stamped.t.a.png"], entries, "t", "/s")
     assert plan["retarget"] == {"stamped.t.a.png": "stamped.t.a.png"}
 
 
@@ -93,7 +93,7 @@ SUBTREE = [
 
 
 def test_plan_sync_sub_path_matches_subtree_only():
-    plan = rankops.plan_sync(SUBTREE, {}, "t/dogs")
+    plan = rankops.plan_sync(SUBTREE, {}, "t/dogs", "/s")
     assert plan["link"] == {
         "stamped.t.b.png": "stamped.t.stamped.dogs.b.png",
         "stamped.t.c.png": "stamped.t.stamped.dogs.stamped.pups.c.png",
@@ -101,7 +101,7 @@ def test_plan_sync_sub_path_matches_subtree_only():
 
 
 def test_plan_sync_root_tag_matches_all_depths():
-    plan = rankops.plan_sync(SUBTREE, {}, "t")
+    plan = rankops.plan_sync(SUBTREE, {}, "t", "/s")
     assert sorted(plan["link"]) == [
         "stamped.t.a.png", "stamped.t.b.png", "stamped.t.c.png", "stamped.t.d.png",
     ]
@@ -109,7 +109,7 @@ def test_plan_sync_root_tag_matches_all_depths():
 
 def test_plan_sync_warns_on_identity_collision():
     plan = rankops.plan_sync(
-        ["stamped.t.stamped.cats.a.png", "stamped.t.stamped.dogs.a.png"], {}, "t")
+        ["stamped.t.stamped.cats.a.png", "stamped.t.stamped.dogs.a.png"], {}, "t", "/s")
     assert plan["link"] == {"stamped.t.a.png": "stamped.t.stamped.cats.a.png"}
     assert len(plan["warnings"]) == 1
     assert "stamped.t.stamped.dogs.a.png" in plan["warnings"][0]
@@ -117,6 +117,114 @@ def test_plan_sync_warns_on_identity_collision():
 
 def test_plan_sync_foreign_symlink_left_alone():
     entries = {"stamped.t.a.png": _link("elsewhere.png", owned=False)}
-    plan = rankops.plan_sync(["stamped.t.stamped.dogs.a.png"], entries, "t")
+    plan = rankops.plan_sync(["stamped.t.stamped.dogs.a.png"], entries, "t", "/s")
+    assert plan["link"] == {} and plan["retarget"] == {} and plan["keep"] == set()
+    assert len(plan["warnings"]) == 1
+    assert "stamped.t.a.png" in plan["warnings"][0]
+
+
+def test_plan_sync_live_link_to_nonmatching_file_warns():
+    # Owned link in this watch's own dir, but its target isn't one of the
+    # files currently matching this identity key -- must not be relinked.
+    entries = {"stamped.t.a.png": _link("stamped.t.other.png")}
+    plan = rankops.plan_sync(["stamped.t.a.png"], entries, "t", "/s")
+    assert plan["link"] == {} and plan["retarget"] == {} and plan["keep"] == set()
+    assert len(plan["warnings"]) == 1
+    assert "stamped.t.a.png" in plan["warnings"][0]
+    assert "stamped.t.other.png" in plan["warnings"][0]
+
+
+def test_plan_sync_live_link_in_another_dir_warns():
+    entries = {"stamped.t.a.png": _link("stamped.t.a.png", target_dir="/other")}
+    plan = rankops.plan_sync(["stamped.t.a.png"], entries, "t", "/s")
+    assert plan["link"] == {} and plan["retarget"] == {} and plan["keep"] == set()
+    assert len(plan["warnings"]) == 1
+    assert "stamped.t.a.png" in plan["warnings"][0]
+    assert plan["prune"] == []
+
+
+def test_plan_sync_dangling_link_in_another_dir_not_claimed():
+    entries = {"stamped.t.a.png": _link("stamped.t.a.png", target_dir="/other",
+                                        dangling=True)}
+    plan = rankops.plan_sync(["stamped.t.a.png"], entries, "t", "/s")
     assert plan["link"] == {} and plan["retarget"] == {} and plan["keep"] == set()
     assert plan["warnings"] == []
+    assert plan["prune"] == ["stamped.t.a.png"]
+
+
+def test_plan_sync_dir_blocks_link_warns():
+    entries = {"stamped.t.a.png": {"type": "dir"}}
+    plan = rankops.plan_sync(["stamped.t.a.png"], entries, "t", "/s")
+    assert plan["link"] == {}
+    assert len(plan["warnings"]) == 1 and "stamped.t.a.png" in plan["warnings"][0]
+
+
+def test_plan_sync_collision_prefers_live_link_even_if_sorted_later():
+    # The base "zebra" sorts *after* "stamped", so the naive alphabetical
+    # winner would be the sub-stamped file -- but the already-linked file
+    # must keep the rank instead.
+    entries = {"stamped.t.zebra.png": _link("stamped.t.zebra.png")}
+    plan = rankops.plan_sync(
+        ["stamped.t.zebra.png", "stamped.t.stamped.dogs.zebra.png"], entries, "t", "/s")
+    assert plan["keep"] == {"stamped.t.zebra.png"}
+    assert plan["link"] == {} and plan["retarget"] == {}
+    assert len(plan["warnings"]) == 1
+    assert "stamped.t.stamped.dogs.zebra.png" in plan["warnings"][0]
+
+
+def test_merge_plans_first_watch_wins_contested_link():
+    plan_a = {"link": {"k": "fileA"}, "retarget": {}, "keep": set(),
+              "prune": [], "warnings": []}
+    plan_b = {"link": {"k": "fileB"}, "retarget": {}, "keep": set(),
+              "prune": [], "warnings": []}
+    merged = rankops.merge_plans([("/d1", plan_a), ("/d2", plan_b)])
+    assert merged["link"] == {"k": ("/d1", "fileA")}
+    merged2 = rankops.merge_plans([("/d2", plan_b), ("/d1", plan_a)])
+    assert merged2["link"] == {"k": ("/d2", "fileB")}
+
+
+def _plans_both_orders(watch1, watch2):
+    p1 = rankops.plan_sync(*watch1)
+    p2 = rankops.plan_sync(*watch2)
+    dir1, dir2 = watch1[3], watch2[3]
+    fwd = rankops.merge_plans([(dir1, p1), (dir2, p2)])
+    rev = rankops.merge_plans([(dir2, p2), (dir1, p1)])
+    assert fwd == rev
+    return fwd
+
+
+def test_merge_plans_same_dir_two_sub_watches_order_independent():
+    entries = {"stamped.t.a.png": _link("stamped.t.stamped.cats.a.png", target_dir="/s")}
+    files = ["stamped.t.stamped.dogs.a.png", "stamped.t.stamped.cats.a.png"]
+    merged = _plans_both_orders(
+        (files, entries, "t/dogs", "/s"), (files, entries, "t/cats", "/s"))
+    assert merged["link"] == {} and merged["retarget"] == {}
+    assert merged["prune"] == []
+
+
+def test_merge_plans_dangling_link_retargeted_by_owning_dir_only():
+    entries = {"stamped.t.a.png": _link("stamped.t.a.png", target_dir="/d1", dangling=True)}
+    merged = _plans_both_orders(
+        (["stamped.t.stamped.d.a.png"], entries, "t", "/d1"),
+        (["stamped.t.a.png"], entries, "t", "/d2"))
+    assert merged["retarget"] == {"stamped.t.a.png": ("/d1", "stamped.t.stamped.d.a.png")}
+    assert merged["link"] == {}
+    assert merged["prune"] == []
+
+
+def test_merge_plans_unclaimed_dangling_link_still_prunes():
+    entries = {"stamped.t.a.png": _link("stamped.t.a.png", target_dir="/d1", dangling=True)}
+    merged = _plans_both_orders(
+        ([], entries, "t", "/d1"),
+        (["stamped.t.stamped.d.a.png"], entries, "t", "/d2"))
+    assert merged["link"] == {} and merged["retarget"] == {}
+    assert merged["prune"] == ["stamped.t.a.png"]
+
+
+def test_merge_plans_kept_link_never_offered_for_pruning():
+    entries = {"stamped.t.zebra.png": _link("stamped.t.zebra.png")}
+    plan = rankops.plan_sync(
+        ["stamped.t.zebra.png", "stamped.t.stamped.dogs.zebra.png"], entries, "t", "/s")
+    merged = rankops.merge_plans([("/s", plan)])
+    assert merged["link"] == {} and merged["retarget"] == {}
+    assert merged["prune"] == []

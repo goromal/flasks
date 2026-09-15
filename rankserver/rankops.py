@@ -108,60 +108,110 @@ def scan_stamps(listing):
     return ordered
 
 
-def plan_sync(stamp_files, data_entries, tag):
+def plan_sync(stamp_files, data_entries, tag, stamp_dir):
     """Decide symlink operations to mirror a watched stamp path.
 
     stamp_files: iterable of filenames present in the watched stamp dir.
     data_entries: dict name -> entry describing the data-dir contents, where
         entry is {"type": "file"|"dir"|"symlink"} plus, for symlinks,
         "owned" (target's parent resolves into a watched stamp dir),
-        "dangling" (target no longer exists) and "target_name" (the target's
-        basename).
+        "dangling" (target no longer exists), "target_name" (the target's
+        basename) and "target_dir" (realpath of the target's parent dir).
     tag: '/'-joined stamp path; matches rankable files at that path or deeper.
+    stamp_dir: realpath of the watched stamp dir being synced.
 
     Links are named by identity_key, so adding, changing or removing a
-    sub-stamp re-points the existing link instead of replacing it.
+    sub-stamp re-points the existing link instead of replacing it. But a
+    rename must never silently move an established rank onto a *different*
+    file: a link only ever gets created fresh, or retargeted/kept when it is
+    this watch's own link (its target lives in this watch's stamp_dir). A
+    same-key file that isn't the one already linked, a live link that
+    belongs to another watched dir, or an identity collision between two
+    candidate files each produce a warning instead of a claim.
 
     Returns a dict:
       link:     {key: filename} for matches with no data-dir entry yet
-      retarget: {key: filename} for owned links whose target was renamed
-      keep:     set of keys already linked to the right file
-      prune:    owned dangling symlinks of ANY tag. Ownership is
-                stamp-dir-based, so a file restamped away still gets its dead
-                link cleaned up. The caller must not prune a key any watch
-                links, retargets or keeps.
+      retarget: {key: filename} for this watch's own dangling link, pointed
+                at its (possibly sub-stamp-renamed) match
+      keep:     set of keys already linked to the right file by this watch
+      prune:    owned dangling symlinks of ANY tag/dir. The caller (via
+                merge_plans) must not prune a key any watch links, retargets
+                or keeps.
       warnings: human-readable strings
     Never proposes touching regular files, dirs, or foreign symlinks.
     """
     tag_path = split_tag(tag)
     plan = {"link": {}, "retarget": {}, "keep": set(), "prune": [], "warnings": []}
-    claimed = {}
+    candidates = {}
     for name in sorted(stamp_files):
         if not is_rankable(name):
             continue
         path, _ = parse_stamped(name)
         if not path_under(path, tag_path):
             continue
-        key = identity_key(name)
-        if key in claimed:
-            plan["warnings"].append("{} and {} share identity {}; skipping {}".format(
-                claimed[key], name, key, name))
-            continue
-        claimed[key] = name
+        candidates.setdefault(identity_key(name), []).append(name)
+
+    for key in sorted(candidates):
+        names = candidates[key]
         entry = data_entries.get(key)
+        ours = (entry is not None and entry["type"] == "symlink"
+                and entry.get("owned") and entry.get("target_dir") == stamp_dir)
+        if ours and entry.get("target_name") in names:
+            name = entry["target_name"]
+        else:
+            name = names[0]
+        for other in names:
+            if other != name:
+                plan["warnings"].append("{} and {} share identity {}; skipping {}".format(
+                    name, other, key, other))
+
         if entry is None:
             plan["link"][key] = name
         elif entry["type"] == "file":
             plan["warnings"].append("Regular file blocks stamped name: {}".format(key))
-        elif entry["type"] == "symlink" and entry.get("owned"):
-            if entry.get("target_name") == name:
+        elif entry["type"] == "dir" or not entry.get("owned"):
+            plan["warnings"].append(
+                "{} exists and is not a link managed by this watch; not linking {}".format(
+                    key, name))
+        elif ours:
+            if entry.get("dangling"):
+                plan["retarget"][key] = name
+            elif entry.get("target_name") == name:
                 plan["keep"].add(key)
             else:
-                plan["retarget"][key] = name
+                plan["warnings"].append(
+                    "{} already ranks {}; not relinking to {}".format(
+                        key, entry.get("target_name"), name))
+        elif not entry.get("dangling"):
+            plan["warnings"].append(
+                "{} is linked to a file in another watched dir; not linking {}".format(
+                    key, name))
+        # else: owned dangling link belonging to another dir -- no claim,
+        # left for that dir's own plan (or prune) to deal with.
+
     plan["prune"] = sorted(
         name for name, entry in data_entries.items()
         if entry["type"] == "symlink" and entry.get("owned") and entry.get("dangling"))
     return plan
+
+
+def merge_plans(plans):
+    """Combine per-watch plans in watch order; the first watch to claim a key
+    (link, retarget or keep) wins. plans: list of (stamp_dir, plan).
+    Returns {"link": {key: (stamp_dir, name)}, "retarget": {key: (stamp_dir, name)},
+             "prune": sorted keys no watch claimed, "warnings": [...]}."""
+    merged = {"link": {}, "retarget": {}, "prune": [], "warnings": []}
+    taken, prunable = set(), set()
+    for stamp_dir, plan in plans:
+        merged["warnings"] += plan["warnings"]
+        for kind in ("link", "retarget"):
+            for key, name in plan[kind].items():
+                if key not in taken:
+                    merged[kind][key] = (stamp_dir, name)
+        taken |= set(plan["link"]) | set(plan["retarget"]) | plan["keep"]
+        prunable.update(plan["prune"])
+    merged["prune"] = sorted(prunable - taken)
+    return merged
 
 
 def _active_range(state):
