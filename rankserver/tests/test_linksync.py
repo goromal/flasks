@@ -263,3 +263,32 @@ def test_sync_links_missing_res_dir_warns_without_raising(tmp_path):
         str(tmp_path / "missing"), [{"stamp_dir": str(stamp), "stamp_tag": "t"}])
 
     assert isinstance(warnings, list) and warnings
+
+
+def test_ambiguous_lost_identity_holds_rank(tmp_path):
+    stamp = tmp_path / "stamp"
+    res = tmp_path / "res"
+    stamp.mkdir()
+    res.mkdir()
+    watches = [{"stamp_dir": str(stamp), "stamp_tag": "a"}]
+
+    _touch(stamp / "stamped.a.x.png")
+    _sync(res, watches)
+    assert os.path.realpath(str(res / "stamped.a.x.png")) == os.path.realpath(str(stamp / "stamped.a.x.png"))
+
+    # A different, pre-existing file shares stamped.a.x.png's identity key
+    # (legacy data) -- the live link to x is kept and the collision warned.
+    _touch(stamp / "stamped.a.stamped.c.x.png")
+    warnings = _sync(res, watches)
+    assert any("share identity" in w for w in warnings)
+    assert os.path.realpath(str(res / "stamped.a.x.png")) == os.path.realpath(str(stamp / "stamped.a.x.png"))
+
+    # x is sub-stamped away; the link dangles and TWO files (c, d) now
+    # equally claim its identity -- must not guess, must hold the rank.
+    os.rename(str(stamp / "stamped.a.x.png"), str(stamp / "stamped.a.stamped.d.x.png"))
+    warnings = _sync(res, watches)
+
+    assert os.path.islink(str(res / "stamped.a.x.png"))
+    target = os.readlink(str(res / "stamped.a.x.png"))
+    assert os.path.basename(target) == "stamped.a.x.png"
+    assert any("not relinking" in w for w in warnings)

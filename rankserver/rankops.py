@@ -136,10 +136,14 @@ def plan_sync(stamp_files, data_entries, tag, stamp_dir):
     this watch's own link (its target lives in this watch's stamp_dir). A
     same-key file that isn't the one already linked, a live link that
     belongs to another watched dir, or an identity collision between two
-    candidate files each produce a warning instead of a claim. An owned
-    symlink entry missing "target_dir" indicates a caller bug (it cannot be
-    compared against stamp_dir) and raises ValueError instead of silently
-    mis-classifying the link.
+    candidate files each produce a warning instead of a claim. A dangling
+    link whose recorded target is gone AND more than one current file now
+    shares its identity is held (kept, not retargeted or pruned) with a
+    warning instead of guessing which file inherits the rank -- retargeting
+    is only ever safe when a rename leaves exactly one candidate behind. An
+    owned symlink entry missing "target_dir" indicates a caller bug (it
+    cannot be compared against stamp_dir) and raises ValueError instead of
+    silently mis-classifying the link.
 
     Returns a dict:
       link:     {key: filename} for matches with no data-dir entry yet
@@ -171,6 +175,19 @@ def plan_sync(stamp_files, data_entries, tag, stamp_dir):
             raise ValueError("owned symlink entry {} lacks target_dir".format(key))
         ours = (entry is not None and entry["type"] == "symlink"
                 and entry.get("owned") and entry.get("target_dir") == stamp_dir)
+        lost_ambiguous = (ours and entry.get("dangling") and len(names) > 1
+                           and entry.get("target_name") not in names)
+        if lost_ambiguous:
+            # The renamed-away file's replacement can't be told apart from a
+            # pre-existing collision; picking either would silently hand the
+            # established rank to the wrong photo. Hold it instead.
+            plan["keep"].add(key)
+            plan["warnings"].append(
+                "{} lost its file {} and {} files now share its identity ({}); "
+                "not relinking until only one remains".format(
+                    key, entry.get("target_name"), len(names), ", ".join(names)))
+            continue
+
         if ours and entry.get("target_name") in names:
             name = entry["target_name"]
         else:
@@ -211,12 +228,22 @@ def plan_sync(stamp_files, data_entries, tag, stamp_dir):
 
 
 def merge_plans(plans):
-    """Combine per-watch plans in watch order; the first watch to claim a key
-    (link, retarget or keep) wins. plans: list of (stamp_dir, plan).
+    """Combine per-watch plans in watch order; among competing link/retarget
+    claims for the same key, the first watch wins. But any plan's "keep" --
+    confirming a correct link, or holding one whose identity is ambiguous --
+    pre-empts every watch's link/retarget for that key regardless of
+    processing order: keep claims are collected up front, before per-key
+    claims are resolved, rather than accumulated as the loop goes. Otherwise
+    a narrower watch that (from its own filtered view) sees no ambiguity
+    could win a race against the watch that does, depending on list order.
+    plans: list of (stamp_dir, plan).
     Returns {"link": {key: (stamp_dir, name)}, "retarget": {key: (stamp_dir, name)},
              "prune": sorted keys no watch claimed, "warnings": [...]}."""
     merged = {"link": {}, "retarget": {}, "prune": [], "warnings": []}
-    taken, prunable = set(), set()
+    taken = set()
+    for _, plan in plans:
+        taken |= plan["keep"]
+    prunable = set()
     for stamp_dir, plan in plans:
         merged["warnings"] += plan["warnings"]
         for kind in ("link", "retarget"):

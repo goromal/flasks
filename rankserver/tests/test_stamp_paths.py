@@ -245,3 +245,29 @@ def test_merge_plans_kept_link_never_offered_for_pruning():
     merged = rankops.merge_plans([("/s", plan)])
     assert merged["link"] == {} and merged["retarget"] == {}
     assert merged["prune"] == []
+
+
+def test_plan_sync_ambiguous_dangling_link_is_held():
+    # The link's original target (x.png) vanished, and two DIFFERENT current
+    # files (c, d) now equally claim its identity -- must not guess.
+    entries = {"stamped.a.x.png": _link("stamped.a.x.png", dangling=True)}
+    plan = rankops.plan_sync(
+        ["stamped.a.stamped.c.x.png", "stamped.a.stamped.d.x.png"], entries, "a", "/s")
+    assert plan["retarget"] == {} and plan["link"] == {}
+    assert plan["keep"] == {"stamped.a.x.png"}
+    assert any("not relinking" in w for w in plan["warnings"])
+
+    merged = rankops.merge_plans([("/s", plan)])
+    assert merged["prune"] == [] and merged["retarget"] == {}
+
+
+def test_merge_plans_ambiguous_dangling_link_held_regardless_of_watch_order():
+    # Same scenario, but split across two watches on the same dir: the root
+    # watch ("a") sees both candidates and holds the rank; a narrower watch
+    # ("a/d") sees only its own subtree's file and would otherwise retarget
+    # to it. The hold must win no matter which watch's plan is merged first.
+    entries = {"stamped.a.x.png": _link("stamped.a.x.png", dangling=True)}
+    files = ["stamped.a.stamped.c.x.png", "stamped.a.stamped.d.x.png"]
+    merged = _plans_both_orders((files, entries, "a", "/s"), (files, entries, "a/d", "/s"))
+    assert merged["retarget"] == {} and merged["link"] == {}
+    assert merged["prune"] == []
