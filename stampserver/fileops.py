@@ -32,8 +32,9 @@ def unique_suffixed_name(res_dir, filename, suffix):
     `res_dir`.
 
     The `stamped.{tag}.` metadata prefix (if present) is preserved, and a
-    numeric counter is appended when a name is already taken so repeated calls
-    never collide:
+    numeric counter is appended when a name is already taken -- or would
+    share a rankserver identity_key (see identity_key) with a different
+    existing file -- so repeated calls never collide:
 
         clip.mp4             -> clip_trimmed.mp4  (then _trimmed2, _trimmed3, ...)
         stamped.foo.clip.mp4 -> stamped.foo.clip_trimmed.mp4
@@ -51,11 +52,13 @@ def unique_suffixed_name(res_dir, filename, suffix):
             stamp_prefix = f"stamped.{parts[1]}."
             actual_base = ""
 
+    index = identity_index(os.listdir(res_dir))
     counter = 1
     while True:
         tag = suffix if counter == 1 else f"{suffix}{counter}"
         new_filename = f"{stamp_prefix}{actual_base}{tag}{extension}"
-        if not os.path.exists(os.path.join(res_dir, new_filename)):
+        if (not os.path.exists(os.path.join(res_dir, new_filename))
+                and identity_key(new_filename) not in index):
             return new_filename
         counter += 1
 
@@ -93,6 +96,28 @@ def build_stamped(path, base):
     return "".join(STAMP_PREFIX + segment + "." for segment in path) + base
 
 
+def identity_key(name):
+    """The name rankserver links a stamped file under: its root stamp plus
+    base, sub-stamps dropped. Two files sharing one can't both be ranked, and
+    letting a rename create a shared key could hand one file's rank to the
+    other. Keep in lockstep with rankserver/rankops.py:identity_key."""
+    path, base = parse_stamped(name)
+    return build_stamped(path[:1], base) if path else name
+
+
+def identity_index(listing):
+    """identity_key -> set of filenames holding it."""
+    index = {}
+    for name in listing:
+        index.setdefault(identity_key(name), set()).add(name)
+    return index
+
+
+class IdentityConflictError(FileExistsError):
+    """A rename would give a file the same identity key as another file.
+    args: (new_name, existing_name)."""
+
+
 def split_stamp_path(text):
     """A '/'-joined stamp path (URL or config form) as a segment list.
     Segments cannot contain '/', so the split is unambiguous."""
@@ -125,15 +150,24 @@ def substamp_counts(listing, path):
     return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
 
 
-def rename_to_path(res_dir, filename, new_path, copy=False):
+def rename_to_path(res_dir, filename, new_path, copy=False, index=None):
     """Give `filename` the stamp path `new_path`, keeping its base name.
 
     Returns the new filename. Raises FileExistsError (args[0] = the new
-    filename) rather than overwriting an existing file. Raises ValueError if
-    any segment of `new_path` contains "." or "/" (empty segments are still
+    filename) rather than overwriting an existing file, or
+    IdentityConflictError (args = (new_name, existing_name)) -- a subclass of
+    FileExistsError -- when the destination's identity_key (see identity_key)
+    is already held by a *different* file, since rankserver could then no
+    longer tell the two files' rankings apart. Raises ValueError if any
+    segment of `new_path` contains "." or "/" (empty segments are still
     allowed, for legacy ``stamped..x`` files). The no-overwrite guarantee is
     best-effort -- it checks then renames, so a concurrent request could
     still race and overwrite.
+
+    `index` is an identity_index() of `res_dir`'s listing; pass one in to
+    avoid re-listing the directory on every call (e.g. from rename_subtree).
+    It is updated in place to reflect the rename, so it stays current across
+    a sequence of calls. When omitted, it's built fresh from `res_dir`.
     """
     if any("." in s or "/" in s for s in new_path):
         raise ValueError(f"invalid stamp segment in {new_path!r}")
@@ -144,11 +178,25 @@ def rename_to_path(res_dir, filename, new_path, copy=False):
     dst = os.path.join(res_dir, new_name)
     if os.path.lexists(dst):
         raise FileExistsError(new_name)
+    if index is None:
+        index = identity_index(os.listdir(res_dir))
+    holders = index.get(identity_key(new_name), set())
+    others = holders - ({filename} if not copy else set())
+    if others:
+        raise IdentityConflictError(new_name, sorted(others)[0])
     src = os.path.join(res_dir, filename)
     if copy:
         shutil.copy2(src, dst)
     else:
         os.rename(src, dst)
+    if not copy:
+        old_key = identity_key(filename)
+        old_holders = index.get(old_key)
+        if old_holders is not None:
+            old_holders.discard(filename)
+            if not old_holders:
+                del index[old_key]
+    index.setdefault(identity_key(new_name), set()).add(new_name)
     return new_name
 
 
@@ -165,7 +213,10 @@ def rename_subtree(res_dir, listing, path, segment, copy=False):
     to match the stamped-name pattern) are silently ignored -- they are not
     renameable and appear in neither `renamed` nor `skipped`. A no-op
     request (`segment == path[-1]`) returns ([], []) without touching the
-    filesystem.
+    filesystem. A file whose destination would share an identity_key (see
+    identity_key) with a different existing file is skipped rather than
+    renamed -- IdentityConflictError is a FileExistsError, so it lands in
+    `skipped` the same way an ordinary name collision does.
     """
     if not path:
         raise ValueError("rename_subtree requires a non-empty stamp path")
@@ -173,7 +224,8 @@ def rename_subtree(res_dir, listing, path, segment, copy=False):
         raise ValueError(f"invalid stamp segment in {segment!r}")
     if segment == path[-1]:
         return [], []
-    index = len(path) - 1
+    seg_index = len(path) - 1
+    index = identity_index(listing)
     renamed, skipped = [], []
     for name in sorted(listing):
         file_path, _ = parse_stamped(name)
@@ -183,7 +235,8 @@ def rename_subtree(res_dir, listing, path, segment, copy=False):
             continue
         try:
             renamed.append(rename_to_path(
-                res_dir, name, replace_segment(file_path, index, segment), copy=copy))
+                res_dir, name, replace_segment(file_path, seg_index, segment),
+                copy=copy, index=index))
         except (FileExistsError, FileNotFoundError):
             skipped.append(name)
     return renamed, skipped

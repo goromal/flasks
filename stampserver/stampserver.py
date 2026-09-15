@@ -26,6 +26,7 @@ from imageops import (
     save_image,
 )
 from fileops import (
+    IdentityConflictError,
     files_at_path,
     join_stamp_path,
     parse_stamped,
@@ -196,9 +197,9 @@ class StampServer:
         return dict(sorted(stamps.items(), key=lambda x: x[1], reverse=True))
 
     def stamp(self, stamp):
-        dirname = RES_DIR
-        basename = os.path.basename(self.filedeck)
-        os.rename(os.path.join(dirname, self.filedeck), os.path.join(dirname, f"stamped.{stamp}." + basename))
+        if not self.filedeck:
+            raise ValueError("The deck was reloaded; please try again.")
+        rename_to_path(RES_DIR, self.filedeck, [stamp])
         self.filelist = list(filter(lambda t: t[0] != self.filedeck, self.filelist))
 
     def _drop_current(self):
@@ -306,7 +307,15 @@ def index():
             if not ok:
                 flask.flash(result)
             else:
-                stampserver.stamp(result)
+                try:
+                    stampserver.stamp(result)
+                except IdentityConflictError as e:
+                    flask.flash(_identity_conflict_message(e))
+                except FileExistsError as e:
+                    flask.flash(f"{e.args[0]} already exists; nothing was renamed.")
+                except (ValueError, OSError) as e:
+                    stampserver.reset()
+                    flask.flash(str(e))
     res, msg = stampserver.load()
     stamps = stampserver.getstamps()
     if not res:
@@ -317,6 +326,13 @@ def index():
 
 def restamp_url(path):
     return urlroot + "restamp/" + "/".join(quote(segment, safe="") for segment in path)
+
+
+def _identity_conflict_message(e):
+    new_name, existing = e.args
+    return (f"Can't rename to {new_name}: {existing} has the same file name under "
+            "the same root stamp, and rankserver couldn't tell them apart. "
+            "Nothing was renamed.")
 
 
 def _handle_restamp_post(path):
@@ -345,9 +361,11 @@ def _handle_restamp_post(path):
         elif form.get("apply_all") == "on":
             skipped = stampserver.replace_stamp_all(path, segment, copy=copy)
             if skipped:
-                flask.flash("Skipped (destination already exists): " + ", ".join(skipped))
+                flask.flash("Skipped (name already taken under the target stamp): " + ", ".join(skipped))
         else:
             stampserver.replace_stamp(path, segment, copy=copy)
+    except IdentityConflictError as e:
+        flask.flash(_identity_conflict_message(e))
     except FileExistsError as e:
         flask.flash(f"{e.args[0]} already exists; nothing was renamed.")
     except (ValueError, OSError) as e:

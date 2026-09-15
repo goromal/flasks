@@ -6,8 +6,11 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from fileops import (
+    IdentityConflictError,
     build_stamped,
     files_at_path,
+    identity_index,
+    identity_key,
     join_stamp_path,
     parse_stamped,
     rename_subtree,
@@ -213,18 +216,104 @@ def test_rename_subtree_noop_when_segment_unchanged(tmp_path):
     assert sorted(os.listdir(d)) == before
 
 
+# Keep in lockstep with rankserver/tests/test_stamp_paths.py:test_identity_key_drops_sub_stamps.
+IDENTITY_VECTORS = [
+    ("stamped.t.a.png", "stamped.t.a.png"),
+    ("stamped.t.stamped.dogs.a.png", "stamped.t.a.png"),
+    ("stamped.t.stamped.d.stamped.p.a.png", "stamped.t.a.png"),
+    ("plain.png", "plain.png"),
+]
+
+
+@pytest.mark.parametrize("name,key", IDENTITY_VECTORS)
+def test_identity_key(name, key):
+    assert identity_key(name) == key
+
+
+def test_rename_to_path_refuses_shared_identity_substamp(tmp_path):
+    d = str(tmp_path)
+    _touch(d, "stamped.a.x.png")
+    _touch(d, "stamped.a.stamped.c.x.png")
+    before = sorted(os.listdir(d))
+    with pytest.raises(IdentityConflictError) as exc:
+        rename_to_path(d, "stamped.a.x.png", ["a", "d"])
+    assert exc.value.args == ("stamped.a.stamped.d.x.png", "stamped.a.stamped.c.x.png")
+    assert sorted(os.listdir(d)) == before
+
+
+def test_rename_to_path_refuses_shared_identity_root_stamp(tmp_path):
+    d = str(tmp_path)
+    _touch(d, "x.png")
+    _touch(d, "stamped.a.stamped.d.x.png")
+    before = sorted(os.listdir(d))
+    with pytest.raises(IdentityConflictError):
+        rename_to_path(d, "x.png", ["a"])
+    assert sorted(os.listdir(d)) == before
+
+
+def test_rename_to_path_refuses_root_restamp_into_group_holding_same_base_deeper(tmp_path):
+    d = str(tmp_path)
+    _touch(d, "stamped.a.x.png")
+    _touch(d, "stamped.b.stamped.c.x.png")
+    before = sorted(os.listdir(d))
+    with pytest.raises(IdentityConflictError):
+        rename_to_path(d, "stamped.a.x.png", ["b"])
+    assert sorted(os.listdir(d)) == before
+
+
+def test_rename_to_path_refuses_copy_within_same_root(tmp_path):
+    d = str(tmp_path)
+    _touch(d, "stamped.a.x.png")
+    before = sorted(os.listdir(d))
+    with pytest.raises(IdentityConflictError):
+        rename_to_path(d, "stamped.a.x.png", ["a", "d"], copy=True)
+    assert sorted(os.listdir(d)) == before
+
+
+def test_rename_subtree_skips_identity_conflicts(tmp_path):
+    d = str(tmp_path)
+    _touch(d, "stamped.a.x.png")
+    _touch(d, "stamped.a.y.png")
+    _touch(d, "stamped.b.stamped.c.x.png")
+    renamed, skipped = rename_subtree(d, os.listdir(d), ["a"], "b")
+    assert renamed == ["stamped.b.y.png"]
+    assert skipped == ["stamped.a.x.png"]
+
+
+def test_rename_to_path_keeps_passed_index_current(tmp_path):
+    d = str(tmp_path)
+    _touch(d, "stamped.a.x.png")
+    index = identity_index(os.listdir(d))
+    rename_to_path(d, "stamped.a.x.png", ["a", "d"], index=index)
+    assert index["stamped.a.x.png"] == {"stamped.a.stamped.d.x.png"}
+
+
 def test_rename_subtree_copy_keeps_originals(tmp_path):
+    # Copying while keeping the same root stamp always self-conflicts on
+    # identity_key (root + base is unchanged), so a copy is only identity-safe
+    # at root depth -- which is also the only depth the app offers it at.
+    d = str(tmp_path)
+    for name in LISTING:
+        _touch(d, name)
+    before = sorted(os.listdir(d))
+    renamed, skipped = rename_subtree(d, os.listdir(d), ["a"], "animals", copy=True)
+    assert skipped == []
+    assert len(renamed) == 5
+    after = os.listdir(d)
+    assert all(name in after for name in before)
+    assert all(name in after for name in renamed)
+
+
+def test_rename_subtree_copy_within_same_root_skips_identity_conflicts(tmp_path):
     d = str(tmp_path)
     for name in LISTING:
         _touch(d, name)
     before = sorted(os.listdir(d))
     renamed, skipped = rename_subtree(d, os.listdir(d), ["a", "d"], "dogs", copy=True)
-    assert skipped == []
-    assert sorted(renamed) == [
-        "stamped.a.stamped.dogs.stamped.p.v.png",
-        "stamped.a.stamped.dogs.y.png",
-        "stamped.a.stamped.dogs.z.png",
+    assert renamed == []
+    assert sorted(skipped) == [
+        "stamped.a.stamped.d.stamped.p.v.png",
+        "stamped.a.stamped.d.y.png",
+        "stamped.a.stamped.d.z.png",
     ]
-    after = os.listdir(d)
-    assert all(name in after for name in before)
-    assert all(name in after for name in renamed)
+    assert sorted(os.listdir(d)) == before
