@@ -595,10 +595,14 @@
 
         <div class="rankables-config">
             <h2>Stamp Watch</h2>
-            <p class="help">Optionally mirror files carrying a chosen stamp tag from a
+            <p class="help">Optionally mirror files carrying a chosen stamp or sub-stamp path
+               (e.g. <code>animals/dogs</code>, which includes deeper sub-stamps) from a
                stampserver directory into this rankables directory. Multiple watch
                targets can be active at once. Symlinks are kept in sync automatically;
-               newly stamped files queue up for placement into the existing ranking.</p>
+               newly stamped files queue up for placement into the existing ranking.
+               Adding, changing or removing a sub-stamp keeps a file's place in the
+               ranking, as long as it still matches the watch; changing its root stamp
+               removes it from this ranking.</p>
             <div class="rankables-realpath">
                 <span class="realpath-label">Status:</span>
                 <span class="realpath-value" id="watchStatus">Loading...</span>
@@ -854,15 +858,16 @@
                     if (data.error) { showStatus('Error: ' + data.error, true); return; }
                     const sel = document.getElementById('watchTagSelect');
                     sel.innerHTML = '';
-                    const tags = Object.entries(data.tags);
+                    const tags = data.tags;
                     if (tags.length === 0) {
                         showStatus('No stamped rankable files found in ' + _watchDir, true);
                         return;
                     }
                     tags.forEach(([tag, count]) => {
+                        const depth = tag.split('/').length - 1;
                         const opt = document.createElement('option');
                         opt.value = tag;
-                        opt.textContent = tag + ' (' + count + ')';
+                        opt.textContent = '    '.repeat(depth) + tag + ' (' + count + ')';
                         sel.appendChild(opt);
                     });
                     document.getElementById('watchTagRow').style.display = 'flex';

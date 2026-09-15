@@ -221,6 +221,13 @@ def test_merge_plans_unclaimed_dangling_link_still_prunes():
     assert merged["prune"] == ["stamped.t.a.png"]
 
 
+def test_plan_sync_requires_target_dir_for_owned_links():
+    entries = {"stamped.t.a.png": {"type": "symlink", "owned": True,
+                                   "dangling": True, "target_name": "stamped.t.a.png"}}
+    with pytest.raises(ValueError):
+        rankops.plan_sync(["stamped.t.stamped.d.a.png"], entries, "t", "/s")
+
+
 def test_merge_plans_kept_link_never_offered_for_pruning():
     entries = {"stamped.t.zebra.png": _link("stamped.t.zebra.png")}
     plan = rankops.plan_sync(

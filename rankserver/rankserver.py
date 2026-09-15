@@ -21,6 +21,7 @@ from pysorting import (
     restfulQuickSort,
 )
 import rankops
+import linksync
 
 # HEIC/HEIF is not a built-in Pillow format; registering the plugin lets the
 # thumbnailer open .heic the same way it opens .png.
@@ -113,69 +114,9 @@ def save_config(cfg):
     os.replace(tmp, path)
 
 
-def _data_dir_entries(stamp_reals):
-    """Classify data-dir entries for rankops.plan_sync. A symlink is 'owned'
-    when its target's parent directory resolves into any watched stamp dir."""
-    entries = {}
-    for name in os.listdir(RES_DIR):
-        full = os.path.join(RES_DIR, name)
-        if os.path.islink(full):
-            target = os.readlink(full)
-            if not os.path.isabs(target):
-                target = os.path.join(os.path.dirname(full), target)
-            entries[name] = {
-                "type": "symlink",
-                "owned": os.path.realpath(os.path.dirname(target)) in stamp_reals,
-                "dangling": not os.path.exists(full),
-            }
-        elif os.path.isdir(full):
-            entries[name] = {"type": "dir"}
-        else:
-            entries[name] = {"type": "file"}
-    return entries
-
-
 def sync_symlinks(cfg):
-    """Mirror tag-matching stamp files into RES_DIR as symlinks; prune owned
-    dangling links. Returns a list of warning strings. Never raises."""
-    watches = rankops.get_watches(cfg)
-    if not watches:
-        return []
-    warnings = []
-    listings = []  # (stamp_real, stamp_files, tag)
-    for watch in watches:
-        stamp_dir = watch.get("stamp_dir", "")
-        tag = watch.get("stamp_tag", "")
-        if not stamp_dir or not tag:
-            warnings.append("watch config incomplete; sync skipped for one entry")
-            continue
-        try:
-            stamp_files = os.listdir(stamp_dir)
-        except OSError as e:
-            # A vanished source must not tear down the working set.
-            warnings.append("stamp dir unreadable ({}); sync skipped".format(e))
-            continue
-        listings.append((os.path.realpath(stamp_dir), stamp_files, tag))
-    entries = _data_dir_entries({real for real, _, _ in listings})
-    to_link = {}       # name -> stamp_real; first watch to claim a name wins
-    to_prune = set()   # every plan_sync pass proposes the same owned-dangling set
-    for stamp_real, stamp_files, tag in listings:
-        links, prunes, warns = rankops.plan_sync(stamp_files, entries, tag)
-        warnings += warns
-        for name in links:
-            to_link.setdefault(name, stamp_real)
-        to_prune.update(prunes)
-    for name, stamp_real in sorted(to_link.items()):
-        try:
-            os.symlink(os.path.join(stamp_real, name), os.path.join(RES_DIR, name))
-        except OSError as e:
-            warnings.append("link failed for {}: {}".format(name, e))
-    for name in sorted(to_prune):
-        try:
-            os.unlink(os.path.join(RES_DIR, name))
-        except OSError as e:
-            warnings.append("prune failed for {}: {}".format(name, e))
-    return warnings
+    """Mirror watched stamp files into RES_DIR (see linksync.sync_links)."""
+    return linksync.sync_links(RES_DIR, rankops.get_watches(cfg))
 
 
 def state_to_dict(s):
@@ -557,20 +498,7 @@ def set_rankables_dir():
         return flask.jsonify({'success': False, 'error': str(e)}), 500
 
 def _count_owned_links(stamp_dir, tag):
-    stamp_real = os.path.realpath(stamp_dir)
-    prefix = rankops.stamp_prefix(tag)
-    count = 0
-    for name in os.listdir(RES_DIR):
-        if not name.startswith(prefix):
-            continue
-        full = os.path.join(RES_DIR, name)
-        if os.path.islink(full):
-            target = os.readlink(full)
-            if not os.path.isabs(target):
-                target = os.path.join(os.path.dirname(full), target)
-            if os.path.realpath(os.path.dirname(target)) == stamp_real:
-                count += 1
-    return count
+    return linksync.count_owned_links(RES_DIR, stamp_dir, tag)
 
 
 def _set_watches(cfg, watches):
@@ -612,6 +540,8 @@ def set_watch_config():
         return flask.jsonify({"success": False, "error": "Stamp path is not a directory"}), 400
     if not tag:
         return flask.jsonify({"success": False, "error": "Missing stamp tag"}), 400
+    if any(segment == "" or "." in segment for segment in rankops.split_tag(tag)):
+        return flask.jsonify({"success": False, "error": "Invalid stamp path"}), 400
     cfg, _ = load_config()
     watches = rankops.get_watches(cfg)
     entry = {"stamp_dir": stamp_dir, "stamp_tag": tag}
@@ -651,7 +581,9 @@ def list_stamps():
         return flask.jsonify({"error": "Missing path"}), 400
     path = os.path.normpath(raw_path)
     try:
-        return flask.jsonify({"tags": rankops.scan_stamps(os.listdir(path))})
+        # A list, not an object: jsonify sorts object keys, which would
+        # scramble scan_stamps' tree order.
+        return flask.jsonify({"tags": list(rankops.scan_stamps(os.listdir(path)).items())})
     except PermissionError:
         return flask.jsonify({"error": "Permission denied"}), 403
     except (FileNotFoundError, NotADirectoryError):

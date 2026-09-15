@@ -127,7 +127,10 @@ def plan_sync(stamp_files, data_entries, tag, stamp_dir):
     this watch's own link (its target lives in this watch's stamp_dir). A
     same-key file that isn't the one already linked, a live link that
     belongs to another watched dir, or an identity collision between two
-    candidate files each produce a warning instead of a claim.
+    candidate files each produce a warning instead of a claim. An owned
+    symlink entry missing "target_dir" indicates a caller bug (it cannot be
+    compared against stamp_dir) and raises ValueError instead of silently
+    mis-classifying the link.
 
     Returns a dict:
       link:     {key: filename} for matches with no data-dir entry yet
@@ -154,6 +157,9 @@ def plan_sync(stamp_files, data_entries, tag, stamp_dir):
     for key in sorted(candidates):
         names = candidates[key]
         entry = data_entries.get(key)
+        if (entry is not None and entry.get("type") == "symlink"
+                and entry.get("owned") and "target_dir" not in entry):
+            raise ValueError("owned symlink entry {} lacks target_dir".format(key))
         ours = (entry is not None and entry["type"] == "symlink"
                 and entry.get("owned") and entry.get("target_dir") == stamp_dir)
         if ours and entry.get("target_name") in names:
