@@ -946,7 +946,9 @@
             <p class="upload-hint">Restamp replaces &ldquo;{{ stamp_path[-1] }}&rdquo;; Add Sub-stamp files this item one level deeper. Leave the text empty to skip.</p>
             <div class="btn-group">
                 <button type="submit" class="btn" name="action" value="restamp">Restamp</button>
+                {% if '' not in stamp_path %}
                 <button type="submit" class="btn" name="action" value="substamp">Add Sub-stamp</button>
+                {% endif %}
                 {% if stamp_path | length > 1 %}
                 <button type="submit" class="btn btn-danger" name="action" value="unsubstamp">Remove Sub-stamp</button>
                 {% endif %}
@@ -1113,6 +1115,8 @@
             const form = document.getElementById('stampForm');
             if (!form) return;
             form.addEventListener('submit', function(e) {
+                // Remove Sub-stamp ignores the text field entirely.
+                if (e.submitter && e.submitter.value === 'unsubstamp') return;
                 const ta = document.getElementById('text');
                 if (!ta) return;
                 const val = ta.value.trim();

@@ -207,6 +207,8 @@ class StampServer:
     def _require_current_at(self, path):
         # The deck is server-global; refuse to rename a file that another tab
         # has already moved away from the page's stamp path.
+        if not self.filedeck:
+            raise ValueError("The deck was reloaded; please try again.")
         if parse_stamped(self.filedeck)[0] != path:
             raise ValueError(f"{self.filedeck} is no longer stamped '{join_stamp_path(path)}'; reloaded.")
 
@@ -336,6 +338,9 @@ def _handle_restamp_post(path):
             flask.flash(segment)
             return
         if action == "substamp":
+            if "" in path:
+                flask.flash("Sub-stamps aren't supported under the (empty) stamp; restamp it first.")
+                return
             stampserver.substamp(path, segment)
         elif form.get("apply_all") == "on":
             skipped = stampserver.replace_stamp_all(path, segment, copy=copy)
@@ -358,22 +363,33 @@ def stamped(stamp=""):
     global stampserver
     global urlroot
     path = split_stamp_path(stamp)
-    if any("." in segment for segment in path):
+    # A bare legacy empty stamp (the whole path is [""]) is fine, but any other
+    # empty segment (a "//" in the middle, or a trailing slash) would make a
+    # child link 308-redirect into a different, wrong stamp path.
+    if any("." in segment for segment in path) or ("" in path and path != [""]):
         flask.abort(404)
     if flask.request.method == "POST":
         _handle_restamp_post(path)
     res, msg = stampserver.load_stamped(path)
-    root = f"restamp/{quote(stamp)}"
+    root = restamp_url(path)[len(urlroot):]
     listing = os.listdir(RES_DIR) if os.path.isdir(RES_DIR) else []
+    # The legacy empty stamp isn't a navigable path segment, so it has no
+    # child sub-stamps to list.
+    substamps = [] if "" in path else [
+        (child, count, restamp_url(path + [child]))
+        for child, count in substamp_counts(listing, path).items()
+    ]
     tree = dict(
         stamp_path=path,
         crumbs=[(segment or "(empty)", restamp_url(path[:i + 1])) for i, segment in enumerate(path)],
-        substamps=[(child, count, restamp_url(path + [child]))
-                   for child, count in substamp_counts(listing, path).items()],
+        substamps=substamps,
     )
     if not res:
         return flask.render_template("index.html", urlroot=urlroot, err=True, msg=msg, file="", ftype="", root=root, nleft="?", datadir=SHORT_RESDIR, stamps={}, **tree)
-    file, ftype, numleft = stampserver.getfile()
+    got = stampserver.getfile()
+    if got is None:
+        return flask.render_template("index.html", urlroot=urlroot, err=True, msg="The deck was reloaded; please try again.", file="", ftype="", root=root, nleft="?", datadir=SHORT_RESDIR, stamps={}, **tree)
+    file, ftype, numleft = got
     file = file_url(file, ftype)
     return flask.render_template("index.html", urlroot=urlroot, err=False, msg="", file=file, ftype=ftype, root=root, nleft=str(numleft), datadir=SHORT_RESDIR, stamps={}, **tree)
 
