@@ -26,11 +26,20 @@ def test_parse_vectors(name, path, base):
     assert rankops.build_stamped(path, base) == name
 
 
-def test_identity_key_drops_sub_stamps():
-    assert rankops.identity_key("stamped.t.a.png") == "stamped.t.a.png"
-    assert rankops.identity_key("stamped.t.stamped.dogs.a.png") == "stamped.t.a.png"
-    assert rankops.identity_key("stamped.t.stamped.d.stamped.p.a.png") == "stamped.t.a.png"
-    assert rankops.identity_key("plain.png") == "plain.png"
+# Keep in lockstep with stampserver/tests/test_stamptree.py.
+IDENTITY_VECTORS = [
+    ("photo.png", "photo.png"),
+    ("stamped.a.x.png", "stamped.a.x.png"),
+    ("stamped.a.stamped.d.x.png", "stamped.a.x.png"),
+    ("stamped.a.stamped.d.stamped.p.x.tar.gz", "stamped.a.x.tar.gz"),
+    ("stamped..stamped.d.x.png", "stamped..x.png"),
+    ("stamped.a.stamped.png", "stamped.a.stamped.png"),
+]
+
+
+@pytest.mark.parametrize("name,key", IDENTITY_VECTORS)
+def test_identity_key(name, key):
+    assert rankops.identity_key(name) == key
 
 
 @pytest.mark.parametrize("tag", ["t", "t/dogs", "my stamp/a b"])

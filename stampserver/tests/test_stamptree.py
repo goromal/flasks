@@ -216,12 +216,14 @@ def test_rename_subtree_noop_when_segment_unchanged(tmp_path):
     assert sorted(os.listdir(d)) == before
 
 
-# Keep in lockstep with rankserver/tests/test_stamp_paths.py:test_identity_key_drops_sub_stamps.
+# Keep in lockstep with rankserver/tests/test_stamp_paths.py.
 IDENTITY_VECTORS = [
-    ("stamped.t.a.png", "stamped.t.a.png"),
-    ("stamped.t.stamped.dogs.a.png", "stamped.t.a.png"),
-    ("stamped.t.stamped.d.stamped.p.a.png", "stamped.t.a.png"),
-    ("plain.png", "plain.png"),
+    ("photo.png", "photo.png"),
+    ("stamped.a.x.png", "stamped.a.x.png"),
+    ("stamped.a.stamped.d.x.png", "stamped.a.x.png"),
+    ("stamped.a.stamped.d.stamped.p.x.tar.gz", "stamped.a.x.tar.gz"),
+    ("stamped..stamped.d.x.png", "stamped..x.png"),
+    ("stamped.a.stamped.png", "stamped.a.stamped.png"),
 ]
 
 

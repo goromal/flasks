@@ -26,7 +26,7 @@ def validate_stamp_name(text):
     return (True, cleaned)
 
 
-def unique_suffixed_name(res_dir, filename, suffix):
+def unique_suffixed_name(res_dir, filename, suffix, separator=""):
     """Return a filename (not a path) that inserts `suffix` before the extension
     of `filename` and is guaranteed not to collide with an existing file in
     `res_dir`.
@@ -38,6 +38,12 @@ def unique_suffixed_name(res_dir, filename, suffix):
 
         clip.mp4             -> clip_trimmed.mp4  (then _trimmed2, _trimmed3, ...)
         stamped.foo.clip.mp4 -> stamped.foo.clip_trimmed.mp4
+
+    `separator` sits between `suffix` and the counter on a collision (the
+    first, uncollided name never has it). Default "" gives `_trimmed2`,
+    `_trimmed3`, ...; a caller whose `suffix` itself ends in digits (e.g. a
+    timestamp) can pass "_" to avoid a confusing run-together number:
+    `_screenshot_1.00`, then `_screenshot_1.00_2`, `_screenshot_1.00_3`, ...
     """
     base_name, extension = os.path.splitext(filename)
 
@@ -55,7 +61,7 @@ def unique_suffixed_name(res_dir, filename, suffix):
     index = identity_index(os.listdir(res_dir))
     counter = 1
     while True:
-        tag = suffix if counter == 1 else f"{suffix}{counter}"
+        tag = suffix if counter == 1 else f"{suffix}{separator}{counter}"
         new_filename = f"{stamp_prefix}{actual_base}{tag}{extension}"
         if (not os.path.exists(os.path.join(res_dir, new_filename))
                 and identity_key(new_filename) not in index):

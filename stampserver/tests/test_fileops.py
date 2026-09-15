@@ -106,3 +106,34 @@ def test_avoids_identity_collision(tmp_path):
         unique_suffixed_name(d, "stamped.a.stamped.b.clip.mp4", "_copy")
         == "stamped.a.stamped.b.clip_copy2.mp4"
     )
+
+
+def test_separator_only_appears_on_collision(tmp_path):
+    d = str(tmp_path)
+    assert (
+        unique_suffixed_name(d, "clip.mp4", "_screenshot_1.00", separator="_")
+        == "clip_screenshot_1.00.mp4"
+    )
+
+
+def test_separator_used_before_counter_on_collision(tmp_path):
+    d = str(tmp_path)
+    _touch(d, "clip_screenshot_1.00.mp4")
+    assert (
+        unique_suffixed_name(d, "clip.mp4", "_screenshot_1.00", separator="_")
+        == "clip_screenshot_1.00_2.mp4"
+    )
+    _touch(d, "clip_screenshot_1.00_2.mp4")
+    assert (
+        unique_suffixed_name(d, "clip.mp4", "_screenshot_1.00", separator="_")
+        == "clip_screenshot_1.00_3.mp4"
+    )
+
+
+def test_separator_avoids_identity_collision(tmp_path):
+    d = str(tmp_path)
+    _touch(d, "stamped.a.clip_screenshot_1.00.mp4")
+    assert (
+        unique_suffixed_name(d, "stamped.a.stamped.b.clip.mp4", "_screenshot_1.00", separator="_")
+        == "stamped.a.stamped.b.clip_screenshot_1.00_2.mp4"
+    )

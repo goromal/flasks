@@ -831,17 +831,12 @@ def save_screenshot_api():
         if not ret:
             return flask.jsonify({'success': False, 'error': 'Could not read frame at specified timestamp'}), 500
 
-        # Generate new filename
-        base_name = os.path.splitext(filename)[0]
-        new_filename = f"{base_name}_screenshot_{timestamp:.2f}.png"
+        # Preserves the stamp prefix and avoids both a plain name collision and
+        # a rankserver identity_key collision (e.g. re-screenshotting the same
+        # timestamp after sub-stamping the video).
+        new_filename = unique_suffixed_name(
+            RES_DIR, os.path.splitext(filename)[0] + ".png", f"_screenshot_{timestamp:.2f}", separator="_")
         new_file_path = os.path.join(RES_DIR, new_filename)
-
-        # Check if file already exists, add counter if needed
-        counter = 1
-        while os.path.exists(new_file_path):
-            new_filename = f"{base_name}_screenshot_{timestamp:.2f}_{counter}.png"
-            new_file_path = os.path.join(RES_DIR, new_filename)
-            counter += 1
 
         # Save frame as PNG
         cv2.imwrite(new_file_path, frame)
