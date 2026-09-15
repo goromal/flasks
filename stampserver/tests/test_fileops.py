@@ -89,3 +89,11 @@ def test_validate_rejects_control_characters():
     ok, msg = validate_stamp_name("line1\nline2")
     assert ok is False
     assert "control" in msg
+
+
+def test_sub_stamp_prefix_preserved(tmp_path):
+    d = str(tmp_path)
+    assert (
+        unique_suffixed_name(d, "stamped.a.stamped.b.clip.mp4", "_copy")
+        == "stamped.a.stamped.b.clip_copy.mp4"
+    )
