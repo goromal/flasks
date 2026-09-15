@@ -25,7 +25,18 @@ from imageops import (
     pad_image,
     save_image,
 )
-from fileops import unique_suffixed_name, validate_stamp_name
+from fileops import (
+    files_at_path,
+    join_stamp_path,
+    parse_stamped,
+    rename_subtree,
+    rename_to_path,
+    replace_segment,
+    split_stamp_path,
+    substamp_counts,
+    unique_suffixed_name,
+    validate_stamp_name,
+)
 
 STAMP_RE = re.compile(r"stamped\.(.*?)\.")
 
@@ -42,6 +53,20 @@ UPLOAD_EXTS = IMAGE_EXTS + VIDEO_EXTS
 
 def is_video(filename):
     return filename.lower().endswith(VIDEO_EXTS)
+
+
+def media_type(filename):
+    """Deck type for a stampable file, or None when the server can't show it."""
+    lower = filename.lower()
+    if lower.endswith(".png"):
+        return "PNG"
+    if lower.endswith((".jpg", ".jpeg")):
+        return "JPG"
+    if lower.endswith(HEIF_EXTS):
+        return "HEIC"
+    if lower.endswith(VIDEO_EXTS):
+        return "MP4"
+    return None
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--port", action="store", type=int, default=5000, help="Port to run the server on")
@@ -137,26 +162,23 @@ class StampServer:
             return (False, f"Data directory devoid of stampable files!")
         return (True, "")
 
-    def load_stamped(self, stamp):
+    def load_stamped(self, path):
+        """Deck of files stamped with exactly `path` (sub-stamped files live in
+        their own child decks)."""
         if not os.path.isdir(RES_DIR):
             return (False, f"Data directory non-existent or broken: {RES_DIR}")
-        if self.task_type != stamp:
+        task = ("restamp", tuple(path))
+        if self.task_type != task:
             self.reset()
-            self.task_type = stamp
+            self.task_type = task
         if len(self.filelist) == 0:
-            for file in os.listdir(RES_DIR):
-                if file.startswith(f"stamped.{stamp}."):
-                    if file.lower().endswith(".png"):
-                        self.filelist.append((file.strip(), "PNG"))
-                    elif file.lower().endswith((".jpg", ".jpeg")):
-                        self.filelist.append((file.strip(), "JPG"))
-                    elif file.lower().endswith(HEIF_EXTS):
-                        self.filelist.append((file.strip(), "HEIC"))
-                    elif file.lower().endswith(VIDEO_EXTS):
-                        self.filelist.append((file.strip(), "MP4"))
+            for file in files_at_path(os.listdir(RES_DIR), path):
+                ftype = media_type(file)
+                if ftype:
+                    self.filelist.append((file.strip(), ftype))
             shuffle(self.filelist)
         if len(self.filelist) == 0:
-            return (False, f"Data directory devoid of files stamped with {stamp}!")
+            return (False, f"No files left stamped exactly '{join_stamp_path(path)}' (see sub-stamps below).")
         return (True, "")
     
     def getfile(self):
@@ -179,35 +201,38 @@ class StampServer:
         os.rename(os.path.join(dirname, self.filedeck), os.path.join(dirname, f"stamped.{stamp}." + basename))
         self.filelist = list(filter(lambda t: t[0] != self.filedeck, self.filelist))
 
-    def replace_stamp(self, stamp, new_stamp, copy=False):
-        dirname = RES_DIR
-        basename = os.path.basename(self.filedeck)
-        if not basename.startswith(f"stamped.{stamp}."):
-            raise ValueError(f"File {basename} does not have expected stamp prefix 'stamped.{stamp}.'")
-        if new_stamp != stamp:
-            remainder = basename[len(f"stamped.{stamp}."):]
-            new_basename = f"stamped.{new_stamp}.{remainder}"
-            src = os.path.join(dirname, self.filedeck)
-            dst = os.path.join(dirname, new_basename)
-            if copy:
-                shutil.copy2(src, dst)
-            else:
-                os.rename(src, dst)
-        self.filelist = list(filter(lambda t: t[0] != self.filedeck, self.filelist))
+    def _drop_current(self):
+        self.filelist = [t for t in self.filelist if t[0] != self.filedeck]
 
-    def replace_stamp_all(self, stamp, new_stamp, copy=False):
-        dirname = RES_DIR
-        for file, _ in list(self.filelist):
-            basename = os.path.basename(file)
-            if basename.startswith(f"stamped.{stamp}."):
-                remainder = basename[len(f"stamped.{stamp}."):]
-                src = os.path.join(dirname, file)
-                dst = os.path.join(dirname, f"stamped.{new_stamp}.{remainder}")
-                if copy:
-                    shutil.copy2(src, dst)
-                else:
-                    os.rename(src, dst)
+    def _require_current_at(self, path):
+        # The deck is server-global; refuse to rename a file that another tab
+        # has already moved away from the page's stamp path.
+        if parse_stamped(self.filedeck)[0] != path:
+            raise ValueError(f"{self.filedeck} is no longer stamped '{join_stamp_path(path)}'; reloaded.")
+
+    def skip(self):
+        self._drop_current()
+
+    def replace_stamp(self, path, segment, copy=False):
+        self._require_current_at(path)
+        rename_to_path(RES_DIR, self.filedeck, replace_segment(path, len(path) - 1, segment), copy=copy)
+        self._drop_current()
+
+    def replace_stamp_all(self, path, segment, copy=False):
+        """Rename the whole subtree under `path`. Returns skipped filenames."""
+        _, skipped = rename_subtree(RES_DIR, os.listdir(RES_DIR), path, segment, copy=copy)
         self.filelist = []
+        return skipped
+
+    def substamp(self, path, segment):
+        self._require_current_at(path)
+        rename_to_path(RES_DIR, self.filedeck, path + [segment])
+        self._drop_current()
+
+    def unsubstamp(self, path):
+        self._require_current_at(path)
+        rename_to_path(RES_DIR, self.filedeck, path[:-1])
+        self._drop_current()
 
 stampserver = StampServer()
 
@@ -288,40 +313,69 @@ def index():
     file = file_url(file, ftype)
     return flask.render_template("index.html", urlroot=urlroot, err=False, msg="", file=file, ftype=ftype, root="", nleft=str(numleft), datadir=SHORT_RESDIR, stamps=stamps)
 
+def restamp_url(path):
+    return urlroot + "restamp/" + "/".join(quote(segment, safe="") for segment in path)
+
+
+def _handle_restamp_post(path):
+    form = flask.request.form
+    # Auto-play submits the form without a button, so no action means restamp.
+    action = form.get("action", "restamp")
+    text = form.get("text", "")
+    copy = len(path) == 1 and form.get("preserve_originals") == "on"
+    try:
+        if action == "unsubstamp":
+            if len(path) > 1:
+                stampserver.unsubstamp(path)
+            return
+        if text.strip() == "":
+            stampserver.skip()
+            return
+        ok, segment = validate_stamp_name(text)
+        if not ok:
+            flask.flash(segment)
+            return
+        if action == "substamp":
+            stampserver.substamp(path, segment)
+        elif form.get("apply_all") == "on":
+            skipped = stampserver.replace_stamp_all(path, segment, copy=copy)
+            if skipped:
+                flask.flash("Skipped (destination already exists): " + ", ".join(skipped))
+        else:
+            stampserver.replace_stamp(path, segment, copy=copy)
+    except FileExistsError as e:
+        flask.flash(f"{e.args[0]} already exists; nothing was renamed.")
+    except (ValueError, OSError) as e:
+        stampserver.reset()
+        flask.flash(str(e))
+
+
 @bp.route("/restamp/", methods=["GET","POST"])
-@bp.route("/restamp/<stamp>", methods=["GET","POST"])
+@bp.route("/restamp/<path:stamp>", methods=["GET","POST"])
 @flask_login.login_required
 def stamped(stamp=""):
     global args
     global stampserver
     global urlroot
+    path = split_stamp_path(stamp)
+    if any("." in segment for segment in path):
+        flask.abort(404)
     if flask.request.method == "POST":
-        new_stamp_text = flask.request.form["text"]
-        apply_all = flask.request.form.get("apply_all") == "on"
-        preserve = flask.request.form.get("preserve_originals") == "on"
-        proceed = True
-        if new_stamp_text == "":
-            new_stamp = stamp
-        else:
-            ok, result = validate_stamp_name(new_stamp_text)
-            if not ok:
-                flask.flash(result)
-                proceed = False
-                new_stamp = stamp
-            else:
-                new_stamp = result
-        if proceed:
-            if apply_all and new_stamp_text != "":
-                stampserver.replace_stamp_all(stamp, new_stamp, copy=preserve)
-            else:
-                stampserver.replace_stamp(stamp, new_stamp, copy=preserve)
-    res, msg = stampserver.load_stamped(stamp)
+        _handle_restamp_post(path)
+    res, msg = stampserver.load_stamped(path)
     root = f"restamp/{quote(stamp)}"
+    listing = os.listdir(RES_DIR) if os.path.isdir(RES_DIR) else []
+    tree = dict(
+        stamp_path=path,
+        crumbs=[(segment or "(empty)", restamp_url(path[:i + 1])) for i, segment in enumerate(path)],
+        substamps=[(child, count, restamp_url(path + [child]))
+                   for child, count in substamp_counts(listing, path).items()],
+    )
     if not res:
-        return flask.render_template("index.html", urlroot=urlroot, err=True, msg=msg, file="", ftype="", root=root, nleft="?", datadir=SHORT_RESDIR, stamps={})
+        return flask.render_template("index.html", urlroot=urlroot, err=True, msg=msg, file="", ftype="", root=root, nleft="?", datadir=SHORT_RESDIR, stamps={}, **tree)
     file, ftype, numleft = stampserver.getfile()
     file = file_url(file, ftype)
-    return flask.render_template("index.html", urlroot=urlroot, err=False, msg="", file=file, ftype=ftype, root=root, nleft=str(numleft), datadir=SHORT_RESDIR, stamps={})
+    return flask.render_template("index.html", urlroot=urlroot, err=False, msg="", file=file, ftype=ftype, root=root, nleft=str(numleft), datadir=SHORT_RESDIR, stamps={}, **tree)
 
 @bp.route("/zzz", methods=["GET","POST"])
 @flask_login.login_required
@@ -684,37 +738,9 @@ def duplicate_image_api():
 
         img_format = image_format(filename)
 
-        # Parse filename to preserve stamp metadata
-        # Format: [stamped.{stamp}.]basename.ext
-        base_name = os.path.splitext(filename)[0]
-        extension = os.path.splitext(filename)[1]
-
-        # Check if file has stamp metadata
-        stamp_prefix = ""
-        actual_base = base_name
-        if base_name.startswith("stamped."):
-            parts = base_name.split(".", 2)  # Split into ['stamped', '{stamp}', 'basename']
-            if len(parts) >= 3:
-                stamp_prefix = f"stamped.{parts[1]}."
-                actual_base = parts[2]
-            elif len(parts) == 2:
-                stamp_prefix = f"stamped.{parts[1]}."
-                actual_base = ""
-
-        # Generate new filename with _copy suffix
-        counter = 1
-        while True:
-            if counter == 1:
-                new_basename = f"{actual_base}_copy"
-            else:
-                new_basename = f"{actual_base}_copy{counter}"
-
-            new_filename = f"{stamp_prefix}{new_basename}{extension}"
-            new_file_path = os.path.join(RES_DIR, new_filename)
-
-            if not os.path.exists(new_file_path):
-                break
-            counter += 1
+        # Preserves the full stamp prefix, sub-stamps included.
+        new_filename = unique_suffixed_name(RES_DIR, filename, "_copy")
+        new_file_path = os.path.join(RES_DIR, new_filename)
 
         # Copy the file using Pillow to ensure proper image handling
         img = Image.open(file_path)
@@ -809,28 +835,9 @@ def duplicate_video_api():
         if not is_video(filename):
             return flask.jsonify({'success': False, 'error': 'Only MP4 and MOV files can be duplicated'}), 400
 
-        base_name = os.path.splitext(filename)[0]
-        extension = os.path.splitext(filename)[1]
-
-        stamp_prefix = ""
-        actual_base = base_name
-        if base_name.startswith("stamped."):
-            parts = base_name.split(".", 2)
-            if len(parts) >= 3:
-                stamp_prefix = f"stamped.{parts[1]}."
-                actual_base = parts[2]
-            elif len(parts) == 2:
-                stamp_prefix = f"stamped.{parts[1]}."
-                actual_base = ""
-
-        counter = 1
-        while True:
-            new_basename = f"{actual_base}_copy" if counter == 1 else f"{actual_base}_copy{counter}"
-            new_filename = f"{stamp_prefix}{new_basename}{extension}"
-            new_file_path = os.path.join(RES_DIR, new_filename)
-            if not os.path.exists(new_file_path):
-                break
-            counter += 1
+        # Preserves the full stamp prefix, sub-stamps included.
+        new_filename = unique_suffixed_name(RES_DIR, filename, "_copy")
+        new_file_path = os.path.join(RES_DIR, new_filename)
 
         shutil.copy2(file_path, new_file_path)
         return flask.jsonify({'success': True, 'new_filename': new_filename})
