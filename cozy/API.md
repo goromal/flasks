@@ -118,6 +118,17 @@ normally fine to ignore.
 | `/cozy/api/queue/remove` | POST | `{"id": ...}` |
 | `/cozy/api/queue/clear` | POST | drop finished results |
 | `/cozy/api/queue/image?id=<id>` | GET | result PNG (`&kind=crop` for the crop) |
+| `/cozy/api/input-fit?name=<path>` | GET | what the input-size ceiling will do; `&x&y&w&h` measures a crop instead |
 
 `/api/generate` runs a single job outside the queue and returns 409 while the
 queue is active; prefer the queue endpoints for scripted use.
+
+## Input-size ceiling
+
+Edit workflows will not hand ComfyUI an input larger than `--max-input-bytes`
+(1 MiB by default, 0 to disable). An oversized input is re-encoded as JPEG and,
+if that is still too big, resized down; a crop is measured on its own, so a
+small selection out of a huge photo is never shrunk. `/api/input-fit` reports
+what will happen before the job runs, and `fit` — `{scale, from, to}`, or
+`null` when nothing was resized — appears on `/api/status` and on each queue
+result afterwards.

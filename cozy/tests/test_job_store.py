@@ -446,7 +446,7 @@ def test_staged_crop_is_deleted_after_the_run(tmp_path):
     src = _src_image(tmp_path)
     indir = tmp_path / "input"
     indir.mkdir()
-    staged_rel = crop.stage(str(indir), src, {"x": 0, "y": 0, "w": 64, "h": 64})
+    staged_rel, _res = crop.stage(str(indir), src, {"x": 0, "y": 0, "w": 64, "h": 64})
     staged_abs = str(indir / staged_rel)
     assert os.path.exists(staged_abs)
     store = job_store.JobStore(str(tmp_path / "state"),
@@ -482,3 +482,25 @@ def test_old_state_file_without_rect_still_loads(tmp_path):
     st = store.read_state()
     assert st["rect"] is None
     assert st["crop_output"] is False
+
+
+def test_write_outputs_applies_the_recorded_scale(tmp_path):
+    src = _src_image(tmp_path)
+    store = job_store.JobStore(str(tmp_path / "state"), FakeClient([]),
+                               output_dir=str(tmp_path / "out"))
+    store._write_outputs(_png_bytes((32, 32), (200, 100, 50)), src,
+                         {"x": 64, "y": 32, "w": 64, "h": 64}, scale=0.5)
+    # The source is 200x160, so the composite lands at half that and the patch
+    # at the halved rect origin.
+    with Image.open(store.image_path) as im:
+        assert im.size == (100, 80)
+        assert im.getpixel((32, 16)) == (200, 100, 50)
+        assert im.getpixel((31, 16)) == (10, 20, 30)
+
+
+def test_fit_scale_defaults_to_one_for_old_state():
+    # State files written before the fit field existed must not break the
+    # composite path.
+    assert job_store._fit_scale(None) == 1.0
+    assert job_store._fit_scale({}) == 1.0
+    assert job_store._fit_scale({"scale": 0.25}) == 0.25
