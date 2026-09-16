@@ -10,11 +10,8 @@ and list keys arr, stack.
 The stack holds flat (low, high) position pairs, valid up to index `top`
 inclusive; the active partition is (stack[top-1], stack[top]).
 """
-import re
-
 UINT32_MAX = 0xFFFFFFFF
 RANKABLE_EXTS = (".txt", ".png", ".jpg", ".jpeg", ".heic", ".heif", ".mp4", ".mov")
-STAMP_RE = re.compile(r"stamped\.(.*?)\.")
 # QuickSortState enum values (mirror sorting/Sorting.h); used by the
 # sort-state surgery functions added alongside the QuickSortState helpers.
 LEFT_J = 1
@@ -36,52 +33,248 @@ def get_watches(cfg):
     return [w for w in watches if isinstance(w, dict)]
 
 
-def stamp_prefix(tag):
-    return "stamped.{}.".format(tag)
+STAMP_PREFIX = "stamped."
+
+
+def parse_stamped(name):
+    """Split a filename into ``(stamp path, base)``.
+
+        photo.png                              -> ([], "photo.png")
+        stamped.animals.photo.png              -> (["animals"], "photo.png")
+        stamped.animals.stamped.dogs.photo.png -> (["animals", "dogs"], "photo.png")
+
+    Leading ``stamped.<segment>.`` pairs are stripped greedily while a
+    non-empty base remains; an empty segment is kept (legacy ``stamped..x``).
+
+    Keep in lockstep with stampserver/fileops.py:parse_stamped.
+    """
+    path = []
+    rest = name
+    while rest.startswith(STAMP_PREFIX):
+        segment, sep, remainder = rest[len(STAMP_PREFIX):].partition(".")
+        if not sep or not remainder:
+            break
+        path.append(segment)
+        rest = remainder
+    return path, rest
+
+
+def build_stamped(path, base):
+    return "".join(STAMP_PREFIX + segment + "." for segment in path) + base
+
+
+def split_tag(tag):
+    """A watch's stamp_tag is a '/'-joined stamp path; legacy tags have no '/'."""
+    return tag.split("/")
+
+
+def valid_tag(tag):
+    """True iff `tag` is a non-empty str whose split_tag segments are all
+    non-empty and contain no '.'. Rejects legacy empty-segment stamps
+    ("", "t/") and anything a '/'-split could mistake for path traversal."""
+    if not isinstance(tag, str) or not tag:
+        return False
+    return all(segment and "." not in segment for segment in split_tag(tag))
+
+
+def path_under(path, tag_path):
+    """True when `path` is `tag_path` or one of its descendants."""
+    return len(path) >= len(tag_path) and path[:len(tag_path)] == tag_path
+
+
+def identity_key(name):
+    """Rename-stable name for a stamped file: its root stamp plus base, with
+    sub-stamps dropped. Data-dir symlinks (and so the ranking) are keyed by
+    it, so sub-stamping a file never changes what the ranking sees."""
+    path, base = parse_stamped(name)
+    return build_stamped(path[:1], base) if path else name
 
 
 def scan_stamps(listing):
-    """Map stamp tag -> count of rankable files carrying it, sorted by count desc."""
-    tags = {}
+    """Map every stamp path prefix ('a', 'a/d', ...) -> count of rankable files
+    at that path or deeper. Ordered depth-first, siblings by count desc then
+    name, so a flat dropdown reads as a tree."""
+    counts = {}
     for f in listing:
         if not is_rankable(f):
             continue
-        m = STAMP_RE.match(f)
-        if m:
-            tags[m.group(1)] = tags.get(m.group(1), 0) + 1
-    return dict(sorted(tags.items(), key=lambda kv: kv[1], reverse=True))
+        path, _ = parse_stamped(f)
+        for depth in range(1, len(path) + 1):
+            key = "/".join(path[:depth])
+            counts[key] = counts.get(key, 0) + 1
+    children = {}
+    for key in counts:
+        parent = key.rpartition("/")[0] if "/" in key else None
+        children.setdefault(parent, []).append(key)
+    ordered = {}
+
+    def walk(parent):
+        for key in sorted(children.get(parent, []), key=lambda k: (-counts[k], k)):
+            ordered[key] = counts[key]
+            walk(key)
+
+    walk(None)
+    return ordered
 
 
-def plan_sync(stamp_files, data_entries, tag):
-    """Decide symlink operations to mirror tag-matching stamp files.
+def plan_sync(stamp_files, data_entries, tag, stamp_dir):
+    """Decide symlink operations to mirror a watched stamp path.
 
     stamp_files: iterable of filenames present in the watched stamp dir.
     data_entries: dict name -> entry describing the data-dir contents, where
         entry is {"type": "file"|"dir"|"symlink"} plus, for symlinks,
-        "owned" (target's parent resolves into the watched stamp dir) and
-        "dangling" (target no longer exists).
-    Returns (to_link, to_prune, warnings): names to symlink into the data
-    dir, owned dangling symlinks to remove, and human-readable warnings.
-    Linking is scoped to the given tag, but pruning covers owned dangling
-    symlinks of ANY tag: ownership is stamp-dir-based by design, so a file
-    restamped to a different tag still gets its dead link cleaned up.
+        "owned" (target's parent resolves into a watched stamp dir),
+        "dangling" (target no longer exists), "target_name" (the target's
+        basename) and "target_dir" (realpath of the target's parent dir).
+    tag: '/'-joined stamp path; matches rankable files at that path or deeper.
+    stamp_dir: realpath of the watched stamp dir being synced.
+
+    Links are named by identity_key, so adding, changing or removing a
+    sub-stamp re-points the existing link instead of replacing it. But a
+    rename must never silently move an established rank onto a *different*
+    file: a link only ever gets created fresh, or retargeted/kept when it is
+    this watch's own link (its target lives in this watch's stamp_dir). A
+    same-key file that isn't the one already linked, a live link that
+    belongs to another watched dir, or an identity collision between two
+    candidate files each produce a warning instead of a claim. A dangling
+    link whose recorded target is gone AND more than one current file in the
+    STAMP DIR AS A WHOLE now shares its identity is held (kept, not
+    retargeted or pruned) with a warning instead of guessing which file
+    inherits the rank -- retargeting is only ever safe when a rename leaves
+    exactly one candidate behind dir-wide. The dir-wide count (not just this
+    watch's tag-filtered candidates) matters because a narrow sub-path watch
+    can see only one matching file while the lost file in fact moved
+    elsewhere in the dir rather than vanishing -- from that watch's view
+    alone the "rename" looks unambiguous, but it would still swap the rank
+    onto a file that was never part of it. An owned symlink entry missing
+    "target_dir" indicates a caller bug (it cannot be compared against
+    stamp_dir) and raises ValueError instead of silently mis-classifying the
+    link.
+
+    Returns a dict:
+      link:     {key: filename} for matches with no data-dir entry yet
+      retarget: {key: filename} for this watch's own dangling link, pointed
+                at its (possibly sub-stamp-renamed) match
+      keep:     set of keys already linked to the right file by this watch
+      prune:    owned dangling symlinks of ANY tag/dir. The caller (via
+                merge_plans) must not prune a key any watch links, retargets
+                or keeps.
+      warnings: human-readable strings
     Never proposes touching regular files, dirs, or foreign symlinks.
     """
-    prefix = stamp_prefix(tag)
-    to_link, to_prune, warnings = [], [], []
+    tag_path = split_tag(tag)
+    plan = {"link": {}, "retarget": {}, "keep": set(), "prune": [], "warnings": []}
+    # Identity groups over every rankable file in the dir, regardless of tag
+    # -- ambiguity has to be judged dir-wide: a narrow sub-path watch's own
+    # tag-filtered candidate list can look unambiguous (one match) even when
+    # the lost file actually just moved elsewhere in the dir rather than
+    # vanishing, still sharing the identity.
+    dir_keys = {}
     for name in sorted(stamp_files):
-        if not (name.startswith(prefix) and is_rankable(name)):
+        if not is_rankable(name):
             continue
-        entry = data_entries.get(name)
+        dir_keys.setdefault(identity_key(name), []).append(name)
+
+    candidates = {}
+    for name in sorted(stamp_files):
+        if not is_rankable(name):
+            continue
+        path, _ = parse_stamped(name)
+        if not path_under(path, tag_path):
+            continue
+        candidates.setdefault(identity_key(name), []).append(name)
+
+    for key in sorted(candidates):
+        names = candidates[key]
+        entry = data_entries.get(key)
+        if (entry is not None and entry.get("type") == "symlink"
+                and entry.get("owned") and "target_dir" not in entry):
+            raise ValueError("owned symlink entry {} lacks target_dir".format(key))
+        ours = (entry is not None and entry["type"] == "symlink"
+                and entry.get("owned") and entry.get("target_dir") == stamp_dir)
+        dir_names = dir_keys.get(key, [])
+        lost_ambiguous = (ours and entry.get("dangling")
+                           and entry.get("target_name") not in names
+                           and len(dir_names) > 1)
+        if lost_ambiguous:
+            # The renamed-away file's replacement can't be told apart from a
+            # pre-existing (or since-moved-elsewhere) collision; picking any
+            # one would silently hand the established rank to the wrong
+            # photo. Hold it instead.
+            plan["keep"].add(key)
+            plan["warnings"].append(
+                "{} lost its file {} and {} files now share its identity ({}); "
+                "not relinking until only one remains -- remove or re-root "
+                "the file that was not previously ranked".format(
+                    key, entry.get("target_name"), len(dir_names), ", ".join(dir_names)))
+            continue
+
+        if ours and entry.get("target_name") in names:
+            name = entry["target_name"]
+        else:
+            name = names[0]
+        for other in names:
+            if other != name:
+                plan["warnings"].append("{} and {} share identity {}; skipping {}".format(
+                    name, other, key, other))
+
         if entry is None:
-            to_link.append(name)
+            plan["link"][key] = name
         elif entry["type"] == "file":
-            warnings.append("Regular file blocks stamped name: {}".format(name))
-    for name in sorted(data_entries):
-        entry = data_entries[name]
-        if entry["type"] == "symlink" and entry.get("owned") and entry.get("dangling"):
-            to_prune.append(name)
-    return to_link, to_prune, warnings
+            plan["warnings"].append("Regular file blocks stamped name: {}".format(key))
+        elif entry["type"] == "dir" or not entry.get("owned"):
+            plan["warnings"].append(
+                "{} exists and is not a link managed by this watch; not linking {}".format(
+                    key, name))
+        elif ours:
+            if entry.get("dangling"):
+                plan["retarget"][key] = name
+            elif entry.get("target_name") == name:
+                plan["keep"].add(key)
+            else:
+                plan["warnings"].append(
+                    "{} already ranks {}; not relinking to {}".format(
+                        key, entry.get("target_name"), name))
+        elif not entry.get("dangling"):
+            plan["warnings"].append(
+                "{} is linked to a file in another watched dir; not linking {}".format(
+                    key, name))
+        # else: owned dangling link belonging to another dir -- no claim,
+        # left for that dir's own plan (or prune) to deal with.
+
+    plan["prune"] = sorted(
+        name for name, entry in data_entries.items()
+        if entry["type"] == "symlink" and entry.get("owned") and entry.get("dangling"))
+    return plan
+
+
+def merge_plans(plans):
+    """Combine per-watch plans in watch order; among competing link/retarget
+    claims for the same key, the first watch wins. But any plan's "keep" --
+    confirming a correct link, or holding one whose identity is ambiguous --
+    pre-empts every watch's link/retarget for that key regardless of
+    processing order: keep claims are collected up front, before per-key
+    claims are resolved, rather than accumulated as the loop goes. Otherwise
+    a narrower watch that (from its own filtered view) sees no ambiguity
+    could win a race against the watch that does, depending on list order.
+    plans: list of (stamp_dir, plan).
+    Returns {"link": {key: (stamp_dir, name)}, "retarget": {key: (stamp_dir, name)},
+             "prune": sorted keys no watch claimed, "warnings": [...]}."""
+    merged = {"link": {}, "retarget": {}, "prune": [], "warnings": []}
+    taken = set()
+    for _, plan in plans:
+        taken |= plan["keep"]
+    prunable = set()
+    for stamp_dir, plan in plans:
+        merged["warnings"] += plan["warnings"]
+        for kind in ("link", "retarget"):
+            for key, name in plan[kind].items():
+                if key not in taken:
+                    merged[kind][key] = (stamp_dir, name)
+        taken |= set(plan["link"]) | set(plan["retarget"]) | plan["keep"]
+        prunable.update(plan["prune"])
+    merged["prune"] = sorted(prunable - taken)
+    return merged
 
 
 def _active_range(state):
