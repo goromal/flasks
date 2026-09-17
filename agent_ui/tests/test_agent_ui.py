@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import sys
 
 import pytest
@@ -432,3 +433,69 @@ def test_agents_are_not_hardcoded_to_claude_codex(tmp_path):
     bad = client.post("/agents/sessions",
                       data={"_csrf": csrf(client), "workspace": "ui", "agent": "codex"})
     assert bad.status_code == 400
+
+
+def test_tmux_socket_and_config_prefix_commands(monkeypatch):
+    from agent_ui import TmuxSessions
+
+    calls = []
+
+    class Result:
+        returncode = 0
+        stdout = ""
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return Result()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    sessions = TmuxSessions(
+        tmux_bin="tmux", socket="agent-ui", config="/nix/store/x-tmux.conf"
+    )
+    sessions.list([], ("claude",))
+    assert calls[-1][:3] == ["tmux", "-L", "agent-ui"]
+    assert "-f" not in calls[-1]
+
+    sessions.start("ui", "claude")
+    start_cmd = calls[-1]
+    assert start_cmd[:3] == ["tmux", "-L", "agent-ui"]
+    assert start_cmd[3:5] == ["-f", "/nix/store/x-tmux.conf"]
+    assert "new-session" in start_cmd
+
+    name = "agent-ui-ui--claude--0123abcd"
+    sessions.interrupt(name)
+    assert calls[-1][:3] == ["tmux", "-L", "agent-ui"]
+    assert calls[-1][3] == "send-keys"
+    sessions.terminate(name)
+    assert calls[-1][:3] == ["tmux", "-L", "agent-ui"]
+    assert calls[-1][3] == "kill-session"
+
+
+def test_tmux_defaults_emit_plain_commands(monkeypatch):
+    from agent_ui import TmuxSessions
+
+    calls = []
+
+    class Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return Result()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    sessions = TmuxSessions(tmux_bin="tmux")
+
+    sessions.list([], ("claude",))
+    assert calls[-1] == [
+        "tmux", "list-sessions", "-F",
+        "#{session_name}\t#{session_created}\t#{session_attached}",
+    ]
+
+    name = "agent-ui-ui--claude--0123abcd"
+    sessions.interrupt(name)
+    assert calls[-1] == ["tmux", "send-keys", "-t", name, "C-c"]
+    sessions.terminate(name)
+    assert calls[-1] == ["tmux", "kill-session", "-t", name]
