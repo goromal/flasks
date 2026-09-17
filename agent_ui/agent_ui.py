@@ -25,7 +25,7 @@ RESERVED_DEVRC_KEYS = {"dev_dir", "data_dir", "pkgs_dir", "pkgs_var"}
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]*$")
 SESSION_NAME = re.compile(
     r"^agent-ui-(?P<workspace>[A-Za-z0-9_][A-Za-z0-9_-]*)"
-    r"--(?P<agent>claude|codex|shell)--(?P<id>[0-9a-f]{8})$"
+    r"--(?P<agent>[A-Za-z0-9_][A-Za-z0-9_-]*)--(?P<id>[0-9a-f]{8})$"
 )
 
 
@@ -223,7 +223,9 @@ def create_app(
     session_manager=None,
     workspace_manager=None,
 ):
-    allowed_agents = tuple(agent for agent in agents if agent in {"claude", "codex"})
+    allowed_agents = tuple(
+        dict.fromkeys(agent for agent in agents if SAFE_NAME.fullmatch(agent))
+    )
     app_secrets = _load_secrets(secrets_file)
     secret_key = app_secrets["secret_key"].encode()
     password_hash = app_secrets["password_hash"]
