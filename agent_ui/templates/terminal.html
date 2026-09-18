@@ -75,8 +75,9 @@
       var selectionStart = null;
       var selectionDocument = null;
       var scrollY = null;
-      var scrollAccum = 0;
-      var SCROLL_STEP = 20;
+      var scrollMode = false;
+      var scrollOffset = 0;
+      var SCROLL_STEP = 44;
 
       // ttyd renders an xterm.js terminal; its keyboard handler lives on a
       // hidden helper textarea. Dispatching a synthetic keydown there is how we
@@ -168,44 +169,52 @@
         if (ending) setSelecting(false);
       }
 
-      // Touch scrollback: translate a vertical finger-drag (when not selecting)
-      // into wheel events on the xterm viewport. With tmux "mouse on", xterm
-      // forwards these as the mouse-wheel escape, so the running app (claude)
-      // scrolls its view -- or a shell pane enters tmux copy-mode. Without this a
-      // finger does nothing, since xterm.js doesn't scroll on touch by itself.
-      function dispatchWheel(deltaY) {
-        try {
-          var win = iframe.contentWindow;
-          var term = terminal();
-          if (!win || !term || !term.element) return;
-          var el = term.element.querySelector(".xterm-viewport") ||
-                   term.element.querySelector(".xterm-screen") ||
-                   term.element;
-          el.dispatchEvent(new win.WheelEvent("wheel", {
-            deltaY: deltaY, deltaMode: 0, bubbles: true, cancelable: true,
-          }));
-        } catch (err) {}
+      // Touch scrollback: a vertical finger-drag (when not selecting) drives tmux
+      // copy-mode via real keystrokes. sendKey() is the proven input path (the key
+      // bar uses it); a synthetic wheel event did NOT work here. The agent writes
+      // to the normal buffer, so its output lives in tmux scrollback. Drag DOWN to
+      // page back into history, UP to return; reaching the bottom exits copy-mode
+      // to the live prompt.
+      function enterCopyMode() {
+        sendKey("b", 66, true); // tmux prefix Ctrl-b
+        sendKey("[", 219);      // enter copy-mode
+      }
+      function exitCopyMode() {
+        sendKey("q", 81);       // cancel copy-mode -> live pane
+      }
+      function scrollPage(up) {
+        if (up) {
+          if (!scrollMode) { enterCopyMode(); scrollMode = true; scrollOffset = 0; }
+          sendKey("PageUp", 33);
+          scrollOffset += 1;
+        } else if (scrollMode) {
+          sendKey("PageDown", 34);
+          scrollOffset -= 1;
+          if (scrollOffset <= 0) { exitCopyMode(); scrollMode = false; scrollOffset = 0; }
+        }
       }
 
       function startScrollTouch(evt) {
-        if (evt.touches.length !== 1) { scrollY = null; return; }
-        scrollY = evt.touches[0].clientY;
-        scrollAccum = 0;
+        scrollY = evt.touches.length === 1 ? evt.touches[0].clientY : null;
       }
 
       function handleScrollTouch(evt) {
         if (scrollY === null || evt.touches.length !== 1) return;
         var y = evt.touches[0].clientY;
-        scrollAccum += y - scrollY;
-        scrollY = y;
-        var fired = false;
-        // Finger dragged down (accum > 0) -> scroll back into history (wheel up).
-        while (scrollAccum >= SCROLL_STEP) { scrollAccum -= SCROLL_STEP; dispatchWheel(-120); fired = true; }
-        while (scrollAccum <= -SCROLL_STEP) { scrollAccum += SCROLL_STEP; dispatchWheel(120); fired = true; }
-        if (fired) { evt.preventDefault(); evt.stopImmediatePropagation(); }
+        var delta = y - scrollY;
+        var steps = 0;
+        // Finger down (delta > 0) pages up into history; finger up pages down.
+        while (delta >= SCROLL_STEP) { delta -= SCROLL_STEP; steps += 1; }
+        while (delta <= -SCROLL_STEP) { delta += SCROLL_STEP; steps -= 1; }
+        if (steps === 0) return;
+        scrollY = y - delta; // retain the sub-step remainder
+        if (steps < 0 && !scrollMode) return; // already live; let the touch pass
+        evt.preventDefault();
+        evt.stopImmediatePropagation();
+        for (var i = 0; i < Math.abs(steps); i++) scrollPage(steps > 0);
       }
 
-      function endScrollTouch() { scrollY = null; scrollAccum = 0; }
+      function endScrollTouch() { scrollY = null; }
 
       function installTouchSelection() {
         var doc;
