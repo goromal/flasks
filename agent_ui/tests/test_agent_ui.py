@@ -393,6 +393,8 @@ def test_terminal_page_has_agents_navigation_and_embeds_ttyd(configured_app):
     assert b'"touchstart"' in response.data
     assert b"term.getSelection()" in response.data
     assert b"term.paste(text)" in response.data
+    assert b"handleScrollTouch" in response.data
+    assert b"WheelEvent" in response.data
 
 
 def test_session_name_accepts_any_configured_agent_shape():

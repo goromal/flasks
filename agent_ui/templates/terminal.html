@@ -74,6 +74,9 @@
       var selecting = false;
       var selectionStart = null;
       var selectionDocument = null;
+      var scrollY = null;
+      var scrollAccum = 0;
+      var SCROLL_STEP = 20;
 
       // ttyd renders an xterm.js terminal; its keyboard handler lives on a
       // hidden helper textarea. Dispatching a synthetic keydown there is how we
@@ -165,6 +168,45 @@
         if (ending) setSelecting(false);
       }
 
+      // Touch scrollback: translate a vertical finger-drag (when not selecting)
+      // into wheel events on the xterm viewport. With tmux "mouse on", xterm
+      // forwards these as the mouse-wheel escape, so the running app (claude)
+      // scrolls its view -- or a shell pane enters tmux copy-mode. Without this a
+      // finger does nothing, since xterm.js doesn't scroll on touch by itself.
+      function dispatchWheel(deltaY) {
+        try {
+          var win = iframe.contentWindow;
+          var term = terminal();
+          if (!win || !term || !term.element) return;
+          var el = term.element.querySelector(".xterm-viewport") ||
+                   term.element.querySelector(".xterm-screen") ||
+                   term.element;
+          el.dispatchEvent(new win.WheelEvent("wheel", {
+            deltaY: deltaY, deltaMode: 0, bubbles: true, cancelable: true,
+          }));
+        } catch (err) {}
+      }
+
+      function startScrollTouch(evt) {
+        if (evt.touches.length !== 1) { scrollY = null; return; }
+        scrollY = evt.touches[0].clientY;
+        scrollAccum = 0;
+      }
+
+      function handleScrollTouch(evt) {
+        if (scrollY === null || evt.touches.length !== 1) return;
+        var y = evt.touches[0].clientY;
+        scrollAccum += y - scrollY;
+        scrollY = y;
+        var fired = false;
+        // Finger dragged down (accum > 0) -> scroll back into history (wheel up).
+        while (scrollAccum >= SCROLL_STEP) { scrollAccum -= SCROLL_STEP; dispatchWheel(-120); fired = true; }
+        while (scrollAccum <= -SCROLL_STEP) { scrollAccum += SCROLL_STEP; dispatchWheel(120); fired = true; }
+        if (fired) { evt.preventDefault(); evt.stopImmediatePropagation(); }
+      }
+
+      function endScrollTouch() { scrollY = null; scrollAccum = 0; }
+
       function installTouchSelection() {
         var doc;
         try {
@@ -175,16 +217,20 @@
         if (!doc || doc === selectionDocument) return;
         selectionDocument = doc;
         doc.addEventListener("touchstart", function (evt) {
-          handleSelectionTouch(evt, false);
+          if (selecting) handleSelectionTouch(evt, false);
+          else startScrollTouch(evt);
         }, { capture: true, passive: false });
         doc.addEventListener("touchmove", function (evt) {
-          handleSelectionTouch(evt, false);
+          if (selecting) handleSelectionTouch(evt, false);
+          else handleScrollTouch(evt);
         }, { capture: true, passive: false });
         doc.addEventListener("touchend", function (evt) {
-          handleSelectionTouch(evt, true);
+          if (selecting) handleSelectionTouch(evt, true);
+          else endScrollTouch();
         }, { capture: true, passive: false });
         doc.addEventListener("touchcancel", function () {
           if (selecting) setSelecting(false);
+          else endScrollTouch();
         }, { capture: true });
       }
 
