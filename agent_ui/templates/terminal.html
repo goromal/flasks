@@ -77,7 +77,7 @@
       var scrollY = null;
       var scrollMode = false;
       var scrollOffset = 0;
-      var SCROLL_STEP = 44;
+      var SCROLL_STEP = 12;
 
       // ttyd renders an xterm.js terminal; its keyboard handler lives on a
       // hidden helper textarea. Dispatching a synthetic keydown there is how we
@@ -182,13 +182,15 @@
       function exitCopyMode() {
         sendKey("q", 81);       // cancel copy-mode -> live pane
       }
-      function scrollPage(up) {
+      function scrollLine(up) {
+        // Up/Down are bound to scroll-up/scroll-down in the agent-ui tmux config,
+        // so each is a smooth one-line scroll (no cursor-first lag).
         if (up) {
           if (!scrollMode) { enterCopyMode(); scrollMode = true; scrollOffset = 0; }
-          sendKey("PageUp", 33);
+          sendKey("ArrowUp", 38);
           scrollOffset += 1;
         } else if (scrollMode) {
-          sendKey("PageDown", 34);
+          sendKey("ArrowDown", 40);
           scrollOffset -= 1;
           if (scrollOffset <= 0) { exitCopyMode(); scrollMode = false; scrollOffset = 0; }
         }
@@ -211,7 +213,7 @@
         if (steps < 0 && !scrollMode) return; // already live; let the touch pass
         evt.preventDefault();
         evt.stopImmediatePropagation();
-        for (var i = 0; i < Math.abs(steps); i++) scrollPage(steps > 0);
+        for (var i = 0; i < Math.abs(steps); i++) scrollLine(steps > 0);
       }
 
       function endScrollTouch() { scrollY = null; }
