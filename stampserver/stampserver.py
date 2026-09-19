@@ -120,9 +120,19 @@ if args.data_dir[0] == '/':
     RES_DIR = args.data_dir
 else:
     RES_DIR = os.path.join(PWD, args.data_dir)
-SHORT_RESDIR = os.path.basename(os.path.realpath(RES_DIR))
 # Remember where the symlink pointed at startup so the UI can reset back to it.
 DEFAULT_TARGET = os.path.realpath(RES_DIR)
+
+
+def current_datadir():
+    """Basename of the directory RES_DIR currently resolves to, read live.
+
+    RES_DIR is a symlink that can be re-pointed out from under this long-lived
+    process: the stampserver-setup oneshot resets it to defaultStampables on a
+    deploy. Resolving it on every render (instead of caching a value snapshotted
+    at import) keeps the displayed directory name matching the true target.
+    """
+    return os.path.basename(os.path.realpath(RES_DIR))
 
 app = flask.Flask(__name__, static_url_path=args.subdomain, static_folder=RES_DIR)
 app.secret_key = _secrets["secret_key"].encode()
@@ -282,7 +292,7 @@ def login():
             ftype="MP4_EXT",
             root="zzz",
             nleft="?",
-            datadir=SHORT_RESDIR,
+            datadir=current_datadir(),
             stamps={}
         )
     return flask.render_template("login.html", title="Sign In", form=form)
@@ -319,10 +329,10 @@ def index():
     res, msg = stampserver.load()
     stamps = stampserver.getstamps()
     if not res:
-        return flask.render_template("index.html", urlroot=urlroot, err=True, msg=msg, file="", ftype="", root="", nleft="?", datadir=SHORT_RESDIR, stamps=stamps)
+        return flask.render_template("index.html", urlroot=urlroot, err=True, msg=msg, file="", ftype="", root="", nleft="?", datadir=current_datadir(), stamps=stamps)
     file, ftype, numleft = stampserver.getfile()
     file = file_url(file, ftype)
-    return flask.render_template("index.html", urlroot=urlroot, err=False, msg="", file=file, ftype=ftype, root="", nleft=str(numleft), datadir=SHORT_RESDIR, stamps=stamps)
+    return flask.render_template("index.html", urlroot=urlroot, err=False, msg="", file=file, ftype=ftype, root="", nleft=str(numleft), datadir=current_datadir(), stamps=stamps)
 
 def restamp_url(path):
     return urlroot + "restamp/" + "/".join(quote(segment, safe="") for segment in path)
@@ -403,13 +413,13 @@ def stamped(stamp=""):
         substamps=substamps,
     )
     if not res:
-        return flask.render_template("index.html", urlroot=urlroot, err=True, msg=msg, file="", ftype="", root=root, nleft="?", datadir=SHORT_RESDIR, stamps={}, **tree)
+        return flask.render_template("index.html", urlroot=urlroot, err=True, msg=msg, file="", ftype="", root=root, nleft="?", datadir=current_datadir(), stamps={}, **tree)
     got = stampserver.getfile()
     if got is None:
-        return flask.render_template("index.html", urlroot=urlroot, err=True, msg="The deck was reloaded; please try again.", file="", ftype="", root=root, nleft="?", datadir=SHORT_RESDIR, stamps={}, **tree)
+        return flask.render_template("index.html", urlroot=urlroot, err=True, msg="The deck was reloaded; please try again.", file="", ftype="", root=root, nleft="?", datadir=current_datadir(), stamps={}, **tree)
     file, ftype, numleft = got
     file = file_url(file, ftype)
-    return flask.render_template("index.html", urlroot=urlroot, err=False, msg="", file=file, ftype=ftype, root=root, nleft=str(numleft), datadir=SHORT_RESDIR, stamps={}, **tree)
+    return flask.render_template("index.html", urlroot=urlroot, err=False, msg="", file=file, ftype=ftype, root=root, nleft=str(numleft), datadir=current_datadir(), stamps={}, **tree)
 
 @bp.route("/zzz", methods=["GET","POST"])
 @flask_login.login_required
@@ -424,7 +434,7 @@ def zzz():
         ftype="MP4_EXT",
         root="zzz",
         nleft="?",
-        datadir=SHORT_RESDIR,
+        datadir=current_datadir(),
         stamps={}
     )
 
@@ -484,7 +494,6 @@ def list_dirs():
 @bp.route("/api/set-stampables-dir", methods=["POST"])
 @flask_login.login_required
 def set_stampables_dir():
-    global SHORT_RESDIR
     data = flask.request.get_json()
     new_target = data.get('path')
     if not new_target:
@@ -497,7 +506,6 @@ def set_stampables_dir():
     try:
         os.unlink(RES_DIR)
         os.symlink(new_target, RES_DIR)
-        SHORT_RESDIR = os.path.basename(os.path.realpath(RES_DIR))
         return flask.jsonify({'success': True, 'real_path': new_target})
     except Exception as e:
         return flask.jsonify({'success': False, 'error': str(e)}), 500

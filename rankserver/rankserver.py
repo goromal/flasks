@@ -82,9 +82,21 @@ if args.data_dir[0] == '/':
     RES_DIR = args.data_dir
 else:
     RES_DIR = os.path.join(PWD, args.data_dir)
-SHORT_RESDIR = os.path.basename(os.path.realpath(RES_DIR))
 # Remember where the symlink pointed at startup so the UI can reset back to it.
 DEFAULT_TARGET = os.path.realpath(RES_DIR)
+
+
+def current_datadir():
+    """Basename of the directory RES_DIR currently resolves to, read live.
+
+    RES_DIR is a symlink that can be re-pointed out from under this long-lived
+    process: the rankserver-setup oneshot resets it to defaultRankables on a
+    deploy. Resolving it on every render (instead of caching a value snapshotted
+    at import) keeps the displayed directory name matching the true target.
+    """
+    return os.path.basename(os.path.realpath(RES_DIR))
+
+
 # Cache thumbnails inside the rankables directory itself. RES_DIR is the symlink
 # path, so this always resolves into whatever directory is currently linked —
 # each rankable directory keeps its own persistent cache, and re-pointing the
@@ -412,7 +424,7 @@ def index():
     warn = " | ".join(rankserver.warnings)
     if not res:
         return flask.render_template("index.html", urlroot=urlroot, intro=False,
-                                     datadir=SHORT_RESDIR, err=True, done=False,
+                                     datadir=current_datadir(), err=True, done=False,
                                      msg=msg, rlist=[], l="", r="", warn=warn,
                                      progress_note="")
     rlist = rankserver.getRankList()
@@ -424,12 +436,12 @@ def index():
             note = "Binary-search placement — {} more in queue".format(
                 len(rankserver.insertions["queue"]))
             return flask.render_template("index.html", urlroot=urlroot,
-                                         intro=False, datadir=SHORT_RESDIR,
+                                         intro=False, datadir=current_datadir(),
                                          err=False, done=False, msg="",
                                          rlist=rlist, l=l, r=r, warn=warn,
                                          progress_note=note)
         return flask.render_template("index.html", urlroot=urlroot, intro=False,
-                                     datadir=SHORT_RESDIR, err=False, done=True,
+                                     datadir=current_datadir(), err=False, done=True,
                                      msg="", rlist=rlist, l="", r="", warn=warn,
                                      progress_note="")
     l, r = rankserver.getCompFiles()
@@ -437,7 +449,7 @@ def index():
     note = "Sorting — {} item{} still unsorted".format(
         remaining, "" if remaining == 1 else "s")
     return flask.render_template("index.html", urlroot=urlroot, intro=False,
-                                 datadir=SHORT_RESDIR, err=False, done=False,
+                                 datadir=current_datadir(), err=False, done=False,
                                  msg="", rlist=rlist, l=l, r=r, warn=warn,
                                  progress_note=note)
 
@@ -445,8 +457,7 @@ def index():
 @flask_login.login_required
 def intro():
     global urlroot
-    global SHORT_RESDIR
-    return flask.render_template("index.html", urlroot=urlroot, intro=True, datadir=SHORT_RESDIR, err=False, done=False, msg="", rlist=[], l="", r="", warn="", progress_note="")
+    return flask.render_template("index.html", urlroot=urlroot, intro=True, datadir=current_datadir(), err=False, done=False, msg="", rlist=[], l="", r="", warn="", progress_note="")
 
 @bp.route("/api/rankables-info", methods=["GET"])
 @flask_login.login_required
@@ -479,7 +490,6 @@ def list_dirs():
 @bp.route("/api/set-rankables-dir", methods=["POST"])
 @flask_login.login_required
 def set_rankables_dir():
-    global SHORT_RESDIR
     data = flask.request.get_json()
     new_target = data.get('path')
     if not new_target:
@@ -492,7 +502,6 @@ def set_rankables_dir():
     try:
         os.unlink(RES_DIR)
         os.symlink(new_target, RES_DIR)
-        SHORT_RESDIR = os.path.basename(os.path.realpath(RES_DIR))
         return flask.jsonify({'success': True, 'real_path': new_target})
     except Exception as e:
         return flask.jsonify({'success': False, 'error': str(e)}), 500
