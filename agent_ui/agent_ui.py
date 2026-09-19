@@ -25,7 +25,7 @@ RESERVED_DEVRC_KEYS = {"dev_dir", "data_dir", "pkgs_dir", "pkgs_var"}
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]*$")
 SESSION_NAME = re.compile(
     r"^agent-ui-(?P<workspace>[A-Za-z0-9_][A-Za-z0-9_-]*)"
-    r"--(?P<agent>claude|codex|shell)--(?P<id>[0-9a-f]{8})$"
+    r"--(?P<agent>[A-Za-z0-9_][A-Za-z0-9_-]*)--(?P<id>[0-9a-f]{8})$"
 )
 
 
@@ -75,25 +75,31 @@ def _load_secrets(path):
 
 
 class TmuxSessions:
-    def __init__(self, tmux_bin="tmux", session_command="agent-ui-session"):
+    def __init__(
+        self, tmux_bin="tmux", session_command="agent-ui-session",
+        socket=None, config=None,
+    ):
         self.tmux_bin = tmux_bin
         self.session_command = session_command
+        self.socket = socket
+        self.config = config
+
+    def _base(self):
+        base = [self.tmux_bin]
+        if self.socket:
+            base += ["-L", self.socket]
+        return base
 
     def list(self, configured_workspaces, allowed_agents):
         result = subprocess.run(
-            [
-                self.tmux_bin,
-                "list-sessions",
-                "-F",
+            self._base() + [
+                "list-sessions", "-F",
                 "#{session_name}\t#{session_created}\t#{session_attached}",
             ],
-            check=False,
-            capture_output=True,
-            text=True,
+            check=False, capture_output=True, text=True,
         )
         if result.returncode != 0:
             return []
-
         workspaces = {workspace["name"] for workspace in configured_workspaces}
         sessions = []
         for line in result.stdout.splitlines():
@@ -108,47 +114,31 @@ class TmuxSessions:
             agent = match.group("agent")
             if workspace not in workspaces or agent not in allowed_agents:
                 continue
-            sessions.append(
-                {
-                    "name": name,
-                    "workspace": workspace,
-                    "agent": agent,
-                    "created": int(created),
-                    "attached": int(attached),
-                }
-            )
+            sessions.append({
+                "name": name, "workspace": workspace, "agent": agent,
+                "created": int(created), "attached": int(attached),
+            })
         return sorted(sessions, key=lambda session: session["created"], reverse=True)
 
     def start(self, workspace, agent):
         name = f"agent-ui-{workspace}--{agent}--{secrets.token_hex(4)}"
-        subprocess.run(
-            [
-                self.tmux_bin,
-                "new-session",
-                "-d",
-                "-s",
-                name,
-                self.session_command,
-                workspace,
-                agent,
-            ],
-            check=True,
-        )
+        command = self._base()
+        if self.config:
+            command += ["-f", self.config]
+        command += [
+            "new-session", "-d", "-s", name,
+            self.session_command, workspace, agent,
+        ]
+        subprocess.run(command, check=True)
         return name
 
     def interrupt(self, name):
         self._require_session_name(name)
-        subprocess.run(
-            [self.tmux_bin, "send-keys", "-t", name, "C-c"],
-            check=True,
-        )
+        subprocess.run(self._base() + ["send-keys", "-t", name, "C-c"], check=True)
 
     def terminate(self, name):
         self._require_session_name(name)
-        subprocess.run(
-            [self.tmux_bin, "kill-session", "-t", name],
-            check=True,
-        )
+        subprocess.run(self._base() + ["kill-session", "-t", name], check=True)
 
     @staticmethod
     def _require_session_name(name):
@@ -216,6 +206,8 @@ def create_app(
     agents=("claude", "codex"),
     secrets_file="~/.config/agent-ui/secrets.json",
     tmux_bin="tmux",
+    tmux_socket=None,
+    tmux_config=None,
     session_command="agent-ui-session",
     workspace_command="devshellctl",
     history="~/.devhist",
@@ -223,13 +215,17 @@ def create_app(
     session_manager=None,
     workspace_manager=None,
 ):
-    allowed_agents = tuple(agent for agent in agents if agent in {"claude", "codex"})
+    allowed_agents = tuple(
+        dict.fromkeys(agent for agent in agents if SAFE_NAME.fullmatch(agent))
+    )
     app_secrets = _load_secrets(secrets_file)
     secret_key = app_secrets["secret_key"].encode()
     password_hash = app_secrets["password_hash"]
     csrf_token = hmac.new(secret_key, b"csrf", hashlib.sha256).hexdigest()
     cookie_path = f"{subdomain}/" if subdomain else "/"
-    sessions = session_manager or TmuxSessions(tmux_bin, session_command)
+    sessions = session_manager or TmuxSessions(
+        tmux_bin, session_command, socket=tmux_socket, config=tmux_config
+    )
     workspaces = workspace_manager or WorkspaceCli(workspace_command, devrc, history)
     session_types = (*allowed_agents, "shell")
 
@@ -481,6 +477,8 @@ def main():
         help="Path to JSON file with secret_key and password_hash",
     )
     parser.add_argument("--tmux-bin", default="tmux")
+    parser.add_argument("--tmux-socket", default=None)
+    parser.add_argument("--tmux-config", default=None)
     parser.add_argument("--session-command", default="agent-ui-session")
     parser.add_argument("--workspace-command", default="devshellctl")
     parser.add_argument("--history", default="~/.devhist")
@@ -492,6 +490,8 @@ def main():
         agents=args.agents,
         secrets_file=args.secrets_file,
         tmux_bin=args.tmux_bin,
+        tmux_socket=args.tmux_socket,
+        tmux_config=args.tmux_config,
         session_command=args.session_command,
         workspace_command=args.workspace_command,
         history=args.history,

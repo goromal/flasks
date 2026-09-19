@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import sys
 
 import pytest
@@ -392,3 +393,111 @@ def test_terminal_page_has_agents_navigation_and_embeds_ttyd(configured_app):
     assert b'"touchstart"' in response.data
     assert b"term.getSelection()" in response.data
     assert b"term.paste(text)" in response.data
+    assert b"handleScrollTouch" in response.data
+    assert b"enterCopyMode" in response.data
+
+
+def test_session_name_accepts_any_configured_agent_shape():
+    # The regex must not pin the agent to claude|codex|shell.
+    from agent_ui import SESSION_NAME
+    assert SESSION_NAME.fullmatch("agent-ui-ui--gemini--0123abcd")
+    assert SESSION_NAME.fullmatch("agent-ui-ui--claude--0123abcd")
+    # Shape guards still hold: no spaces, no slashes.
+    assert not SESSION_NAME.fullmatch("agent-ui-ui--bad agent--0123abcd")
+    assert not SESSION_NAME.fullmatch("agent-ui-ui--codex--nothex01")
+
+
+def test_agents_are_not_hardcoded_to_claude_codex(tmp_path):
+    devrc = tmp_path / "devrc"
+    devrc.write_text("dev_dir = ~/dev\nui = anixpkgs\n", encoding="utf-8")
+    secrets_file = tmp_path / "secrets.json"
+    secrets_file.write_text(
+        json.dumps({
+            "secret_key": "k",
+            "password_hash": generate_password_hash(TEST_PASSWORD),
+        }),
+        encoding="utf-8",
+    )
+    manager = FakeSessions()
+    app = create_app(
+        subdomain="/agents", devrc=str(devrc), agents=("gemini",),
+        secrets_file=str(secrets_file), secure_cookie=False,
+        session_manager=manager, workspace_manager=FakeWorkspaces(),
+    )
+    app.config.update(TESTING=True)
+    client = app.test_client()
+    login(client)
+    ok = client.post("/agents/sessions",
+                     data={"_csrf": csrf(client), "workspace": "ui", "agent": "gemini"})
+    assert ok.status_code == 302
+    assert manager.started == [("ui", "gemini")]
+    # An agent NOT in the configured list is rejected.
+    bad = client.post("/agents/sessions",
+                      data={"_csrf": csrf(client), "workspace": "ui", "agent": "codex"})
+    assert bad.status_code == 400
+
+
+def test_tmux_socket_and_config_prefix_commands(monkeypatch):
+    from agent_ui import TmuxSessions
+
+    calls = []
+
+    class Result:
+        returncode = 0
+        stdout = ""
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return Result()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    sessions = TmuxSessions(
+        tmux_bin="tmux", socket="agent-ui", config="/nix/store/x-tmux.conf"
+    )
+    sessions.list([], ("claude",))
+    assert calls[-1][:3] == ["tmux", "-L", "agent-ui"]
+    assert "-f" not in calls[-1]
+
+    sessions.start("ui", "claude")
+    start_cmd = calls[-1]
+    assert start_cmd[:3] == ["tmux", "-L", "agent-ui"]
+    assert start_cmd[3:5] == ["-f", "/nix/store/x-tmux.conf"]
+    assert "new-session" in start_cmd
+
+    name = "agent-ui-ui--claude--0123abcd"
+    sessions.interrupt(name)
+    assert calls[-1][:3] == ["tmux", "-L", "agent-ui"]
+    assert calls[-1][3] == "send-keys"
+    sessions.terminate(name)
+    assert calls[-1][:3] == ["tmux", "-L", "agent-ui"]
+    assert calls[-1][3] == "kill-session"
+
+
+def test_tmux_defaults_emit_plain_commands(monkeypatch):
+    from agent_ui import TmuxSessions
+
+    calls = []
+
+    class Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return Result()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    sessions = TmuxSessions(tmux_bin="tmux")
+
+    sessions.list([], ("claude",))
+    assert calls[-1] == [
+        "tmux", "list-sessions", "-F",
+        "#{session_name}\t#{session_created}\t#{session_attached}",
+    ]
+
+    name = "agent-ui-ui--claude--0123abcd"
+    sessions.interrupt(name)
+    assert calls[-1] == ["tmux", "send-keys", "-t", name, "C-c"]
+    sessions.terminate(name)
+    assert calls[-1] == ["tmux", "kill-session", "-t", name]
