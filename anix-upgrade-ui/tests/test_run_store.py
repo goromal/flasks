@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from run_store import REPLAY_CAP_BYTES, RunStore
+from run_store import REPLAY_CAP_BYTES, SUCCESS_MARKER, RunStore
 
 
 def make_store(tmp_path):
@@ -147,15 +147,14 @@ def test_stale_running_state_recovers_failure_via_rc_sentinel(tmp_path):
 def test_stale_running_state_recovers_success_via_log_inference(tmp_path):
     """Simulates service killed while subprocess was still running (no exit.rc).
 
-    anix-upgrade writes to the log and exits 0; absence of the failure string
-    in a non-empty log should be inferred as success.
+    anix-upgrade writes an explicit completion marker before exiting 0.
     """
     store = make_store(tmp_path)
     proc = subprocess.Popen(["true"])
     proc.wait()
     os.makedirs(os.path.dirname(store.log_path), exist_ok=True)
     with open(store.log_path, "wb") as f:
-        f.write(b"building...\nDone.\n")
+        f.write(b"building...\n" + SUCCESS_MARKER + b"\n")
     with open(store.state_path, "w") as f:
         json.dump({"status": "running", "pid": proc.pid}, f)
     state = store.read_state()
@@ -163,19 +162,19 @@ def test_stale_running_state_recovers_success_via_log_inference(tmp_path):
     assert state["returncode"] == 0
 
 
-def test_stale_running_state_recovers_failure_via_log_inference(tmp_path):
-    """Log containing 'Build/switch failed.' should be inferred as failure."""
+def test_stale_running_state_with_interrupted_log_is_failed(tmp_path):
+    """A non-empty build log without the success marker is not success."""
     store = make_store(tmp_path)
     proc = subprocess.Popen(["true"])
     proc.wait()
     os.makedirs(os.path.dirname(store.log_path), exist_ok=True)
     with open(store.log_path, "wb") as f:
-        f.write(b"building...\nBuild/switch failed.\n")
+        f.write(b"building...\nerror: interrupted by the user\n")
     with open(store.state_path, "w") as f:
         json.dump({"status": "running", "pid": proc.pid}, f)
     state = store.read_state()
     assert state["status"] == "failed"
-    assert state["returncode"] == 1
+    assert state["returncode"] is None
 
 
 def test_start_clears_stale_rc_sentinel(tmp_path):
