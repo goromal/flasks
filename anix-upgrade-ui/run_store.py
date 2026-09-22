@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 REPLAY_CAP_BYTES = 512 * 1024
 POLL_INTERVAL_S = 0.5
+SUCCESS_MARKER = b"ANIX-UPGRADE_STATUS=SUCCESS"
 
 
 def _now():
@@ -80,10 +81,10 @@ class RunStore:
             if state.get("status") != "running":
                 return state
             # Check if _wait() recorded an exit code before being killed.
-            # If not (service was killed while subprocess was still running),
-            # fall back to log inference: anix-upgrade always prints
-            # "Build/switch failed." on failure, so absence of that string
-            # in a non-empty log means the upgrade succeeded.
+            # If not (for example, nixos-rebuild restarted this service while
+            # its child continued), require the command's explicit completion
+            # marker. An interrupted build can have a large, otherwise normal
+            # log, so absence of a failure message is not evidence of success.
             rc = self._read_rc()
             if rc is None:
                 rc = self._infer_rc_from_log()
@@ -102,17 +103,11 @@ class RunStore:
             return None
 
     def _infer_rc_from_log(self):
-        """Infer exit code when _wait() was killed before the subprocess finished.
-
-        anix-upgrade prints "Build/switch failed." on failure. A non-empty log
-        without that string means the upgrade ran to completion successfully.
-        """
+        """Infer success only from anix-upgrade's explicit completion marker."""
         try:
             with open(self.log_path, "rb") as f:
                 content = f.read()
-            if b"Build/switch failed" in content:
-                return 1
-            return 0 if content else None
+            return 0 if SUCCESS_MARKER in content else None
         except OSError:
             return None
 
