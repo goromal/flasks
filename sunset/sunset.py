@@ -1,10 +1,16 @@
 import argparse
 import os
 import signal
+import threading
 
 from flask import Blueprint, Flask, jsonify, render_template
 
-DOLPHIN_MATCH = "/bin/dolphin-emu"
+EMULATORS = {
+    "dolphin-emu": "Dolphin",
+    ".dolphin-emu-wrapped": "Dolphin",
+    "pcsx2-qt": "PCSX2",
+    ".pcsx2-qt-wrapped": "PCSX2",
+}
 
 
 def _proc_cmdline(pid):
@@ -15,33 +21,56 @@ def _proc_cmdline(pid):
         return []
 
 
-def _scan_dolphin():
-    """Yield (pid, argv) for each running dolphin-emu process."""
-    for entry in os.listdir("/proc"):
-        if not entry.isdigit():
-            continue
-        pid = int(entry)
-        argv = _proc_cmdline(pid)
-        if any(DOLPHIN_MATCH in a for a in argv):
-            yield pid, argv
-
-
-def _game_from_argv(argv):
-    for i, a in enumerate(argv):
-        if a == "-e" and i + 1 < len(argv):
+def _game_from_argv(argv, emulator):
+    flag = "-e" if emulator == "Dolphin" else "--"
+    for i, arg in enumerate(argv):
+        if arg == flag and i + 1 < len(argv):
             return os.path.splitext(os.path.basename(argv[i + 1]))[0]
     return None
 
 
-def find_dolphin():
-    for pid, argv in _scan_dolphin():
-        return pid, _game_from_argv(argv)
-    return None, None
+def _scan_emulators():
+    """Match actual executables owned by this user, never launcher arguments."""
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        try:
+            if os.stat(f"/proc/{pid}").st_uid != os.getuid():
+                continue
+            argv = _proc_cmdline(pid)
+            try:
+                executable = os.path.basename(os.readlink(f"/proc/{pid}/exe"))
+            except PermissionError:
+                # Some emulator processes deny access to exe even for their
+                # owner. Match only argv[0], never a launcher's arguments.
+                executable = os.path.basename(argv[0]) if argv else ""
+            emulator = EMULATORS.get(executable)
+            if emulator is None:
+                continue
+            with open(f"/proc/{pid}/stat") as f:
+                # comm can contain spaces and parentheses. Field 22 is starttime.
+                starttime = f.read().rsplit(")", 1)[1].split()[19]
+        except (OSError, IndexError):
+            continue
+        yield {
+            "pid": pid,
+            "emulator": emulator,
+            "game": _game_from_argv(argv, emulator),
+            "starttime": starttime,
+        }
 
 
 def create_app(subdomain=""):
     app = Flask(__name__)
     bp = Blueprint("sunset", __name__, url_prefix=subdomain)
+    stopping = set()
+    stop_lock = threading.Lock()
+
+    def running():
+        processes = list(_scan_emulators())
+        stopping.intersection_update((p["pid"], p["starttime"]) for p in processes)
+        return processes
 
     @bp.route("/")
     def index():
@@ -49,16 +78,38 @@ def create_app(subdomain=""):
 
     @bp.route("/status")
     def status():
-        pid, game = find_dolphin()
-        return jsonify({"running": pid is not None, "pid": pid, "game": game})
+        with stop_lock:
+            processes = running()
+            sessions = [
+                {**{k: p[k] for k in ("pid", "emulator", "game")},
+                 "stopping": (p["pid"], p["starttime"]) in stopping}
+                for p in processes
+            ]
+        return jsonify({"running": bool(sessions), "sessions": sessions})
+
+    @bp.route("/stop", methods=["POST"])
+    def stop():
+        stopped = []
+        with stop_lock:
+            for process in running():
+                token = (process["pid"], process["starttime"])
+                if process["emulator"] != "PCSX2" or token in stopping:
+                    continue
+                try:
+                    os.kill(process["pid"], signal.SIGTERM)
+                    stopping.add(token)
+                    stopped.append(process["pid"])
+                except OSError:
+                    pass
+        return jsonify({"stopped": stopped})
 
     @bp.route("/kill", methods=["POST"])
     def kill():
         killed = []
-        for pid, _ in _scan_dolphin():
+        for process in _scan_emulators():
             try:
-                os.kill(pid, signal.SIGKILL)
-                killed.append(pid)
+                os.kill(process["pid"], signal.SIGKILL)
+                killed.append(process["pid"])
             except OSError:
                 pass
         return jsonify({"killed": killed})
