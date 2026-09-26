@@ -94,3 +94,24 @@ def test_page_and_subdomain(monkeypatch):
     assert b"Stop PCSX2" in response.data
     assert client.get("/sunset/status").get_json()["running"] is False
     assert client.get("/status").status_code == 404
+
+
+def test_scan_permission_denied_uses_only_argv_zero(monkeypatch):
+    monkeypatch.setattr(sunset.os, "listdir", lambda _: ["42", "43", "44", "45"])
+    monkeypatch.setattr(sunset.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(sunset.os, "stat", lambda _: SimpleNamespace(st_uid=1000))
+    def denied(path):
+        raise PermissionError(13, "Permission denied")
+    monkeypatch.setattr(sunset.os, "readlink", denied)
+    commands = {
+        42: ["/nix/store/x/bin/pcsx2-qt", "-fullscreen", "-batch", "--", "/g/kingdomheartsii.chd"],
+        43: ["/bin/bash", "/nix/store/x/bin/pcsx2-qt", "--", "/g/jakii.chd"],
+        44: [],
+        45: ["/nix/store/x/bin/.dolphin-emu-wrapped", "-e", "/g/Melee.iso"],
+    }
+    monkeypatch.setattr(sunset, "_proc_cmdline", lambda pid: commands[pid])
+    monkeypatch.setattr("builtins.open", lambda _: io.StringIO("42 (emulator) S " + "0 " * 18 + "123 0"))
+    processes = list(sunset._scan_emulators())
+    assert [(p["pid"], p["emulator"], p["game"]) for p in processes] == [
+        (42, "PCSX2", "kingdomheartsii"), (45, "Dolphin", "Melee"),
+    ]

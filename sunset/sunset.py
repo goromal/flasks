@@ -38,7 +38,13 @@ def _scan_emulators():
         try:
             if os.stat(f"/proc/{pid}").st_uid != os.getuid():
                 continue
-            executable = os.path.basename(os.readlink(f"/proc/{pid}/exe"))
+            argv = _proc_cmdline(pid)
+            try:
+                executable = os.path.basename(os.readlink(f"/proc/{pid}/exe"))
+            except PermissionError:
+                # Some emulator processes deny access to exe even for their
+                # owner. Match only argv[0], never a launcher's arguments.
+                executable = os.path.basename(argv[0]) if argv else ""
             emulator = EMULATORS.get(executable)
             if emulator is None:
                 continue
@@ -50,7 +56,7 @@ def _scan_emulators():
         yield {
             "pid": pid,
             "emulator": emulator,
-            "game": _game_from_argv(_proc_cmdline(pid), emulator),
+            "game": _game_from_argv(argv, emulator),
             "starttime": starttime,
         }
 
