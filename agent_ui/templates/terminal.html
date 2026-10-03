@@ -57,6 +57,7 @@
   <nav class="keys" aria-label="Terminal keys">
     <button type="button" data-action="select" aria-pressed="false" title="Drag across terminal text to select it">Select</button>
     <button type="button" data-action="copy" title="Copy selected text, or the visible terminal">Copy</button>
+    <button type="button" data-action="open-url" title="Open the selected URL, or the latest URL in the terminal">Open URL</button>
     <button type="button" data-action="paste" title="Paste clipboard text into the terminal">Paste</button>
     <button type="button" data-key="Escape" data-code="27">Esc</button>
     <button type="button" data-key="Tab" data-code="9">Tab</button>
@@ -114,7 +115,11 @@
 
       function terminalText(term) {
         var selected = term.getSelection();
-        if (selected) return selected;
+        if (selected) {
+          // A URL selected across terminal rows can contain line breaks.
+          if (/^\s*https?:\/\//i.test(selected)) return selected.replace(/\s+/g, "");
+          return selected;
+        }
 
         var buffer = term.buffer.active;
         var lines = [];
@@ -125,6 +130,23 @@
         }
         while (lines.length && !lines[lines.length - 1]) lines.pop();
         return lines.join("\n");
+      }
+
+      function latestUrl(term) {
+        var selected = term.getSelection();
+        if (selected && /^\s*https?:\/\//i.test(selected)) {
+          return selected.replace(/\s+/g, "");
+        }
+
+        var buffer = term.buffer.active;
+        var text = "";
+        for (var row = 0; row < buffer.length; row++) {
+          var line = buffer.getLine(row);
+          if (!line) continue;
+          text += (line.isWrapped ? "" : "\n") + line.translateToString(true);
+        }
+        var matches = text.match(/https?:\/\/[^\s<>"']+/gi);
+        return matches ? matches[matches.length - 1].replace(/[.,;:!?)]*$/, "") : null;
       }
 
       function setSelecting(enabled) {
@@ -362,6 +384,12 @@
       });
       document.querySelector('[data-action="copy"]').addEventListener("click", function (evt) {
         copy(evt.currentTarget);
+      });
+      document.querySelector('[data-action="open-url"]').addEventListener("click", function (evt) {
+        var term = terminal();
+        var url = term && latestUrl(term);
+        if (url) window.open(url, "_blank", "noopener,noreferrer");
+        else flash(evt.currentTarget, term ? "No URL" : "Not ready");
       });
       document.querySelector('[data-action="paste"]').addEventListener("click", function (evt) {
         paste(evt.currentTarget);
