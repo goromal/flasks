@@ -139,14 +139,34 @@
         }
 
         var buffer = term.buffer.active;
-        var text = "";
+        var latest = null;
         for (var row = 0; row < buffer.length; row++) {
           var line = buffer.getLine(row);
           if (!line) continue;
-          text += (line.isWrapped ? "" : "\n") + line.translateToString(true);
+          var text = line.translateToString(true);
+          var urls = /https?:\/\/[^\s<>"']+/gi;
+          var match;
+          while ((match = urls.exec(text))) {
+            var url = match[0];
+            var part = text;
+            var nextRow = row + 1;
+            var atEnd = match.index + url.length === text.length;
+            // tmux redraws a long URL as separate full-width rows. xterm's
+            // isWrapped flag is false for those rows, so also check the edge.
+            while (atEnd && nextRow < buffer.length) {
+              var nextLine = buffer.getLine(nextRow);
+              if (!nextLine) break;
+              var nextText = nextLine.translateToString(true);
+              if (!(nextLine.isWrapped || part.length >= term.cols) ||
+                  !/^[^\s<>"']+$/.test(nextText) || /^https?:\/\//i.test(nextText)) break;
+              url += nextText;
+              part = nextText;
+              nextRow++;
+            }
+            latest = url.replace(/[.,;:!?)]*$/, "");
+          }
         }
-        var matches = text.match(/https?:\/\/[^\s<>"']+/gi);
-        return matches ? matches[matches.length - 1].replace(/[.,;:!?)]*$/, "") : null;
+        return latest;
       }
 
       function setSelecting(enabled) {
