@@ -16,6 +16,7 @@ modules (`module.nix`) live in anixpkgs under `pkgs/python-packages/flasks/`.
 | `disciple` | Book of Mormon Christ-reference study tool |
 | `intake_ui` | UI for sending goromail messages |
 | `la-quiz-web` | Web-based LA geography quiz game |
+| `nexus` | LAN hub: machine status, home-page links and bulk anix-upgrade |
 | `orchestrator_ui` | Web UI for managing orchestrator jobs |
 | `rankserver` | Webserver for ranking files via binary manual comparisons |
 | `stampserver` | Interface for stamping metadata on PNGs and MP4s |
