@@ -20,6 +20,9 @@
     .machine-table td { vertical-align: middle; }
     .host-name { font-weight: 600; }
     .row-offline .host-name { opacity: .6; }
+    /* Version/meta (often a 40-char commit hash) would otherwise widen the table. */
+    .trunc { display: block; max-width: 10rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    @media (max-width: 575px) { .trunc { max-width: 5.5rem; } }
   </style>
 </head>
 <body>
@@ -154,8 +157,8 @@ function render() {
       <td><span class="dot ${m.online ? 'on' : 'off'} me-2" title="${m.online ? 'online' : 'offline'}"></span>
           <span class="host-name">${esc(m.mdns)}</span>${m.is_self ? ' <span class="badge bg-info">hub</span>' : ''}
           <div>${ip}${others ? ` <span class="small text-muted" title="Other interfaces">(also ${others})</span>` : ''}</div>${seen}</td>
-      <td><span class="font-monospace small">${esc(m.version || '—')}</span>
-          ${m.meta ? `<div class="small text-muted">${esc(m.meta)}</div>` : ''}</td>
+      <td><span class="font-monospace small trunc" title="${esc(m.version || '')}">${esc(m.version || '—')}</span>
+          ${m.meta ? `<span class="small text-muted font-monospace trunc" title="${esc(m.meta)}">${esc(m.meta)}</span>` : ''}</td>
       <td>${badge(m)}</td>
       <td class="text-end text-nowrap"><div class="d-inline-flex gap-1">${homeLink}${logBtn}${forgetBtn}</div></td>
     </tr>`;
