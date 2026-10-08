@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nexus</title>
+  <link rel="icon" type="image/svg+xml" href="{{ subdomain }}/favicon.svg">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/ansi_up@5/ansi_up.min.js"></script>
+  <style>
+    body { background: #f8f9fa; }
+    .log-box {
+      background: #1e1e1e; color: #d4d4d4; font-family: monospace;
+      font-size: 0.85rem; border-radius: 6px; padding: 12px;
+      height: 380px; overflow-y: auto; white-space: pre-wrap;
+    }
+    .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
+    .dot.on { background: #28a745; }
+    .dot.off { background: #adb5bd; }
+    .machine-table td { vertical-align: middle; }
+    .host-name { font-weight: 600; }
+    .row-offline .host-name { opacity: .6; }
+    /* Version/meta (often a 40-char commit hash) would otherwise widen the table. */
+    .trunc { display: block; max-width: 10rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    @media (max-width: 575px) {
+      .trunc { max-width: 5.5rem; }
+      .machine-table > :not(caption) > * > * { padding: .4rem .3rem; }
+      /* Stack Home/Log/Forget so the table fits a phone without scrolling. */
+      .row-actions { flex-direction: column; align-items: stretch; }
+    }
+  </style>
+</head>
+<body>
+<div class="container py-4" style="max-width:960px">
+  <div class="d-flex align-items-center justify-content-between mb-1">
+    <h1 class="mb-0">Nexus</h1>
+    <button class="btn btn-sm btn-outline-secondary" id="refresh-btn" onclick="refresh(true)">Rediscover</button>
+  </div>
+  <p class="text-muted mb-4">LAN machines discovered over mDNS from <strong>{{ self_host }}.local</strong></p>
+
+  <div class="card mb-4">
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-hover mb-0 machine-table">
+          <thead>
+            <tr>
+              <th style="width:2rem"><input class="form-check-input" type="checkbox" id="select-all" onchange="toggleAll(this.checked)" title="Select all upgradable machines"></th>
+              <th>Machine</th>
+              <th>Status</th>
+              <th class="text-end">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="machines">
+            <tr><td colspan="4" class="text-muted text-center py-4">Discovering machines&hellip;</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card mb-4">
+    <div class="card-body">
+      <h5 class="card-title">Bulk upgrade</h5>
+      <form id="upgrade-form">
+        <div class="row g-2 mb-3">
+          <div class="col-sm-4">
+            <label class="form-label small fw-semibold" for="source-type">Upgrade source</label>
+            <select class="form-select form-select-sm" id="source-type" onchange="onSourceTypeChange()">
+              <option value="default">Default (latest release)</option>
+              <option value="version">Version tag</option>
+              <option value="branch">Branch</option>
+              <option value="commit">Commit SHA</option>
+              <option value="source">Source tree path</option>
+            </select>
+          </div>
+          <div class="col-sm-8" id="source-value-group" hidden>
+            <label class="form-label small fw-semibold" for="source-value" id="source-value-label">Value</label>
+            <input type="text" class="form-control form-control-sm" id="source-value">
+          </div>
+        </div>
+        <div class="d-flex gap-4 mb-3">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="chk-local">
+            <label class="form-check-label" for="chk-local">--local</label>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="chk-boot">
+            <label class="form-check-label" for="chk-boot">--boot</label>
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary" id="run-btn" disabled>Upgrade 0 selected</button>
+        <span id="run-result" class="small ms-2"></span>
+      </form>
+    </div>
+  </div>
+
+  <div class="d-flex align-items-center gap-2 mb-2">
+    <h5 class="mb-0">Log</h5>
+    <span id="log-host" class="text-muted small"></span>
+  </div>
+  <div class="log-box" id="log">Select a machine's "Log" to follow its upgrade output.</div>
+</div>
+
+<script>
+const BASE = {{ subdomain|tojson }};
+const $ = id => document.getElementById(id);
+const selected = new Set();
+let machines = [];
+let logSource = null;
+const ansi = window.AnsiUp ? new AnsiUp() : null;
+
+const PLACEHOLDERS = {
+  version: ['Version tag', 'e.g. 8.12.2'],
+  branch: ['Branch', 'e.g. dev/feature'],
+  commit: ['Commit SHA', 'git SHA'],
+  source: ['Source tree path (same path on every machine)', '/absolute/path/to/anixpkgs'],
+};
+
+function onSourceTypeChange() {
+  const t = $('source-type').value;
+  $('source-value-group').hidden = t === 'default';
+  if (PLACEHOLDERS[t]) {
+    $('source-value-label').textContent = PLACEHOLDERS[t][0];
+    $('source-value').placeholder = PLACEHOLDERS[t][1];
+  }
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function badge(m) {
+  if (!m.online) return '<span class="badge bg-secondary">offline</span>';
+  if (!m.can_upgrade) return '<span class="badge bg-light text-muted border">no upgrade UI</span>';
+  const s = m.upgrade_status || 'idle';
+  const cls = {success: 'bg-success', failed: 'bg-danger', running: 'bg-warning text-dark'}[s] || 'bg-secondary';
+  const spin = s === 'running' ? '<span class="spinner-border spinner-border-sm me-1" style="width:.7rem;height:.7rem"></span>' : '';
+  return `<span class="badge ${cls}">${spin}${esc(s)}</span>`;
+}
+
+function selectable(m) { return m.online && m.can_upgrade && m.upgrade_status !== 'running'; }
+
+function render() {
+  const rows = machines.map(m => {
+    if (!selectable(m)) selected.delete(m.host);
+    const homeLink = `<a class="btn btn-sm btn-outline-primary" href="${esc(m.home_url)}">Home</a>`;
+    const logBtn = m.can_upgrade && m.online && m.run_id
+      ? `<button class="btn btn-sm btn-outline-secondary" onclick="followLog('${esc(m.host)}')">Log</button>` : '';
+    const forgetBtn = !m.online && !m.is_self
+      ? `<button class="btn btn-sm btn-outline-danger" onclick="forget('${esc(m.host)}')" title="Remove from Nexus until it is rediscovered">Forget</button>` : '';
+    const ip = m.ip ? (m.ip_url
+      ? `<a class="small text-muted" href="${esc(m.ip_url)}">${esc(m.ip)}</a>`
+      : `<span class="small text-muted">${esc(m.ip)}</span>`) : '';
+    const others = (m.other_ips || []).map(o => o.url
+      ? `<a class="small text-muted" href="${esc(o.url)}">${esc(o.ip)}</a>`
+      : `<span class="small text-muted">${esc(o.ip)}</span>`).join(' · ');
+    const seen = !m.online && m.last_seen ? `<div class="small text-muted">last seen ${esc(m.last_seen)}</div>` : '';
+    return `<tr class="${m.online ? '' : 'row-offline'}">
+      <td><input class="form-check-input" type="checkbox" ${selectable(m) ? '' : 'disabled'}
+           ${selected.has(m.host) ? 'checked' : ''} onchange="toggle('${esc(m.host)}', this.checked)"></td>
+      <td><span class="dot ${m.online ? 'on' : 'off'} me-2" title="${m.online ? 'online' : 'offline'}"></span>
+          <span class="host-name">${esc(m.mdns)}</span>${m.is_self ? ' <span class="badge bg-info">hub</span>' : ''}
+          <div>${ip}${others ? ` <span class="small text-muted" title="Other interfaces">(also ${others})</span>` : ''}</div>${seen}</td>
+      <td>${badge(m)}
+          ${m.version ? `<span class="font-monospace small trunc mt-1" title="${esc(m.version)}">${esc(m.version)}</span>` : ''}
+          ${m.meta ? `<span class="small text-muted font-monospace trunc" title="${esc(m.meta)}">${esc(m.meta)}</span>` : ''}</td>
+      <td class="text-end text-nowrap"><div class="d-inline-flex gap-1 row-actions">${homeLink}${logBtn}${forgetBtn}</div></td>
+    </tr>`;
+  });
+  $('machines').innerHTML = rows.length ? rows.join('')
+    : '<tr><td colspan="4" class="text-muted text-center py-4">No machines advertise Nexus yet.</td></tr>';
+  updateRunBtn();
+}
+
+function toggle(host, on) { on ? selected.add(host) : selected.delete(host); updateRunBtn(); }
+
+function toggleAll(on) {
+  machines.filter(selectable).forEach(m => on ? selected.add(m.host) : selected.delete(m.host));
+  render();
+}
+
+function updateRunBtn() {
+  $('run-btn').disabled = selected.size === 0;
+  $('run-btn').textContent = `Upgrade ${selected.size} selected`;
+}
+
+async function refresh(force) {
+  try {
+    const r = await fetch(`${BASE}/api/machines${force ? '?refresh=1' : ''}`);
+    machines = (await r.json()).machines;
+    render();
+  } catch (e) {
+    console.error('refresh failed', e);
+  }
+}
+
+async function forget(host) {
+  await fetch(`${BASE}/api/forget/${encodeURIComponent(host)}`, {method: 'POST'});
+  refresh(false);
+}
+
+function appendLog(text) {
+  const log = $('log');
+  const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
+  const html = ansi ? ansi.ansi_to_html(text) : esc(text);
+  log.insertAdjacentHTML('beforeend', html + '\n');
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+
+function followLog(host) {
+  if (logSource) logSource.close();
+  $('log').textContent = '';
+  $('log-host').textContent = `${host}.local`;
+  logSource = new EventSource(`${BASE}/api/stream/${encodeURIComponent(host)}`);
+  logSource.onmessage = e => {
+    if (e.data === '[DONE]') { logSource.close(); logSource = null; refresh(false); return; }
+    appendLog(e.data);
+  };
+  logSource.onerror = () => {
+    if (logSource) { logSource.close(); logSource = null; }
+    appendLog('[nexus: log stream closed]');
+  };
+}
+
+$('upgrade-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const hosts = [...selected];
+  if (!hosts.length) return;
+  const body = {hosts, local: $('chk-local').checked, boot: $('chk-boot').checked};
+  const t = $('source-type').value;
+  if (t !== 'default') {
+    const v = $('source-value').value.trim();
+    if (!v) { $('run-result').textContent = 'Enter a value for the selected source.'; return; }
+    body[t] = v;
+  }
+  $('run-btn').disabled = true;
+  $('run-result').textContent = 'Starting…';
+  try {
+    const r = await fetch(`${BASE}/api/upgrade`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (!r.ok) { $('run-result').textContent = data.error || 'Failed'; return; }
+    const parts = Object.entries(data.results).map(([h, res]) =>
+      res.started ? `${h}: started` : `${h}: ${res.error}`);
+    $('run-result').textContent = parts.join(' · ');
+    selected.clear();
+    await refresh(false);
+    const first = Object.keys(data.results).find(h => data.results[h].started);
+    if (first) followLog(first);
+  } finally {
+    updateRunBtn();
+  }
+});
+
+onSourceTypeChange();
+refresh(false);
+setInterval(() => refresh(false), 5000);
+</script>
+</body>
+</html>
