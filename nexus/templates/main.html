@@ -144,13 +144,16 @@ function render() {
     const ip = m.ip ? (m.ip_url
       ? `<a class="small text-muted" href="${esc(m.ip_url)}">${esc(m.ip)}</a>`
       : `<span class="small text-muted">${esc(m.ip)}</span>`) : '';
+    const others = (m.other_ips || []).map(o => o.url
+      ? `<a class="small text-muted" href="${esc(o.url)}">${esc(o.ip)}</a>`
+      : `<span class="small text-muted">${esc(o.ip)}</span>`).join(' · ');
     const seen = !m.online && m.last_seen ? `<div class="small text-muted">last seen ${esc(m.last_seen)}</div>` : '';
     return `<tr class="${m.online ? '' : 'row-offline'}">
       <td><input class="form-check-input" type="checkbox" ${selectable(m) ? '' : 'disabled'}
            ${selected.has(m.host) ? 'checked' : ''} onchange="toggle('${esc(m.host)}', this.checked)"></td>
       <td><span class="dot ${m.online ? 'on' : 'off'} me-2" title="${m.online ? 'online' : 'offline'}"></span>
           <span class="host-name">${esc(m.mdns)}</span>${m.is_self ? ' <span class="badge bg-info">hub</span>' : ''}
-          <div>${ip}</div>${seen}</td>
+          <div>${ip}${others ? ` <span class="small text-muted" title="Other interfaces">(also ${others})</span>` : ''}</div>${seen}</td>
       <td><span class="font-monospace small">${esc(m.version || '—')}</span>
           ${m.meta ? `<div class="small text-muted">${esc(m.meta)}</div>` : ''}</td>
       <td>${badge(m)}</td>

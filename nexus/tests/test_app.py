@@ -85,10 +85,10 @@ def fake():
 def client(tmp_path, fake):
     state = str(tmp_path / "state")
     Roster(state).merge({
-        "ats": {"ip": "192.168.1.10", "home": "/", "upgrade": "/anix-upgrade/"},
-        "jetson": {"ip": "192.168.1.20", "home": "/", "upgrade": "/anix-upgrade/"},
+        "ats": {"ip": "192.0.2.10", "ips": ["192.0.2.10", "192.0.2.11"], "home": "/", "upgrade": "/anix-upgrade/"},
+        "jetson": {"ip": "192.0.2.20", "home": "/", "upgrade": "/anix-upgrade/"},
         "pi": {"ip": "fe80::3", "home": "/", "upgrade": None},
-        "down-box": {"ip": "192.168.1.30", "home": "/", "upgrade": "/anix-upgrade/"},
+        "down-box": {"ip": "192.0.2.30", "home": "/", "upgrade": "/anix-upgrade/"},
     })
     app = create_app(
         state_dir=state,
@@ -115,13 +115,15 @@ def test_machines_status_and_home_links(client):
 
     assert ms["ats"]["is_self"] is True
     assert ms["ats"]["home_url"] == "/"
-    assert ms["ats"]["ip_url"] == "http://192.168.1.10/"
+    assert ms["ats"]["ip_url"] == "http://192.0.2.10/"
+    assert ms["ats"]["other_ips"] == [{"ip": "192.0.2.11", "url": "http://192.0.2.11/"}]
+    assert ms["jetson"]["other_ips"] == []  # roster entries from before `ips` existed
     assert ms["ats"]["online"] is True
     assert ms["ats"]["version"] == "1.2.3"
     assert ms["ats"]["upgrade_status"] == "idle"
 
     assert ms["jetson"]["home_url"] == "http://jetson.local/"
-    assert ms["jetson"]["ip_url"] == "http://192.168.1.20/"
+    assert ms["jetson"]["ip_url"] == "http://192.0.2.20/"
     assert ms["jetson"]["mdns"] == "jetson.local"
 
     assert ms["pi"]["online"] is True
@@ -183,6 +185,6 @@ def test_forget(client):
 
 def test_default_base_url_prefers_ipv4():
     from spokes import default_base_url
-    assert default_base_url("ats", "192.168.1.10") == "http://192.168.1.10"
+    assert default_base_url("ats", "192.0.2.10") == "http://192.0.2.10"
     assert default_base_url("ats", "fe80::1") == "http://ats.local"
     assert default_base_url("ats") == "http://ats.local"

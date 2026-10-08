@@ -43,13 +43,21 @@ def create_app(
         is_self = host == self_host
         home = rec.get("home") or "/"
         ip = rec.get("ip")
+
+        def ip_url(address):
+            # IPv6 (often link-local) addresses are shown but not linked.
+            return f"http://{address}{home}" if ":" not in address else None
+
         return {
             "host": host,
             "mdns": f"{host}.local",
             "ip": ip,
             "is_self": is_self,
             "home_url": home if is_self else f"http://{host}.local{home}",
-            "ip_url": f"http://{ip}{home}" if ip and ":" not in ip else None,
+            "ip_url": ip_url(ip) if ip else None,
+            "other_ips": [
+                {"ip": a, "url": ip_url(a)} for a in rec.get("ips") or [] if a != ip
+            ],
             "can_upgrade": bool(rec.get("upgrade")),
             "last_seen": rec.get("last_seen"),
             "online": probe.get("online", False),
