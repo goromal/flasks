@@ -22,7 +22,12 @@
     .row-offline .host-name { opacity: .6; }
     /* Version/meta (often a 40-char commit hash) would otherwise widen the table. */
     .trunc { display: block; max-width: 10rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    @media (max-width: 575px) { .trunc { max-width: 5.5rem; } }
+    @media (max-width: 575px) {
+      .trunc { max-width: 5.5rem; }
+      .machine-table > :not(caption) > * > * { padding: .4rem .3rem; }
+      /* Stack Home/Log/Forget so the table fits a phone without scrolling. */
+      .row-actions { flex-direction: column; align-items: stretch; }
+    }
   </style>
 </head>
 <body>
@@ -159,7 +164,7 @@ function render() {
       <td>${badge(m)}
           ${m.version ? `<span class="font-monospace small trunc mt-1" title="${esc(m.version)}">${esc(m.version)}</span>` : ''}
           ${m.meta ? `<span class="small text-muted font-monospace trunc" title="${esc(m.meta)}">${esc(m.meta)}</span>` : ''}</td>
-      <td class="text-end text-nowrap"><div class="d-inline-flex gap-1">${homeLink}${logBtn}${forgetBtn}</div></td>
+      <td class="text-end text-nowrap"><div class="d-inline-flex gap-1 row-actions">${homeLink}${logBtn}${forgetBtn}</div></td>
     </tr>`;
   });
   $('machines').innerHTML = rows.length ? rows.join('')
