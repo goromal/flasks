@@ -1,3 +1,4 @@
+import ipaddress
 import json
 import os
 import re
@@ -25,10 +26,18 @@ def _parse_txt(field):
     )
 
 
+def _is_loopback(address):
+    try:
+        return ipaddress.ip_address(address.split("%", 1)[0]).is_loopback
+    except ValueError:
+        return False
+
+
 def parse_avahi(text):
     """Parse `avahi-browse -rtp` output into {host: {ip, home, upgrade}}.
 
-    Only resolved ('=') lines carry addresses. IPv4 wins over IPv6 when a host
+    Only resolved ('=') lines carry addresses. Loopback addresses (a machine
+    sees its own services on `lo`) are skipped. IPv4 wins over IPv6 when a host
     is resolved on both.
     """
     records = {}
@@ -37,7 +46,7 @@ def parse_avahi(text):
         if len(parts) < 10 or parts[0] != "=":
             continue
         _, _, proto, _, stype, _, hostname, address, _, txt = parts
-        if stype != SERVICE_TYPE:
+        if stype != SERVICE_TYPE or _is_loopback(address):
             continue
         host = bare_host(hostname)
         existing = records.get(host)

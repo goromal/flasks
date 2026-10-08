@@ -115,6 +115,7 @@ def test_machines_status_and_home_links(client):
 
     assert ms["ats"]["is_self"] is True
     assert ms["ats"]["home_url"] == "/"
+    assert ms["ats"]["ip_url"] == "http://192.168.1.10/"
     assert ms["ats"]["online"] is True
     assert ms["ats"]["version"] == "1.2.3"
     assert ms["ats"]["upgrade_status"] == "idle"

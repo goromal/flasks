@@ -8,6 +8,8 @@ from roster import Roster, bare_host, parse_avahi
 
 AVAHI_OUT = "\n".join([
     "+;eth0;IPv4;ats;_anix-nexus._tcp;local",
+    '=;lo;IPv4;ats;_anix-nexus._tcp;local;ats.local;127.0.0.1;80;"upgrade=/anix-upgrade/" "home=/"',
+    '=;lo;IPv6;ats;_anix-nexus._tcp;local;ats.local;::1;80;"upgrade=/anix-upgrade/" "home=/"',
     '=;eth0;IPv6;ats;_anix-nexus._tcp;local;ats.local;fe80::1;80;"upgrade=/anix-upgrade/" "home=/"',
     '=;eth0;IPv4;ats;_anix-nexus._tcp;local;ats.local;192.168.1.10;80;"upgrade=/anix-upgrade/" "home=/"',
     '=;wlan0;IPv4;ats;_anix-nexus._tcp;local;ats.local;192.168.1.11;80;"upgrade=/anix-upgrade/" "home=/"',
@@ -23,11 +25,17 @@ def test_bare_host():
 
 
 def test_parse_avahi_prefers_first_ipv4_and_filters_type():
+    # Loopback lines (listed first here) must never become a machine's IP.
     recs = parse_avahi(AVAHI_OUT)
     assert set(recs) == {"ats", "ats-pi"}
     assert recs["ats"] == {"ip": "192.168.1.10", "home": "/", "upgrade": "/anix-upgrade/"}
     # IPv6-only host keeps its v6 address; missing upgrade TXT -> None
     assert recs["ats-pi"] == {"ip": "fe80::2", "home": "/", "upgrade": None}
+
+
+def test_parse_avahi_loopback_only_host_is_skipped():
+    out = '=;lo;IPv4;solo;_anix-nexus._tcp;local;solo.local;127.0.0.1;80;"home=/"'
+    assert parse_avahi(out) == {}
 
 
 def test_roster_merge_persists_and_keeps_offline(tmp_path):

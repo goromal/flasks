@@ -141,7 +141,7 @@ function render() {
       ? `<button class="btn btn-sm btn-outline-secondary" onclick="followLog('${esc(m.host)}')">Log</button>` : '';
     const forgetBtn = !m.online && !m.is_self
       ? `<button class="btn btn-sm btn-outline-danger" onclick="forget('${esc(m.host)}')" title="Remove from Nexus until it is rediscovered">Forget</button>` : '';
-    const ip = m.ip ? (m.ip_url && !m.is_self
+    const ip = m.ip ? (m.ip_url
       ? `<a class="small text-muted" href="${esc(m.ip_url)}">${esc(m.ip)}</a>`
       : `<span class="small text-muted">${esc(m.ip)}</span>`) : '';
     const seen = !m.online && m.last_seen ? `<div class="small text-muted">last seen ${esc(m.last_seen)}</div>` : '';
