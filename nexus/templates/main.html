@@ -41,13 +41,12 @@
             <tr>
               <th style="width:2rem"><input class="form-check-input" type="checkbox" id="select-all" onchange="toggleAll(this.checked)" title="Select all upgradable machines"></th>
               <th>Machine</th>
-              <th>Version</th>
-              <th>Upgrade</th>
+              <th>Status</th>
               <th class="text-end">Actions</th>
             </tr>
           </thead>
           <tbody id="machines">
-            <tr><td colspan="5" class="text-muted text-center py-4">Discovering machines&hellip;</td></tr>
+            <tr><td colspan="4" class="text-muted text-center py-4">Discovering machines&hellip;</td></tr>
           </tbody>
         </table>
       </div>
@@ -157,14 +156,14 @@ function render() {
       <td><span class="dot ${m.online ? 'on' : 'off'} me-2" title="${m.online ? 'online' : 'offline'}"></span>
           <span class="host-name">${esc(m.mdns)}</span>${m.is_self ? ' <span class="badge bg-info">hub</span>' : ''}
           <div>${ip}${others ? ` <span class="small text-muted" title="Other interfaces">(also ${others})</span>` : ''}</div>${seen}</td>
-      <td><span class="font-monospace small trunc" title="${esc(m.version || '')}">${esc(m.version || '—')}</span>
+      <td>${badge(m)}
+          ${m.version ? `<span class="font-monospace small trunc mt-1" title="${esc(m.version)}">${esc(m.version)}</span>` : ''}
           ${m.meta ? `<span class="small text-muted font-monospace trunc" title="${esc(m.meta)}">${esc(m.meta)}</span>` : ''}</td>
-      <td>${badge(m)}</td>
       <td class="text-end text-nowrap"><div class="d-inline-flex gap-1">${homeLink}${logBtn}${forgetBtn}</div></td>
     </tr>`;
   });
   $('machines').innerHTML = rows.length ? rows.join('')
-    : '<tr><td colspan="5" class="text-muted text-center py-4">No machines advertise Nexus yet.</td></tr>';
+    : '<tr><td colspan="4" class="text-muted text-center py-4">No machines advertise Nexus yet.</td></tr>';
   updateRunBtn();
 }
 
