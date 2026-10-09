@@ -44,6 +44,10 @@
     .add-card form { display: grid; gap: 8px; }
     .notice { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; background: #194d37; color: #bdebd2; }
     .notice.error { background: #632f34; color: #ffd0d3; }
+    .spinner { display: none; width: 14px; height: 14px; margin-left: 8px; vertical-align: -2px; border: 2px solid #3a4b5e; border-top-color: #72adff; border-radius: 50%; animation: spin .8s linear infinite; }
+    .repo.busy .spinner { display: inline-block; }
+    .repo.busy { border-color: #4b6d91; }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .empty { padding: 16px; border: 1px dashed #405064; border-radius: 9px; color: #91a2b3; }
     @media (max-width: 720px) {
       main { margin: 18px auto; }
@@ -56,9 +60,11 @@
 <body>
   <main>
     <nav><a href="{{ subdomain }}/">Agents</a><a class="active" href="{{ subdomain }}/workspaces/">Workspaces</a></nav>
+    <div id="notices">
     {% for category, message in get_flashed_messages(with_categories=true) %}
       <p class="notice {{ category }}">{{ message }}</p>
     {% endfor %}
+    </div>
     <section class="panel">
       {% if detail %}
         <div class="toolbar">
@@ -82,11 +88,11 @@
         <h2>Repositories</h2>
         <div class="repo-list">
           {% for repo in detail.repositories %}
-            <article class="repo">
+            <article class="repo" data-repo="{{ repo.name }}">
               {% if repo.present %}
                 <div class="repo-head">
                   <div>
-                    <h3>{{ repo.name }}</h3>
+                    <h3>{{ repo.name }}<span class="spinner" role="status" aria-label="working"></span></h3>
                     <div class="meta">
                       <span class="badge {{ 'good' if repo.clean else 'bad' }}">{{ 'clean' if repo.clean else 'dirty' }}</span>
                       <span class="badge">{{ repo.branch }}</span>
@@ -162,5 +168,90 @@
       {% endif %}
     </section>
   </main>
+  <script>
+    // Repo actions can take minutes (clones, fetches). Submit them in the
+    // background so each repo shows its own spinner and the rest of the page,
+    // including other repos, stays usable.
+    (function () {
+      let pending = 0;
+
+      function notify(message, ok) {
+        const notice = document.createElement("p");
+        notice.className = "notice" + (ok ? "" : " error");
+        notice.textContent = message;
+        document.getElementById("notices").prepend(notice);
+      }
+
+      function setBusy(article, busy) {
+        article.classList.toggle("busy", busy);
+        article.querySelectorAll("button").forEach((button) => {
+          if (busy) {
+            button.dataset.wasDisabled = button.disabled ? "1" : "";
+            button.disabled = true;
+          } else {
+            button.disabled = button.dataset.wasDisabled === "1";
+          }
+        });
+      }
+
+      async function refreshRepo(name) {
+        const response = await fetch(window.location.href, { credentials: "same-origin" });
+        if (!response.ok) throw new Error("refresh failed");
+        const page = new DOMParser().parseFromString(await response.text(), "text/html");
+        const fresh = page.querySelector(`article.repo[data-repo="${CSS.escape(name)}"]`);
+        const current = document.querySelector(`article.repo[data-repo="${CSS.escape(name)}"]`);
+        if (!fresh || !current) throw new Error("repository missing after refresh");
+        current.replaceWith(document.adoptNode(fresh));
+      }
+
+      document.addEventListener("submit", async (event) => {
+        const form = event.target;
+        const article = form.closest("article.repo[data-repo]");
+        // Inline confirm() handlers have already run and may have cancelled.
+        if (!article || event.defaultPrevented) return;
+        event.preventDefault();
+        if (article.classList.contains("busy")) return;
+
+        const data = new FormData(form);
+        if (event.submitter && event.submitter.name) {
+          data.set(event.submitter.name, event.submitter.value);
+        }
+        const name = article.dataset.repo;
+        setBusy(article, true);
+        pending++;
+        try {
+          // Not form.action: the hidden <input name="action"> shadows it.
+          const response = await fetch(form.getAttribute("action"), {
+            method: "POST",
+            body: data,
+            credentials: "same-origin",
+            headers: { Accept: "application/json" },
+          });
+          let result;
+          try {
+            result = await response.json();
+          } catch (error) {
+            result = { ok: false, message: `${name}: request failed (HTTP ${response.status})` };
+          }
+          // Several repos can be in flight, so say which one this was.
+          const message = result.message.includes(name) ? result.message : `${name}: ${result.message}`;
+          notify(message, result.ok);
+        } catch (error) {
+          notify(`${name}: ${error.message}`, false);
+        } finally {
+          pending--;
+        }
+        try {
+          await refreshRepo(name);
+        } catch (error) {
+          setBusy(article, false);
+        }
+      });
+
+      window.addEventListener("beforeunload", (event) => {
+        if (pending > 0) event.preventDefault();
+      });
+    })();
+  </script>
 </body>
 </html>

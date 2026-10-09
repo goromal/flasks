@@ -14,6 +14,7 @@ from flask import (
     Flask,
     abort,
     flash,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -402,12 +403,20 @@ def create_app(
         if workspace not in known:
             abort(404)
 
+    def wants_json():
+        return request.accept_mimetypes.best == "application/json"
+
     def run_workspace_action(action, *args, redirect_workspace=None):
         try:
             result = workspaces.run(action, *args)
-            flash(result.get("message", "Workspace updated"), "success")
+            ok, message = True, result.get("message", "Workspace updated")
         except WorkspaceCommandError as error:
-            flash(str(error), "error")
+            ok, message = False, str(error)
+        # The workspace page submits repo actions with fetch so that one slow
+        # git operation doesn't freeze the whole UI; it renders the result.
+        if wants_json():
+            return jsonify(ok=ok, message=message), 200 if ok else 502
+        flash(message, "success" if ok else "error")
         if redirect_workspace:
             known = {item["name"] for item in configured_workspaces()}
             if redirect_workspace in known:
