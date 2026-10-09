@@ -43,6 +43,8 @@
     .add-card { padding: 14px; border: 1px solid #2b3948; border-radius: 10px; }
     .add-card form { display: grid; gap: 8px; }
     .notice { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; background: #194d37; color: #bdebd2; }
+    .notice { transition: opacity .4s; }
+    .notice.fading { opacity: 0; }
     .notice.error { background: #632f34; color: #ffd0d3; }
     .spinner { display: none; width: 14px; height: 14px; margin-left: 8px; vertical-align: -2px; border: 2px solid #3a4b5e; border-top-color: #72adff; border-radius: 50%; animation: spin .8s linear infinite; }
     .repo.busy .spinner { display: inline-block; }
@@ -175,12 +177,22 @@
     (function () {
       let pending = 0;
 
+      function autoDismiss(notice) {
+        setTimeout(() => {
+          notice.classList.add("fading");
+          notice.addEventListener("transitionend", () => notice.remove(), { once: true });
+        }, 5000);
+      }
+
       function notify(message, ok) {
         const notice = document.createElement("p");
         notice.className = "notice" + (ok ? "" : " error");
         notice.textContent = message;
         document.getElementById("notices").prepend(notice);
+        autoDismiss(notice);
       }
+
+      document.querySelectorAll("#notices .notice").forEach(autoDismiss);
 
       function setBusy(article, busy) {
         article.classList.toggle("busy", busy);
