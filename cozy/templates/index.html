@@ -49,6 +49,7 @@
         button.secondary:disabled { opacity:0.5; cursor:not-allowed; }
         button.secondary.active { color:#fff; background:#4e73df; }
         button.secondary.active:hover { background:#3a5bc7; }
+        #quick-queue { width:100%; margin-top:8px; padding:10px 14px; font-size:0.95rem; }
         .progress { margin-top:20px; height:18px; background:#e9ecef; border-radius:9px; overflow:hidden; display:none; }
         .progress > div { height:100%; width:0%; background:linear-gradient(135deg,#4e73df,#224abe); transition:width 0.3s; }
         .error { color:#721c24; background:#f8d7da; border:2px solid #f5c6cb; padding:10px 14px; border-radius:6px; margin-top:16px; display:none; }
@@ -193,6 +194,9 @@
                 </div>
             </div>
             <button id="generate">Generate</button>
+            {% if has_queue %}
+            <button type="button" class="secondary" id="quick-queue">+ Add to queue</button>
+            {% endif %}
         </div>
 
         <div class="progress" id="progress"><div id="bar"></div></div>
@@ -1166,15 +1170,38 @@
             });
         }
 
+        // Queue the single view's current settings. Returns the add response
+        // ({id, eta}) or null after showing the error.
+        async function addCurrentToQueue() {
+            showError("");
+            const r = await fetch(root + "api/queue/add", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(currentJobPayload()) });
+            if (!r.ok) { const e = await r.json().catch(() => ({})); showError(e.error || "add failed"); return null; }
+            return r.json().catch(() => ({}));
+        }
+
+        // One-click enqueue from the Single tab: stay put, flash a confirmation.
+        const quickQueue = document.getElementById("quick-queue");
+        if (quickQueue) {
+            const quickLabel = quickQueue.textContent;
+            let quickTimer = null;
+            quickQueue.addEventListener("click", async () => {
+                quickQueue.disabled = true;
+                const added = await addCurrentToQueue();
+                quickQueue.disabled = false;
+                if (!added) return;
+                quickQueue.textContent = "✓ Queued" +
+                    (added.eta == null ? "" : " (~" + formatDuration(added.eta) + ")");
+                clearTimeout(quickTimer);
+                quickTimer = setTimeout(() => { quickQueue.textContent = quickLabel; }, 2000);
+            });
+        }
+
         const qAdd = document.getElementById("q-add");
         if (qAdd) {
             qAdd.addEventListener("click", async () => {
-                showError("");
-                const r = await fetch(root + "api/queue/add", {
-                    method: "POST", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(currentJobPayload()) });
-                if (!r.ok) { const e = await r.json().catch(() => ({})); showError(e.error || "add failed"); return; }
-                refreshQueue();
+                if (await addCurrentToQueue()) refreshQueue();
             });
             document.getElementById("q-start").addEventListener("click", async () => {
                 showError("");

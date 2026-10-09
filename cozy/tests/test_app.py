@@ -869,6 +869,7 @@ def test_index_renders_with_queue_tabs(queue_ctx):
     assert 'id="tab-queue"' in body
     assert 'id="single-view"' in body
     assert 'id="q-add"' in body
+    assert 'id="quick-queue"' in body
 
 
 def test_queue_image_is_cacheable(queue_ctx):
