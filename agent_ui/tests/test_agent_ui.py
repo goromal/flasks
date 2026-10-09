@@ -8,7 +8,7 @@ from werkzeug.security import generate_password_hash
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from agent_ui import create_app, parse_devrc
+from agent_ui import WorkspaceCommandError, create_app, parse_devrc
 
 TEST_PASSWORD = "test-password"
 
@@ -325,6 +325,54 @@ def test_workspace_nuke_passes_branch_through(configured_app):
     )
     assert response.status_code == 302
     assert workspaces.actions == [("nuke", "ui", "anixpkgs", "")]
+
+
+def test_workspace_action_returns_json_for_background_requests(configured_app):
+    app, _, workspaces = configured_app
+    client = app.test_client()
+    login(client)
+    response = client.post(
+        "/agents/workspaces/ui/actions",
+        data={
+            "_csrf": csrf(client),
+            "action": "checkout",
+            "repository": "anixpkgs",
+            "branch": "dev/new",
+        },
+        headers={"Accept": "application/json"},
+    )
+    assert response.status_code == 200
+    assert response.get_json() == {"ok": True, "message": "ran checkout"}
+    assert workspaces.actions == [("checkout", "ui", "anixpkgs", "dev/new")]
+    # The result was returned directly, not left behind as a flash message.
+    assert b"ran checkout" not in client.get("/agents/workspaces/ui").data
+
+
+def test_workspace_action_json_reports_failures(configured_app):
+    app, _, workspaces = configured_app
+
+    def fail(action, *args):
+        raise WorkspaceCommandError("clone failed")
+
+    workspaces.run = fail
+    client = app.test_client()
+    login(client)
+    response = client.post(
+        "/agents/workspaces/ui/actions",
+        data={"_csrf": csrf(client), "action": "sync", "repository": "anixpkgs"},
+        headers={"Accept": "application/json"},
+    )
+    assert response.status_code == 502
+    assert response.get_json() == {"ok": False, "message": "clone failed"}
+
+
+def test_workspace_page_marks_repos_for_background_actions(configured_app):
+    app, _, _ = configured_app
+    client = app.test_client()
+    login(client)
+    detail = client.get("/agents/workspaces/ui").data
+    assert b'data-repo="anixpkgs"' in detail
+    assert b'class="spinner"' in detail
 
 
 def test_dirty_repository_keeps_actions_enabled(configured_app):
