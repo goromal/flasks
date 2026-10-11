@@ -102,7 +102,7 @@
                     <div class="meta">
                       <span class="badge {{ 'good' if repo.clean else 'bad' }}">{{ 'clean' if repo.clean else 'dirty' }}</span>
                       <span class="badge">{{ repo.branch }}</span>
-                      <span class="badge">{{ repo.head[:7] }}</span>
+                      {% if repo.head %}<span class="badge">{{ repo.head[:7] }}</span>{% else %}<span class="badge bad">no commits</span>{% endif %}
                       {% if repo.upstream %}<span class="badge">↑{{ repo.ahead }} ↓{{ repo.behind }}</span>{% else %}<span class="badge bad">no upstream</span>{% endif %}
                       {% if repo.saved_branch %}<span class="badge {{ 'good' if repo.saved_branch == repo.branch else '' }}">saved: {{ repo.saved_branch }}</span>{% endif %}
                     </div>

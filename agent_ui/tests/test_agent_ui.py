@@ -666,3 +666,20 @@ def test_workspace_summary_marks_active_sessions(configured_app):
     assert 'title="2 active sessions"' in ui_card
     # Plain shells count as activity too.
     assert 'title="1 active session"' in tasking_card
+
+
+def test_workspace_page_shows_repository_without_commits(configured_app):
+    app, _, workspace_manager = configured_app
+    status = workspace_manager.status
+
+    def unborn(workspace):
+        detail = status(workspace)
+        detail["repositories"][0].update(head="", upstream=None, clean=False)
+        return detail
+
+    workspace_manager.status = unborn
+    client = app.test_client()
+    login(client)
+    response = client.get("/agents/workspaces/ui")
+    assert response.status_code == 200
+    assert b"no commits" in response.data
