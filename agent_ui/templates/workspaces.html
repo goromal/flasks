@@ -31,6 +31,9 @@
     .workspace { padding: 15px; background: #111923; border: 1px solid #2b3948; border-radius: 10px; text-decoration: none; color: inherit; }
     .workspace:hover { border-color: #4b6d91; }
     .workspace small { display: block; margin-top: 5px; }
+    .workspace h3 { display: flex; align-items: center; gap: 8px; }
+    .live { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px 1px 6px; border-radius: 99px; background: #194d37; color: #a9e8c8; font-size: .75rem; font-weight: 650; }
+    .live::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #3fd68a; box-shadow: 0 0 6px #3fd68a; }
     .repo-list { display: grid; gap: 10px; }
     .repo { padding: 14px; background: #111923; border: 1px solid #2b3948; border-radius: 10px; }
     .repo-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
@@ -72,6 +75,7 @@
         <div class="toolbar">
           <div><h1>{{ detail.name }}</h1><small><code>{{ detail.root }}</code></small></div>
           <div class="actions">
+            <button id="sync-all" class="secondary" type="button" title="Run Sync saved on every repository that has a saved branch">Sync all saved</button>
             <form method="post" action="{{ subdomain }}/workspaces/{{ detail.name }}/shell">
               <input type="hidden" name="_csrf" value="{{ csrf_token }}">
               <button type="submit">Open shell</button>
@@ -98,7 +102,7 @@
                     <div class="meta">
                       <span class="badge {{ 'good' if repo.clean else 'bad' }}">{{ 'clean' if repo.clean else 'dirty' }}</span>
                       <span class="badge">{{ repo.branch }}</span>
-                      <span class="badge">{{ repo.head[:7] }}</span>
+                      {% if repo.head %}<span class="badge">{{ repo.head[:7] }}</span>{% else %}<span class="badge bad">no commits</span>{% endif %}
                       {% if repo.upstream %}<span class="badge">↑{{ repo.ahead }} ↓{{ repo.behind }}</span>{% else %}<span class="badge bad">no upstream</span>{% endif %}
                       {% if repo.saved_branch %}<span class="badge {{ 'good' if repo.saved_branch == repo.branch else '' }}">saved: {{ repo.saved_branch }}</span>{% endif %}
                     </div>
@@ -108,15 +112,15 @@
                       <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="save-branch"><input type="hidden" name="repository" value="{{ repo.name }}">
                       <button class="secondary" type="submit">Save branch</button>
                     </form>
-                    <form method="post" action="{{ subdomain }}/workspaces/{{ detail.name }}/actions" onsubmit="return confirm('Push the current branch to origin?')">
+                    <form method="post" action="{{ subdomain }}/workspaces/{{ detail.name }}/actions">
                       <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="push"><input type="hidden" name="repository" value="{{ repo.name }}">
                       <button class="secondary" type="submit">Push</button>
                     </form>
-                    <form method="post" action="{{ subdomain }}/workspaces/{{ detail.name }}/actions" onsubmit="return confirm('Switch to the saved branch and fast-forward it?')">
+                    <form class="sync-form" method="post" action="{{ subdomain }}/workspaces/{{ detail.name }}/actions">
                       <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="sync"><input type="hidden" name="repository" value="{{ repo.name }}">
                       <button class="secondary" type="submit" {% if not repo.saved_branch %}disabled{% endif %}>Sync saved</button>
                     </form>
-                    <form method="post" action="{{ subdomain }}/workspaces/{{ detail.name }}/actions" onsubmit="return confirm('Rebase and push the current branch?')">
+                    <form method="post" action="{{ subdomain }}/workspaces/{{ detail.name }}/actions">
                       <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="rebase-push"><input type="hidden" name="repository" value="{{ repo.name }}">
                       <button class="warning" type="submit">Rebase + push</button>
                     </form>
@@ -128,8 +132,7 @@
                   <button class="secondary" name="action" value="branch-create" type="submit">Create</button>
                   <button class="secondary" name="action" value="checkout" type="submit">Checkout</button>
                   <!-- formnovalidate: nuking with an empty branch box re-clones the current branch. -->
-                  <button class="danger" name="action" value="nuke" type="submit" formnovalidate
-                          onclick="return confirm('Delete {{ repo.name }} and re-clone it from origin? Uncommitted work and stashes are lost.')">Nuke</button>
+                  <button class="danger" name="action" value="nuke" type="submit" formnovalidate>Nuke</button>
                 </form>
               {% else %}
                 <h3>{{ repo.name }}</h3><p>Configured but not present. Run workspace setup after checking its source definition.</p>
@@ -160,7 +163,8 @@
         <div class="toolbar"><div><h1>Workspaces</h1><p>Inspect and manage this machine's devshell workspaces.</p></div></div>
         <div class="workspace-grid">
           {% for workspace in workspaces %}
-            <a class="workspace" href="{{ subdomain }}/workspaces/{{ workspace.name }}"><h3>{{ workspace.name }}</h3><small>{{ workspace.sources|length }} configured items · {{ 'ready' if workspace.exists else 'not built' }}</small></a>
+            {% set active = active_sessions.get(workspace.name, 0) %}
+            <a class="workspace" href="{{ subdomain }}/workspaces/{{ workspace.name }}"><h3>{{ workspace.name }}{% if active %}<span class="live" title="{{ active }} active session{{ 's' if active != 1 }}" aria-label="{{ active }} active session{{ 's' if active != 1 }}">{{ active }}</span>{% endif %}</h3><small>{{ workspace.sources|length }} configured items · {{ 'ready' if workspace.exists else 'not built' }}</small></a>
           {% else %}<div class="empty">No configured workspaces.</div>{% endfor %}
         </div>
         <h2>Create workspace</h2>
@@ -219,7 +223,6 @@
       document.addEventListener("submit", async (event) => {
         const form = event.target;
         const article = form.closest("article.repo[data-repo]");
-        // Inline confirm() handlers have already run and may have cancelled.
         if (!article || event.defaultPrevented) return;
         event.preventDefault();
         if (article.classList.contains("busy")) return;
@@ -259,6 +262,18 @@
           setBusy(article, false);
         }
       });
+
+      // Fan out through each repo's own form so every repo gets its spinner
+      // and result notice; repos without a saved branch are skipped.
+      const syncAll = document.getElementById("sync-all");
+      if (syncAll) {
+        syncAll.addEventListener("click", () => {
+          const forms = [...document.querySelectorAll("article.repo:not(.busy) form.sync-form")]
+            .filter((form) => !form.querySelector("button").disabled);
+          if (!forms.length) notify("No repositories with a saved branch to sync", false);
+          forms.forEach((form) => form.requestSubmit());
+        });
+      }
 
       window.addEventListener("beforeunload", (event) => {
         if (pending > 0) event.preventDefault();
