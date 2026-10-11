@@ -1123,6 +1123,25 @@ def test_upload_puts_the_image_in_the_input_dir(remote_edit_client):
     assert {"value": "cat.png", "label": "cat.png", "source": "input"} in images
 
 
+def test_upload_preserves_and_serves_webp(remote_edit_client):
+    import io as _io
+
+    from PIL import Image as _Image
+
+    buf = _io.BytesIO()
+    _Image.new("RGB", (7, 5), (10, 20, 30)).save(buf, format="WEBP")
+    _login(remote_edit_client)
+    r = _upload(remote_edit_client, "cat.WEBP", buf.getvalue())
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()["value"] == "cat.webp"
+
+    served = remote_edit_client.get("/cozy/api/input-image?name=cat.webp")
+    assert served.status_code == 200
+    assert served.mimetype == "image/webp"
+    with _Image.open(_io.BytesIO(served.data)) as image:
+        assert image.format == "WEBP" and image.size == (7, 5)
+
+
 def test_upload_sanitises_the_filename(remote_edit_client):
     _login(remote_edit_client)
     rel = _upload(remote_edit_client, "../../etc/pass wd.png",

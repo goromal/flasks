@@ -11,7 +11,7 @@ The stack holds flat (low, high) position pairs, valid up to index `top`
 inclusive; the active partition is (stack[top-1], stack[top]).
 """
 UINT32_MAX = 0xFFFFFFFF
-RANKABLE_EXTS = (".txt", ".png", ".jpg", ".jpeg", ".heic", ".heif", ".mp4", ".mov")
+RANKABLE_EXTS = (".txt", ".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif", ".mp4", ".mov")
 # QuickSortState enum values (mirror sorting/Sorting.h); used by the
 # sort-state surgery functions added alongside the QuickSortState helpers.
 LEFT_J = 1

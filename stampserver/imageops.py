@@ -7,7 +7,7 @@ import pillow_heif
 pillow_heif.register_heif_opener()
 
 HEIF_EXTS = (".heic", ".heif")
-IMAGE_EXTS = (".png", ".jpg", ".jpeg") + HEIF_EXTS
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp") + HEIF_EXTS
 
 
 def is_image(filename):
@@ -19,6 +19,8 @@ def image_format(filename):
     lower = filename.lower()
     if lower.endswith((".jpg", ".jpeg")):
         return "JPEG"
+    if lower.endswith(".webp"):
+        return "WEBP"
     if lower.endswith(HEIF_EXTS):
         return "HEIF"
     return "PNG"

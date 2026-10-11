@@ -11,7 +11,8 @@ from imageops import fill_white_rect, image_format, is_image, pad_image, save_im
 
 
 def test_is_image_covers_supported_extensions():
-    for name in ("a.png", "a.PNG", "a.jpg", "a.JPEG", "a.heic", "a.HEIC", "a.heif"):
+    for name in ("a.png", "a.PNG", "a.jpg", "a.JPEG", "a.webp", "a.WEBP",
+                 "a.heic", "a.HEIC", "a.heif"):
         assert is_image(name), name
 
 
@@ -25,6 +26,8 @@ def test_image_format_maps_extension_to_pillow_format():
     assert image_format("a.PNG") == "PNG"
     assert image_format("a.jpg") == "JPEG"
     assert image_format("a.jpeg") == "JPEG"
+    assert image_format("a.webp") == "WEBP"
+    assert image_format("a.WEBP") == "WEBP"
     assert image_format("a.heic") == "HEIF"
     assert image_format("a.HEIF") == "HEIF"
 
@@ -36,6 +39,15 @@ def test_heif_round_trip_preserves_size(tmp_path):
     save_image(Image.new("RGB", (12, 9), (10, 20, 30)), path, "HEIF")
     with Image.open(path) as out:
         assert out.size == (12, 9)
+
+
+def test_webp_round_trip_preserves_size_and_alpha(tmp_path):
+    path = str(tmp_path / "x.webp")
+    save_image(Image.new("RGBA", (12, 9), (10, 20, 30, 40)), path, "WEBP")
+    with Image.open(path) as out:
+        assert out.format == "WEBP"
+        assert out.size == (12, 9)
+        assert out.convert("RGBA").getpixel((0, 0))[3] == 40
 
 
 def test_save_image_flattens_alpha_for_lossy_formats(tmp_path):

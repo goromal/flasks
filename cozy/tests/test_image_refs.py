@@ -10,9 +10,10 @@ def _touch(path):
 
 def test_list_dir_images_is_sorted_and_recursive(tmp_path):
     _touch(str(tmp_path / "b.png"))
+    _touch(str(tmp_path / "c.webp"))
     _touch(str(tmp_path / "sub" / "a.jpg"))
     _touch(str(tmp_path / "notes.txt"))
-    assert image_refs.list_dir_images(str(tmp_path)) == ["b.png", "sub/a.jpg"]
+    assert image_refs.list_dir_images(str(tmp_path)) == ["b.png", "c.webp", "sub/a.jpg"]
 
 
 def test_list_dir_images_empty_for_unset_dir():
@@ -32,12 +33,12 @@ def test_list_images_annotates_output_dir(tmp_path):
 
 def test_resolve_picks_base_from_suffix(tmp_path):
     indir, outdir = tmp_path / "in", tmp_path / "out"
-    _touch(str(indir / "a.png"))
-    _touch(str(outdir / "b.png"))
-    assert image_refs.resolve(str(indir), str(outdir), "a.png") == \
-        os.path.realpath(str(indir / "a.png"))
-    assert image_refs.resolve(str(indir), str(outdir), "b.png [output]") == \
-        os.path.realpath(str(outdir / "b.png"))
+    _touch(str(indir / "a.webp"))
+    _touch(str(outdir / "b.webp"))
+    assert image_refs.resolve(str(indir), str(outdir), "a.webp") == \
+        os.path.realpath(str(indir / "a.webp"))
+    assert image_refs.resolve(str(indir), str(outdir), "b.webp [output]") == \
+        os.path.realpath(str(outdir / "b.webp"))
 
 
 def test_resolve_rejects_traversal_missing_and_non_images(tmp_path):
@@ -74,6 +75,7 @@ def test_safe_upload_name_never_yields_a_hidden_or_empty_name():
 
 def test_safe_upload_name_accepts_heif_but_rejects_non_images():
     assert image_refs.safe_upload_name("IMG_1.HEIC") == "IMG_1.heic"
+    assert image_refs.safe_upload_name("portrait.WEBP") == "portrait.webp"
     for bad in ("notes.txt", "clip.mp4", "archive.zip", "noext", "x.png.exe"):
         assert image_refs.safe_upload_name(bad) is None, bad
 
