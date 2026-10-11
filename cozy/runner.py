@@ -12,6 +12,18 @@ class RunnerError(Exception):
     pass
 
 
+class OutOfMemoryError(RunnerError):
+    """ComfyUI reported a CUDA OOM. Often transient on a small GPU: the
+    allocator fragments across back-to-back jobs, and ComfyUI unloads every
+    model after an OOM, so an immediate retry usually succeeds."""
+
+
+def _is_oom(data):
+    text = "%s %s" % (data.get("exception_type", ""),
+                      data.get("exception_message", ""))
+    return "OutOfMemoryError" in text or "out of memory" in text.lower()
+
+
 class RunLock:
     """Process-wide non-blocking guard shared by the single-job path and the
     queue scheduler."""
@@ -48,9 +60,20 @@ def fetch_image(client, prompt_id):
 
 
 def execute(client, graph, client_id, on_progress=None, on_prompt_id=None,
-            sleep=time.sleep):
+            sleep=time.sleep, oom_retries=1):
     """Submit graph, follow progress to completion, return the output image
-    bytes. Raises RunnerError on execution error or missing output."""
+    bytes. Raises RunnerError on execution error or missing output. A CUDA
+    OOM is retried up to oom_retries times before it is raised."""
+    for attempt in range(oom_retries + 1):
+        try:
+            return _execute_once(client, graph, client_id, on_progress,
+                                 on_prompt_id, sleep)
+        except OutOfMemoryError:
+            if attempt == oom_retries:
+                raise
+
+
+def _execute_once(client, graph, client_id, on_progress, on_prompt_id, sleep):
     client.free()
     events = client.connect_events(client_id)
     try:
@@ -67,7 +90,8 @@ def execute(client, graph, client_id, on_progress=None, on_prompt_id=None,
                 if on_progress:
                     on_progress(int(val * 100 / mx) if mx else 0)
             elif mtype == "execution_error" and data.get("prompt_id") == prompt_id:
-                raise RunnerError(str(data.get("exception_message", "execution error")))
+                err = OutOfMemoryError if _is_oom(data) else RunnerError
+                raise err(str(data.get("exception_message", "execution error")))
             elif mtype == "executing" and data.get("node") is None \
                     and data.get("prompt_id") == prompt_id:
                 break

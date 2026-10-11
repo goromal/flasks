@@ -64,6 +64,51 @@ def test_execute_raises_when_no_output():
         runner.execute(client, {}, "cid", sleep=lambda s: None)
 
 
+class SeqClient(FakeClient):
+    """Hands out a different message list on each connect, one per attempt."""
+
+    def __init__(self, attempts):
+        super().__init__([])
+        self._attempts = list(attempts)
+        self.frees = 0
+
+    def free(self):
+        self.frees += 1
+
+    def connect_events(self, client_id):
+        return FakeEvents(self._attempts.pop(0))
+
+
+OOM = {"type": "execution_error",
+       "data": {"prompt_id": "pid", "exception_type": "torch.OutOfMemoryError",
+                "exception_message": "CUDA out of memory. Tried to allocate 458.00 MiB."}}
+OK = {"type": "execution_success", "data": {"prompt_id": "pid"}}
+
+
+def test_execute_retries_once_after_cuda_oom():
+    client = SeqClient([[OOM], [OK]])
+    img = runner.execute(client, {}, "cid", sleep=lambda s: None)
+    assert img == b"IMG"
+    # Each attempt starts from a freshly freed GPU.
+    assert client.frees == 2
+
+
+def test_execute_gives_up_after_second_cuda_oom():
+    client = SeqClient([[OOM], [OOM]])
+    with pytest.raises(runner.RunnerError, match="out of memory"):
+        runner.execute(client, {}, "cid", sleep=lambda s: None)
+    assert client.frees == 2
+
+
+def test_execute_does_not_retry_other_errors():
+    boom = {"type": "execution_error",
+            "data": {"prompt_id": "pid", "exception_message": "boom"}}
+    client = SeqClient([[boom], [OK]])
+    with pytest.raises(runner.RunnerError, match="boom"):
+        runner.execute(client, {}, "cid", sleep=lambda s: None)
+    assert client.frees == 1
+
+
 def test_run_lock_mutual_exclusion():
     lock = runner.RunLock()
     assert lock.try_acquire() is True
