@@ -345,10 +345,16 @@ def create_app(
         except WorkspaceCommandError as error:
             configured = []
             flash(str(error), "error")
+        agent_sessions = {}
+        for session in sessions.list(configured, allowed_agents):
+            agent_sessions[session["workspace"]] = (
+                agent_sessions.get(session["workspace"], 0) + 1
+            )
         return render_template(
             "workspaces.html",
             detail=None,
             workspaces=configured,
+            agent_sessions=agent_sessions,
             agents=allowed_agents,
             csrf_token=csrf_token,
             subdomain=subdomain,

@@ -22,7 +22,7 @@ class FakeSessions:
         self.renamed = []
 
     def list(self, configured_workspaces, allowed_agents):
-        return list(self.active)
+        return [s for s in self.active if s["agent"] in allowed_agents]
 
     def start(self, workspace, agent, label=""):
         self.started.append((workspace, agent))
@@ -646,3 +646,23 @@ def test_tmux_labels_are_session_options(monkeypatch):
     assert calls[-1] == ["tmux", "set-option", "-t", name, "-u", "@agent_ui_label"]
     with pytest.raises(ValueError):
         sessions.rename("not-ours", "x")
+
+
+def test_workspace_summary_marks_active_agent_sessions(configured_app):
+    app, manager, _ = configured_app
+    client = app.test_client()
+    login(client)
+    assert b'class="live"' not in client.get("/agents/workspaces/").data
+
+    manager.start("ui", "claude")
+    manager.start("ui", "codex")
+    manager.active.append({
+        "name": "agent-ui-tasking--shell--0123abcd", "workspace": "tasking",
+        "agent": "shell", "created": 1, "attached": 0, "label": "",
+    })
+    page = client.get("/agents/workspaces/").data.decode()
+    ui_card = page.split('href="/agents/workspaces/ui"', 1)[1].split("</a>", 1)[0]
+    tasking_card = page.split('href="/agents/workspaces/tasking"', 1)[1].split("</a>", 1)[0]
+    assert 'title="2 active agent sessions"' in ui_card
+    # Plain shells are not agent sessions.
+    assert 'class="live"' not in tasking_card
