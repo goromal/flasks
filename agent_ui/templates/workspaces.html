@@ -163,8 +163,8 @@
         <div class="toolbar"><div><h1>Workspaces</h1><p>Inspect and manage this machine's devshell workspaces.</p></div></div>
         <div class="workspace-grid">
           {% for workspace in workspaces %}
-            {% set active = agent_sessions.get(workspace.name, 0) %}
-            <a class="workspace" href="{{ subdomain }}/workspaces/{{ workspace.name }}"><h3>{{ workspace.name }}{% if active %}<span class="live" title="{{ active }} active agent session{{ 's' if active != 1 }}" aria-label="{{ active }} active agent session{{ 's' if active != 1 }}">{{ active }}</span>{% endif %}</h3><small>{{ workspace.sources|length }} configured items · {{ 'ready' if workspace.exists else 'not built' }}</small></a>
+            {% set active = active_sessions.get(workspace.name, 0) %}
+            <a class="workspace" href="{{ subdomain }}/workspaces/{{ workspace.name }}"><h3>{{ workspace.name }}{% if active %}<span class="live" title="{{ active }} active session{{ 's' if active != 1 }}" aria-label="{{ active }} active session{{ 's' if active != 1 }}">{{ active }}</span>{% endif %}</h3><small>{{ workspace.sources|length }} configured items · {{ 'ready' if workspace.exists else 'not built' }}</small></a>
           {% else %}<div class="empty">No configured workspaces.</div>{% endfor %}
         </div>
         <h2>Create workspace</h2>

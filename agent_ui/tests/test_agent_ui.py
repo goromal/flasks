@@ -648,7 +648,7 @@ def test_tmux_labels_are_session_options(monkeypatch):
         sessions.rename("not-ours", "x")
 
 
-def test_workspace_summary_marks_active_agent_sessions(configured_app):
+def test_workspace_summary_marks_active_sessions(configured_app):
     app, manager, _ = configured_app
     client = app.test_client()
     login(client)
@@ -663,6 +663,6 @@ def test_workspace_summary_marks_active_agent_sessions(configured_app):
     page = client.get("/agents/workspaces/").data.decode()
     ui_card = page.split('href="/agents/workspaces/ui"', 1)[1].split("</a>", 1)[0]
     tasking_card = page.split('href="/agents/workspaces/tasking"', 1)[1].split("</a>", 1)[0]
-    assert 'title="2 active agent sessions"' in ui_card
-    # Plain shells are not agent sessions.
-    assert 'class="live"' not in tasking_card
+    assert 'title="2 active sessions"' in ui_card
+    # Plain shells count as activity too.
+    assert 'title="1 active session"' in tasking_card
