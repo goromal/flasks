@@ -13,7 +13,10 @@
     h1 { margin: 0 0 8px; font-size: 1.7rem; }
     h2 { margin: 28px 0 12px; font-size: 1.1rem; color: #a9bdd1; }
     p { color: #a9b5c2; }
-    form.launch { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end; }
+    form.launch { display: grid; grid-template-columns: 1fr 1fr 1.4fr auto; gap: 12px; align-items: end; }
+    form.rename { display: flex; gap: 6px; margin-top: 6px; }
+    form.rename input { padding: 6px 9px; font-size: .9rem; }
+    form.rename button { padding: 6px 11px; font-size: .9rem; }
     label { display: grid; gap: 6px; color: #b8c7d6; font-size: .9rem; }
     select, input { width: 100%; border: 1px solid #3a4b5e; border-radius: 8px; background: #0f151d; color: #eef4f8; padding: 10px 12px; font: inherit; }
     button, .button { border: 0; border-radius: 8px; padding: 10px 15px; background: #2f81f7; color: white; font: inherit; font-weight: 650; text-decoration: none; cursor: pointer; display: inline-block; }
@@ -22,6 +25,7 @@
     .sessions { display: grid; gap: 10px; }
     .session { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 13px; background: #111923; border: 1px solid #2b3948; border-radius: 10px; }
     .session strong { text-transform: capitalize; }
+    .session strong.label { text-transform: none; }
     .session small { display: block; color: #91a2b3; }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; }
     .actions form { margin: 0; }
@@ -72,6 +76,9 @@
             {% for agent in agents %}<option value="{{ agent }}">{{ agent }}</option>{% endfor %}
           </select>
         </label>
+        <label>Name <small>(optional)</small>
+          <input name="label" maxlength="80" placeholder="what is this session for?">
+        </label>
         <button type="submit" {% if not workspaces or not agents %}disabled{% endif %}>New session</button>
       </form>
 
@@ -79,14 +86,22 @@
       <div class="sessions">
         {% for session in sessions %}
           <article class="session">
-            <div><strong>{{ session.agent }}</strong> in {{ session.workspace }}<small>{{ "attached" if session.attached else "detached" }}</small></div>
+            <div>
+              {% if session.label %}<strong class="label">{{ session.label }}</strong><small>{{ session.agent }} in {{ session.workspace }} · {{ "attached" if session.attached else "detached" }}</small>
+              {% else %}<strong>{{ session.agent }}</strong> in {{ session.workspace }}<small>{{ "attached" if session.attached else "detached" }}</small>{% endif %}
+              <form class="rename" method="post" action="{{ subdomain }}/sessions/{{ session.name }}/rename">
+                <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+                <input name="label" maxlength="80" value="{{ session.label }}" placeholder="name this session" aria-label="Session name">
+                <button class="secondary" type="submit">Rename</button>
+              </form>
+            </div>
             <div class="actions">
               <a class="button" href="{{ subdomain }}/sessions/{{ session.name|urlencode }}/terminal">Attach</a>
               <form method="post" action="{{ subdomain }}/sessions/{{ session.name }}/interrupt">
                 <input type="hidden" name="_csrf" value="{{ csrf_token }}">
                 <button class="secondary" type="submit">Ctrl+C</button>
               </form>
-              <form method="post" action="{{ subdomain }}/sessions/{{ session.name }}/terminate" onsubmit="return confirm('Terminate this agent session?')">
+              <form method="post" action="{{ subdomain }}/sessions/{{ session.name }}/terminate">
                 <input type="hidden" name="_csrf" value="{{ csrf_token }}">
                 <button class="danger" type="submit">Terminate</button>
               </form>

@@ -19,12 +19,14 @@ class FakeSessions:
         self.started = []
         self.interrupted = []
         self.terminated = []
+        self.renamed = []
 
     def list(self, configured_workspaces, allowed_agents):
         return list(self.active)
 
-    def start(self, workspace, agent):
+    def start(self, workspace, agent, label=""):
         self.started.append((workspace, agent))
+        self.renamed.append(label)
         name = f"agent-ui-{workspace}--{agent}--0123abcd"
         self.active.append(
             {
@@ -33,9 +35,16 @@ class FakeSessions:
                 "agent": agent,
                 "created": 1,
                 "attached": 0,
+                "label": label,
             }
         )
         return name
+
+    def rename(self, name, label):
+        self.renamed.append(label)
+        for session in self.active:
+            if session["name"] == name:
+                session["label"] = label
 
     def interrupt(self, name):
         self.interrupted.append(name)
@@ -205,6 +214,59 @@ def test_start_session_redirects_to_terminal(configured_app):
         "/agents/sessions/agent-ui-ui--codex--0123abcd/terminal"
     )
     assert manager.started == [("ui", "codex")]
+    assert manager.renamed == [""]
+
+
+def test_start_session_with_name_shows_it(configured_app):
+    app, manager, _ = configured_app
+    client = app.test_client()
+    login(client)
+    client.post(
+        "/agents/sessions",
+        data={
+            "_csrf": csrf(client), "workspace": "ui", "agent": "claude",
+            "label": "  Fix\tlogin\x1b  bug  ",
+        },
+    )
+    assert manager.renamed == ["Fix login bug"]
+    assert b"Fix login bug" in client.get("/agents/").data
+    terminal = client.get("/agents/sessions/agent-ui-ui--claude--0123abcd/terminal")
+    assert b"<title>Fix login bug</title>" in terminal.data
+
+
+def test_rename_session(configured_app):
+    app, manager, _ = configured_app
+    client = app.test_client()
+    login(client)
+    token = csrf(client)
+    client.post(
+        "/agents/sessions", data={"_csrf": token, "workspace": "ui", "agent": "codex"}
+    )
+    name = "agent-ui-ui--codex--0123abcd"
+    response = client.post(
+        f"/agents/sessions/{name}/rename", data={"_csrf": token, "label": "x" * 200}
+    )
+    assert response.status_code == 302
+    assert manager.renamed[-1] == "x" * 80
+    assert client.post(
+        f"/agents/sessions/{name}/rename", data={"label": "nope"}
+    ).status_code == 403
+    assert client.post(
+        "/agents/sessions/agent-ui-ui--codex--deadbeef/rename",
+        data={"_csrf": token, "label": "nope"},
+    ).status_code == 404
+
+
+def test_session_controls_do_not_ask_for_confirmation(configured_app):
+    app, manager, _ = configured_app
+    client = app.test_client()
+    login(client)
+    manager.start("ui", "claude")
+    assert b"confirm(" not in client.get("/agents/").data
+    workspace = client.get("/agents/workspaces/ui").data
+    assert b"confirm(" not in workspace
+    assert b'id="sync-all"' in workspace
+    assert b'class="sync-form"' in workspace
 
 
 @pytest.mark.parametrize(
@@ -542,7 +604,8 @@ def test_tmux_defaults_emit_plain_commands(monkeypatch):
     sessions.list([], ("claude",))
     assert calls[-1] == [
         "tmux", "list-sessions", "-F",
-        "#{session_name}\t#{session_created}\t#{session_attached}",
+        "#{session_name}\t#{session_created}\t#{session_attached}"
+        "\t#{@agent_ui_label}",
     ]
 
     name = "agent-ui-ui--claude--0123abcd"
@@ -550,3 +613,36 @@ def test_tmux_defaults_emit_plain_commands(monkeypatch):
     assert calls[-1] == ["tmux", "send-keys", "-t", name, "C-c"]
     sessions.terminate(name)
     assert calls[-1] == ["tmux", "kill-session", "-t", name]
+
+
+def test_tmux_labels_are_session_options(monkeypatch):
+    from agent_ui import TmuxSessions
+
+    calls = []
+
+    class Result:
+        returncode = 0
+        stdout = (
+            "agent-ui-ui--claude--0123abcd\t5\t1\tFix login\tbug\n"
+            "agent-ui-ui--codex--89abcdef\t4\t0\t\n"
+        )
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return Result()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    sessions = TmuxSessions(tmux_bin="tmux")
+
+    listed = sessions.list([{"name": "ui"}], ("claude", "codex"))
+    assert [session["label"] for session in listed] == ["Fix login\tbug", ""]
+
+    name = sessions.start("ui", "claude", "Fix login")
+    assert calls[-1] == ["tmux", "set-option", "-t", name, "@agent_ui_label", "Fix login"]
+    sessions.start("ui", "claude")
+    assert "new-session" in calls[-1]
+
+    sessions.rename(name, "")
+    assert calls[-1] == ["tmux", "set-option", "-t", name, "-u", "@agent_ui_label"]
+    with pytest.raises(ValueError):
+        sessions.rename("not-ours", "x")

@@ -28,6 +28,14 @@ SESSION_NAME = re.compile(
     r"^agent-ui-(?P<workspace>[A-Za-z0-9_][A-Za-z0-9_-]*)"
     r"--(?P<agent>[A-Za-z0-9_][A-Za-z0-9_-]*)--(?P<id>[0-9a-f]{8})$"
 )
+LABEL_OPTION = "@agent_ui_label"
+MAX_LABEL_LENGTH = 80
+
+
+def clean_label(raw):
+    """Collapse whitespace and drop control characters from a session label."""
+    printable = "".join(char for char in raw if char.isprintable() or char.isspace())
+    return " ".join(printable.split())[:MAX_LABEL_LENGTH]
 
 
 def parse_devrc(path):
@@ -95,7 +103,8 @@ class TmuxSessions:
         result = subprocess.run(
             self._base() + [
                 "list-sessions", "-F",
-                "#{session_name}\t#{session_created}\t#{session_attached}",
+                "#{session_name}\t#{session_created}\t#{session_attached}"
+                f"\t#{{{LABEL_OPTION}}}",
             ],
             check=False, capture_output=True, text=True,
         )
@@ -105,7 +114,7 @@ class TmuxSessions:
         sessions = []
         for line in result.stdout.splitlines():
             try:
-                name, created, attached = line.split("\t")
+                name, created, attached, label = line.split("\t", 3)
             except ValueError:
                 continue
             match = SESSION_NAME.fullmatch(name)
@@ -118,10 +127,11 @@ class TmuxSessions:
             sessions.append({
                 "name": name, "workspace": workspace, "agent": agent,
                 "created": int(created), "attached": int(attached),
+                "label": label,
             })
         return sorted(sessions, key=lambda session: session["created"], reverse=True)
 
-    def start(self, workspace, agent):
+    def start(self, workspace, agent, label=""):
         name = f"agent-ui-{workspace}--{agent}--{secrets.token_hex(4)}"
         command = self._base()
         if self.config:
@@ -131,7 +141,18 @@ class TmuxSessions:
             self.session_command, workspace, agent,
         ]
         subprocess.run(command, check=True)
+        if label:
+            self.rename(name, label)
         return name
+
+    def rename(self, name, label):
+        self._require_session_name(name)
+        option = ["set-option", "-t", name]
+        if label:
+            option += [LABEL_OPTION, label]
+        else:
+            option += ["-u", LABEL_OPTION]
+        subprocess.run(self._base() + option, check=True)
 
     def interrupt(self, name):
         self._require_session_name(name)
@@ -271,12 +292,10 @@ def create_app(
             return []
 
     def require_session(name):
-        known = {
-            session["name"]
-            for session in sessions.list(configured_workspaces(), session_types)
-        }
-        if name not in known:
-            abort(404)
+        for session in sessions.list(configured_workspaces(), session_types):
+            if session["name"] == name:
+                return session
+        abort(404)
 
     @bp.before_request
     def check_authentication():
@@ -433,20 +452,32 @@ def create_app(
         known_workspaces = {item["name"] for item in configured_workspaces()}
         if workspace not in known_workspaces or agent not in allowed_agents:
             abort(400)
+        label = clean_label(request.form.get("label", ""))
         try:
-            name = sessions.start(workspace, agent)
+            name = sessions.start(workspace, agent, label)
         except subprocess.CalledProcessError:
             abort(500)
         return redirect(url_for("agent_ui.terminal", name=name))
 
     @bp.route("/sessions/<name>/terminal")
     def terminal(name):
-        require_session(name)
+        session = require_session(name)
         return render_template(
             "terminal.html",
             name=name,
+            label=session.get("label", ""),
             subdomain=subdomain,
         )
+
+    @bp.route("/sessions/<name>/rename", methods=["POST"])
+    def rename_session(name):
+        require_csrf()
+        require_session(name)
+        try:
+            sessions.rename(name, clean_label(request.form.get("label", "")))
+        except (ValueError, subprocess.CalledProcessError):
+            abort(500)
+        return redirect(url_for("agent_ui.index"))
 
     @bp.route("/sessions/<name>/interrupt", methods=["POST"])
     def interrupt_session(name):

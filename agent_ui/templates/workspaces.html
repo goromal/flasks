@@ -72,6 +72,7 @@
         <div class="toolbar">
           <div><h1>{{ detail.name }}</h1><small><code>{{ detail.root }}</code></small></div>
           <div class="actions">
+            <button id="sync-all" class="secondary" type="button" title="Run Sync saved on every repository that has a saved branch">Sync all saved</button>
             <form method="post" action="{{ subdomain }}/workspaces/{{ detail.name }}/shell">
               <input type="hidden" name="_csrf" value="{{ csrf_token }}">
               <button type="submit">Open shell</button>
@@ -108,15 +109,15 @@
                       <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="save-branch"><input type="hidden" name="repository" value="{{ repo.name }}">
                       <button class="secondary" type="submit">Save branch</button>
                     </form>
-                    <form method="post" action="{{ subdomain }}/workspaces/{{ detail.name }}/actions" onsubmit="return confirm('Push the current branch to origin?')">
+                    <form method="post" action="{{ subdomain }}/workspaces/{{ detail.name }}/actions">
                       <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="push"><input type="hidden" name="repository" value="{{ repo.name }}">
                       <button class="secondary" type="submit">Push</button>
                     </form>
-                    <form method="post" action="{{ subdomain }}/workspaces/{{ detail.name }}/actions" onsubmit="return confirm('Switch to the saved branch and fast-forward it?')">
+                    <form class="sync-form" method="post" action="{{ subdomain }}/workspaces/{{ detail.name }}/actions">
                       <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="sync"><input type="hidden" name="repository" value="{{ repo.name }}">
                       <button class="secondary" type="submit" {% if not repo.saved_branch %}disabled{% endif %}>Sync saved</button>
                     </form>
-                    <form method="post" action="{{ subdomain }}/workspaces/{{ detail.name }}/actions" onsubmit="return confirm('Rebase and push the current branch?')">
+                    <form method="post" action="{{ subdomain }}/workspaces/{{ detail.name }}/actions">
                       <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="rebase-push"><input type="hidden" name="repository" value="{{ repo.name }}">
                       <button class="warning" type="submit">Rebase + push</button>
                     </form>
@@ -128,8 +129,7 @@
                   <button class="secondary" name="action" value="branch-create" type="submit">Create</button>
                   <button class="secondary" name="action" value="checkout" type="submit">Checkout</button>
                   <!-- formnovalidate: nuking with an empty branch box re-clones the current branch. -->
-                  <button class="danger" name="action" value="nuke" type="submit" formnovalidate
-                          onclick="return confirm('Delete {{ repo.name }} and re-clone it from origin? Uncommitted work and stashes are lost.')">Nuke</button>
+                  <button class="danger" name="action" value="nuke" type="submit" formnovalidate>Nuke</button>
                 </form>
               {% else %}
                 <h3>{{ repo.name }}</h3><p>Configured but not present. Run workspace setup after checking its source definition.</p>
@@ -219,7 +219,6 @@
       document.addEventListener("submit", async (event) => {
         const form = event.target;
         const article = form.closest("article.repo[data-repo]");
-        // Inline confirm() handlers have already run and may have cancelled.
         if (!article || event.defaultPrevented) return;
         event.preventDefault();
         if (article.classList.contains("busy")) return;
@@ -259,6 +258,18 @@
           setBusy(article, false);
         }
       });
+
+      // Fan out through each repo's own form so every repo gets its spinner
+      // and result notice; repos without a saved branch are skipped.
+      const syncAll = document.getElementById("sync-all");
+      if (syncAll) {
+        syncAll.addEventListener("click", () => {
+          const forms = [...document.querySelectorAll("article.repo:not(.busy) form.sync-form")]
+            .filter((form) => !form.querySelector("button").disabled);
+          if (!forms.length) notify("No repositories with a saved branch to sync", false);
+          forms.forEach((form) => form.requestSubmit());
+        });
+      }
 
       window.addEventListener("beforeunload", (event) => {
         if (pending > 0) event.preventDefault();
