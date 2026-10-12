@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from flask import Blueprint, Flask, Response, jsonify, render_template, request
 
+from latest import LatestVersion, is_behind
 from roster import Roster, bare_host
 from spokes import OPTION_KEYS, SpokeError, Spokes
 
@@ -32,14 +33,17 @@ def create_app(
     browse_cmd=None,
     self_host=None,
     spokes=None,
+    latest=None,
 ):
     roster = Roster(os.path.expanduser(state_dir), browse_cmd=browse_cmd)
     spokes = spokes or Spokes()
+    latest = latest or LatestVersion()
+    latest.get()  # Start the first fetch now so it is ready for the first page load.
     self_host = bare_host(self_host or socket.gethostname())
     app = Flask(__name__)
     bp = Blueprint("nexus", __name__, url_prefix=subdomain)
 
-    def machine_view(host, rec, probe):
+    def machine_view(host, rec, probe, latest_version):
         is_self = host == self_host
         home = rec.get("home") or "/"
         ip = rec.get("ip")
@@ -64,6 +68,7 @@ def create_app(
             "last_seen": rec.get("last_seen"),
             "online": probe.get("online", False),
             "version": probe.get("version"),
+            "behind_latest": is_behind(probe.get("version"), latest_version),
             "meta": probe.get("meta"),
             "upgrade_status": probe.get("upgrade_status"),
             "run_id": probe.get("run_id"),
@@ -78,10 +83,11 @@ def create_app(
         roster.discover(force=request.args.get("refresh") == "1")
         machines = roster.list()
         probes = spokes.probe_all(machines)
-        views = [machine_view(h, machines[h], probes.get(h, {})) for h in machines]
+        latest_version = latest.get()
+        views = [machine_view(h, machines[h], probes.get(h, {}), latest_version) for h in machines]
         # Hub first, then alphabetical.
         views.sort(key=lambda m: (not m["is_self"], m["host"]))
-        return jsonify({"machines": views, "self_host": self_host})
+        return jsonify({"machines": views, "self_host": self_host, "latest": latest_version})
 
     @bp.route("/api/upgrade", methods=["POST"])
     def api_upgrade():
