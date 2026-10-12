@@ -6,16 +6,17 @@ import rankops
 
 def test_scan_stamps_counts_rankable_only():
     listing = [
-        "stamped.a.x.png", "stamped.a.y.mp4", "stamped.a.z.gif",
+        "stamped.a.x.png", "stamped.a.y.mp4", "stamped.a.z.webp",
+        "stamped.a.w.gif",
         "stamped.b.q.txt", "plain.png", "file_map.log",
     ]
     result = rankops.scan_stamps(listing)
-    assert result == {"a": 2, "b": 1}
+    assert result == {"a": 3, "b": 1}
     assert list(result.keys()) == ["a", "b"]  # sorted by count desc
 
 
 def test_is_rankable_extensions():
-    for name in ("a.txt", "a.png", "a.PNG", "a.jpg", "a.JPEG", "a.heic",
+    for name in ("a.txt", "a.png", "a.PNG", "a.jpg", "a.JPEG", "a.webp", "a.WEBP", "a.heic",
                  "a.HEIC", "a.heif", "a.mp4", "a.mov", "a.MOV"):
         assert rankops.is_rankable(name), name
     for name in ("a.webm", "a.gif", "a.log", "heic", "a.heic.log"):

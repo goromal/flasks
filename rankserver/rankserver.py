@@ -176,7 +176,7 @@ class RankServer:
                            "active": raw_ins.get("active")}
         files = [f.strip() for f in os.listdir(RES_DIR) if rankops.is_rankable(f)]
         if len(files) == 0:
-            return (False, "Data directory has no rankable files (.txt|.png|.jpg|.heic|.mp4|.mov)")
+            return (False, "Data directory has no rankable files (.txt|.png|.jpg|.webp|.heic|.mp4|.mov)")
         self.mapfilename = os.path.join(RES_DIR, MAPNAME)
         self.logfilename = os.path.join(RES_DIR, LOGNAME)
         if not os.path.exists(self.mapfilename) or not os.path.exists(self.logfilename):
@@ -632,6 +632,7 @@ def thumb(filename):
     lower = safe.lower()
     native_mime = ("image/png" if lower.endswith(".png")
                    else "image/jpeg" if lower.endswith((".jpg", ".jpeg"))
+                   else "image/webp" if lower.endswith(".webp")
                    else None)
     is_img = native_mime is not None or lower.endswith((".heic", ".heif"))
     is_video = lower.endswith((".mp4", ".mov"))

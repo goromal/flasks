@@ -743,10 +743,10 @@
         {% if root == "" %}
         <div class="upload-section">
             <h2>Upload Media</h2>
-            <p class="upload-hint">Add images (PNG, JPG, HEIC) or videos (MP4, MOV) to the stampables directory.</p>
+            <p class="upload-hint">Add images (PNG, JPG, WebP, HEIC) or videos (MP4, MOV) to the stampables directory.</p>
             <div class="upload-controls">
                 <input type="file" id="uploadInput" class="upload-input"
-                       accept=".png,.jpg,.jpeg,.heic,.heif,.mp4,.mov,image/*,video/mp4,video/quicktime" multiple>
+                       accept=".png,.jpg,.jpeg,.webp,.heic,.heif,.mp4,.mov,image/*,video/mp4,video/quicktime" multiple>
                 <button class="btn" id="uploadBtn" onclick="uploadFiles()">Upload</button>
             </div>
         </div>
@@ -764,7 +764,7 @@
         {% if err %}
         <div class="error-message">{{ msg }}</div>
         {% else %}
-        {% if ftype == "PNG" or ftype == "JPG" or ftype == "HEIC" %}
+        {% if ftype == "PNG" or ftype == "JPG" or ftype == "WEBP" or ftype == "HEIC" %}
         <details class="controls-section">
             <summary>Image Controls</summary>
 

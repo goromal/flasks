@@ -63,6 +63,8 @@ def media_type(filename):
         return "PNG"
     if lower.endswith((".jpg", ".jpeg")):
         return "JPG"
+    if lower.endswith(".webp"):
+        return "WEBP"
     if lower.endswith(HEIF_EXTS):
         return "HEIC"
     if lower.endswith(VIDEO_EXTS):
@@ -164,6 +166,8 @@ class StampServer:
                     self.filelist.append((file.strip(), "PNG"))
                 elif file.lower().endswith((".jpg", ".jpeg")):
                     self.filelist.append((file.strip(), "JPG"))
+                elif file.lower().endswith(".webp"):
+                    self.filelist.append((file.strip(), "WEBP"))
                 elif file.lower().endswith(HEIF_EXTS):
                     self.filelist.append((file.strip(), "HEIC"))
                 elif file.lower().endswith(VIDEO_EXTS):
@@ -582,7 +586,7 @@ def rotate_image_api():
             return flask.jsonify({'success': False, 'error': f'File not found: {filename}'}), 404
 
         if not is_image(filename):
-            return flask.jsonify({'success': False, 'error': 'Only image files (PNG, JPEG, HEIC) can be rotated'}), 400
+            return flask.jsonify({'success': False, 'error': 'Only image files (PNG, JPEG, WebP, HEIC) can be rotated'}), 400
 
         img_format = image_format(filename)
 
@@ -632,7 +636,7 @@ def crop_image_api():
             return flask.jsonify({'success': False, 'error': f'File not found: {filename}'}), 404
 
         if not is_image(filename):
-            return flask.jsonify({'success': False, 'error': 'Only image files (PNG, JPEG, HEIC) can be cropped'}), 400
+            return flask.jsonify({'success': False, 'error': 'Only image files (PNG, JPEG, WebP, HEIC) can be cropped'}), 400
 
         img_format = image_format(filename)
 
@@ -683,7 +687,7 @@ def whiteout_image_api():
             return flask.jsonify({'success': False, 'error': f'File not found: {filename}'}), 404
 
         if not is_image(filename):
-            return flask.jsonify({'success': False, 'error': 'Only image files (PNG, JPEG, HEIC) can be edited'}), 400
+            return flask.jsonify({'success': False, 'error': 'Only image files (PNG, JPEG, WebP, HEIC) can be edited'}), 400
 
         img_format = image_format(filename)
 
@@ -728,7 +732,7 @@ def pad_image_api():
             return flask.jsonify({'success': False, 'error': f'File not found: {filename}'}), 404
 
         if not is_image(filename):
-            return flask.jsonify({'success': False, 'error': 'Only image files (PNG, JPEG, HEIC) can be padded'}), 400
+            return flask.jsonify({'success': False, 'error': 'Only image files (PNG, JPEG, WebP, HEIC) can be padded'}), 400
 
         try:
             top = int(data.get('top', 0))
@@ -776,7 +780,7 @@ def duplicate_image_api():
             return flask.jsonify({'success': False, 'error': f'File not found: {filename}'}), 404
 
         if not is_image(filename):
-            return flask.jsonify({'success': False, 'error': 'Only image files (PNG, JPEG, HEIC) can be duplicated'}), 400
+            return flask.jsonify({'success': False, 'error': 'Only image files (PNG, JPEG, WebP, HEIC) can be duplicated'}), 400
 
         img_format = image_format(filename)
 
