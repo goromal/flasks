@@ -46,14 +46,16 @@ def create_app(
 
         def ip_url(address):
             # IPv6 (often link-local) addresses are shown but not linked.
-            return f"http://{address}{home}" if ":" not in address else None
+            return f"https://{address}{home}" if ":" not in address else None
 
         return {
             "host": host,
             "mdns": f"{host}.local",
             "ip": ip,
             "is_self": is_self,
-            "home_url": home if is_self else f"http://{host}.local{home}",
+            # Always HTTPS, including this machine: the landing page's dedicated-port
+            # cards inherit its scheme, and those ports (e.g. folio) are SSL-only.
+            "home_url": f"https://{host}.local{home}",
             "ip_url": ip_url(ip) if ip else None,
             "other_ips": [
                 {"ip": a, "url": ip_url(a)} for a in rec.get("ips") or [] if a != ip

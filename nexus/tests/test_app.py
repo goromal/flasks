@@ -114,16 +114,16 @@ def test_machines_status_and_home_links(client):
     assert resp.get_json()["machines"][0]["host"] == "ats"  # hub first
 
     assert ms["ats"]["is_self"] is True
-    assert ms["ats"]["home_url"] == "/"
-    assert ms["ats"]["ip_url"] == "http://192.0.2.10/"
-    assert ms["ats"]["other_ips"] == [{"ip": "192.0.2.11", "url": "http://192.0.2.11/"}]
+    assert ms["ats"]["home_url"] == "https://ats.local/"
+    assert ms["ats"]["ip_url"] == "https://192.0.2.10/"
+    assert ms["ats"]["other_ips"] == [{"ip": "192.0.2.11", "url": "https://192.0.2.11/"}]
     assert ms["jetson"]["other_ips"] == []  # roster entries from before `ips` existed
     assert ms["ats"]["online"] is True
     assert ms["ats"]["version"] == "1.2.3"
     assert ms["ats"]["upgrade_status"] == "idle"
 
-    assert ms["jetson"]["home_url"] == "http://jetson.local/"
-    assert ms["jetson"]["ip_url"] == "http://192.0.2.20/"
+    assert ms["jetson"]["home_url"] == "https://jetson.local/"
+    assert ms["jetson"]["ip_url"] == "https://192.0.2.20/"
     assert ms["jetson"]["mdns"] == "jetson.local"
 
     assert ms["pi"]["online"] is True
