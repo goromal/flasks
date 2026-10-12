@@ -9,9 +9,18 @@ from werkzeug.serving import make_server
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from latest import LatestVersion
 from nexus import create_app
 from roster import Roster
 from spokes import Spokes
+
+
+class FakeLatest:
+    def __init__(self, value="1.3.0"):
+        self.value = value
+
+    def get(self):
+        return self.value
 
 
 def _free_port():
@@ -94,6 +103,7 @@ def client(tmp_path, fake):
         state_dir=state,
         self_host="ats",
         spokes=Spokes(base_url=fake.base_url, timeout=1.0),
+        latest=FakeLatest(),
     )
     return app.test_client()
 
@@ -120,6 +130,8 @@ def test_machines_status_and_home_links(client):
     assert ms["jetson"]["other_ips"] == []  # roster entries from before `ips` existed
     assert ms["ats"]["online"] is True
     assert ms["ats"]["version"] == "1.2.3"
+    assert ms["ats"]["behind_latest"] is True  # fake spokes report 1.2.3, master is 1.3.0
+    assert ms["pi"]["behind_latest"] is None  # no upgrade UI, no version
     assert ms["ats"]["upgrade_status"] == "idle"
 
     assert ms["jetson"]["home_url"] == "https://jetson.local/"
@@ -188,3 +200,21 @@ def test_default_base_url_prefers_ipv4():
     assert default_base_url("ats", "192.0.2.10") == "http://192.0.2.10"
     assert default_base_url("ats", "fe80::1") == "http://ats.local"
     assert default_base_url("ats") == "http://ats.local"
+
+
+def test_machines_reports_latest_master_version(client):
+    assert client.get("/api/machines").get_json()["latest"] == "1.3.0"
+
+
+def test_machines_latest_unknown(tmp_path, fake):
+    state = str(tmp_path / "state")
+    Roster(state).merge({"ats": {"ip": "192.0.2.10", "home": "/", "upgrade": "/anix-upgrade/"}})
+    app = create_app(
+        state_dir=state,
+        self_host="ats",
+        spokes=Spokes(base_url=fake.base_url, timeout=1.0),
+        latest=FakeLatest(None),
+    )
+    data = app.test_client().get("/api/machines").get_json()
+    assert data["latest"] is None
+    assert data["machines"][0]["behind_latest"] is None

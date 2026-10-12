@@ -35,7 +35,11 @@
 <body>
 <div class="container py-4" style="max-width:960px">
   <div class="d-flex align-items-center justify-content-between mb-1">
-    <h1 class="mb-0">Nexus</h1>
+    <div class="d-flex align-items-center gap-2">
+      <h1 class="mb-0">Nexus</h1>
+      <span class="badge bg-light text-dark border" id="latest-badge" hidden
+            title="ANIX_VERSION on anixpkgs master: what a default upgrade installs"></span>
+    </div>
     <button class="btn btn-sm btn-outline-secondary" id="refresh-btn" onclick="refresh(true)">Rediscover</button>
   </div>
   <p class="text-muted mb-4">LAN machines discovered over mDNS from <strong>{{ self_host }}.local</strong>
@@ -109,8 +113,10 @@ const BASE = {{ subdomain|tojson }};
 const $ = id => document.getElementById(id);
 const selected = new Set();
 let machines = [];
+let latest = null;
 let stale = false;
 const CACHE_KEY = `nexus-machines:${BASE}`;
+const LATEST_KEY = `nexus-latest:${BASE}`;
 let logSource = null;
 const ansi = window.AnsiUp ? new AnsiUp() : null;
 
@@ -143,6 +149,17 @@ function badge(m) {
   return `<span class="badge ${cls}">${spin}${esc(s)}</span>`;
 }
 
+function versionMark(m) {
+  if (m.behind_latest === true) return ` <span class="badge bg-warning text-dark" title="Behind master (${esc(latest)})">behind</span>`;
+  if (m.behind_latest === false) return ' <span class="badge bg-success-subtle text-success-emphasis border" title="Matches master">latest</span>';
+  return '';
+}
+
+function renderLatest() {
+  $('latest-badge').hidden = !latest;
+  $('latest-badge').textContent = latest ? `master: ${latest}` : '';
+}
+
 function selectable(m) { return !stale && m.online && m.can_upgrade && m.upgrade_status !== 'running'; }
 
 function render() {
@@ -166,7 +183,7 @@ function render() {
       <td><span class="dot ${m.online ? 'on' : 'off'} me-2" title="${m.online ? 'online' : 'offline'}"></span>
           <span class="host-name">${esc(m.mdns)}</span>${m.is_self ? ' <span class="badge bg-info">hub</span>' : ''}
           <div>${ip}${others ? ` <span class="small text-muted" title="Other interfaces">(also ${others})</span>` : ''}</div>${seen}</td>
-      <td>${badge(m)}
+      <td>${badge(m)}${versionMark(m)}
           ${m.version ? `<span class="font-monospace small trunc mt-1" title="${esc(m.version)}">${esc(m.version)}</span>` : ''}
           ${m.meta ? `<span class="small text-muted font-monospace trunc" title="${esc(m.meta)}">${esc(m.meta)}</span>` : ''}</td>
       <td class="text-end text-nowrap"><div class="d-inline-flex gap-1 row-actions">${homeLink}${logBtn}${forgetBtn}</div></td>
@@ -176,6 +193,7 @@ function render() {
     : '<tr><td colspan="4" class="text-muted text-center py-4">No machines advertise Nexus yet.</td></tr>';
   $('machines-card').classList.toggle('stale', stale);
   $('stale-note').hidden = !stale;
+  renderLatest();
   updateRunBtn();
 }
 
@@ -194,10 +212,16 @@ function updateRunBtn() {
 async function refresh(force) {
   try {
     const r = await fetch(`${BASE}/api/machines${force ? '?refresh=1' : ''}`);
-    machines = (await r.json()).machines;
+    const data = await r.json();
+    machines = data.machines;
+    // Keep the last known value if the hub briefly cannot reach GitHub.
+    latest = data.latest || latest;
     stale = false;
     render();
-    try { localStorage.setItem(CACHE_KEY, JSON.stringify(machines)); } catch (e) {}
+    try {
+      localStorage.setItem(CACHE_KEY, JSON.stringify(machines));
+      if (latest) localStorage.setItem(LATEST_KEY, latest);
+    } catch (e) {}
   } catch (e) {
     console.error('refresh failed', e);
   }
@@ -265,6 +289,8 @@ $('upgrade-form').addEventListener('submit', async e => {
 // Show the last known list immediately; the live probe can take a few seconds.
 function loadCached() {
   try {
+    latest = localStorage.getItem(LATEST_KEY);
+    renderLatest();
     const cached = JSON.parse(localStorage.getItem(CACHE_KEY));
     if (Array.isArray(cached) && cached.length) { machines = cached; stale = true; render(); }
   } catch (e) {}
