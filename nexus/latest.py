@@ -7,7 +7,7 @@ MASTER_VERSION_URL = "https://raw.githubusercontent.com/goromal/anixpkgs/master/
 # raw.githubusercontent.com caches for ~5 min, so polling faster gains nothing.
 TTL_S = 300.0
 TIMEOUT_S = 5.0
-_SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)")
+_SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
 
 
 def _fetch_url(url, timeout=TIMEOUT_S):
@@ -16,7 +16,7 @@ def _fetch_url(url, timeout=TIMEOUT_S):
 
 
 def parse_version(s):
-    """'9.6.6' or '9.6.6 (local)' -> (9, 6, 6); commits, 'Local Build', etc. -> None."""
+    """'9.6.6', 'v9.6.6' or '9.6.6 (local)' -> (9, 6, 6); commits, 'Local Build', etc. -> None."""
     m = _SEMVER.match(str(s or "").strip())
     return tuple(int(x) for x in m.groups()) if m else None
 

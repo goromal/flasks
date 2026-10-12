@@ -13,6 +13,7 @@ from latest import LatestVersion, is_behind, parse_version
 @pytest.mark.parametrize("s,expected", [
     ("9.6.6", (9, 6, 6)),
     ("9.6.6\n", (9, 6, 6)),
+    ("v9.6.5", (9, 6, 5)),  # spokes report ~/.anix-version with a v prefix
     ("9.6.6 (local)", (9, 6, 6)),
     ("10.0.12", (10, 0, 12)),
     ("Local Build", None),
@@ -28,6 +29,8 @@ def test_parse_version(s, expected):
 
 def test_is_behind():
     assert is_behind("9.6.5", "9.6.6") is True
+    assert is_behind("v9.6.5", "9.6.6") is True
+    assert is_behind("v9.6.6", "9.6.6") is False
     assert is_behind("9.6.6 (local)", "9.6.6") is False
     assert is_behind("9.10.0", "9.9.9") is False  # numeric, not lexicographic
     assert is_behind("9.7.0", "9.6.6") is False
