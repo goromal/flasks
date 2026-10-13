@@ -18,7 +18,9 @@
     .dot.on { background: #28a745; }
     .dot.off { background: #adb5bd; }
     .machine-table td { vertical-align: middle; }
-    .host-name { font-weight: 600; }
+    .host-name { font-weight: 600; font-size: 1.15rem; text-decoration: none; }
+    .host-name:hover { text-decoration: underline; }
+    .home-btn { font-weight: 600; padding: .45rem 1.1rem; }
     .row-offline .host-name { opacity: .6; }
     /* Last-known list shown from the browser cache until the first live response. */
     .stale #machines { opacity: .55; }
@@ -29,6 +31,7 @@
       .machine-table > :not(caption) > * > * { padding: .4rem .3rem; }
       /* Stack Home/Log/Forget so the table fits a phone without scrolling. */
       .row-actions { flex-direction: column; align-items: stretch; }
+      .home-btn { padding: .4rem .6rem; }
     }
   </style>
 </head>
@@ -165,14 +168,15 @@ function selectable(m) { return !stale && m.online && m.can_upgrade && m.upgrade
 function render() {
   const rows = machines.map(m => {
     if (!selectable(m)) selected.delete(m.host);
-    const homeLink = `<a class="btn btn-sm btn-outline-primary" href="${esc(m.home_url)}">Home</a>`;
+    const homeLink = `<a class="btn ${m.online ? 'btn-primary' : 'btn-outline-primary'} home-btn" href="${esc(m.home_url)}" title="${esc(m.home_url)}">Home &rarr;</a>`;
     const logBtn = m.can_upgrade && m.online && m.run_id
       ? `<button class="btn btn-sm btn-outline-secondary" onclick="followLog('${esc(m.host)}')">Log</button>` : '';
     const forgetBtn = !m.online && !m.is_self
       ? `<button class="btn btn-sm btn-outline-danger" onclick="forget('${esc(m.host)}')" title="Remove from Nexus until it is rediscovered">Forget</button>` : '';
-    const ip = m.ip ? (m.ip_url
-      ? `<a class="small text-muted" href="${esc(m.ip_url)}">${esc(m.ip)}</a>`
-      : `<span class="small text-muted">${esc(m.ip)}</span>`) : '';
+    // The host name and Home both open home_url (the IP when linkable); the
+    // mDNS name stays available as an alternate link.
+    const ip = [m.ip ? `<span class="small text-muted">${esc(m.ip)}</span>` : '',
+      m.mdns_url ? `<a class="small text-muted" href="${esc(m.mdns_url)}">${esc(m.mdns)}</a>` : ''].filter(Boolean).join(' · ');
     const others = (m.other_ips || []).map(o => o.url
       ? `<a class="small text-muted" href="${esc(o.url)}">${esc(o.ip)}</a>`
       : `<span class="small text-muted">${esc(o.ip)}</span>`).join(' · ');
@@ -181,7 +185,7 @@ function render() {
       <td><input class="form-check-input" type="checkbox" ${selectable(m) ? '' : 'disabled'}
            ${selected.has(m.host) ? 'checked' : ''} onchange="toggle('${esc(m.host)}', this.checked)"></td>
       <td><span class="dot ${m.online ? 'on' : 'off'} me-2" title="${m.online ? 'online' : 'offline'}"></span>
-          <span class="host-name">${esc(m.mdns)}</span>${m.is_self ? ' <span class="badge bg-info">hub</span>' : ''}
+          <a class="host-name" href="${esc(m.home_url)}">${esc(m.host)}</a>${m.is_self ? ' <span class="badge bg-info">hub</span>' : ''}
           <div>${ip}${others ? ` <span class="small text-muted" title="Other interfaces">(also ${others})</span>` : ''}</div>${seen}</td>
       <td>${badge(m)}${versionMark(m)}
           ${m.version ? `<span class="font-monospace small trunc mt-1" title="${esc(m.version)}">${esc(m.version)}</span>` : ''}

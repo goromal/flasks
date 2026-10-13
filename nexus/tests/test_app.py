@@ -124,7 +124,8 @@ def test_machines_status_and_home_links(client):
     assert resp.get_json()["machines"][0]["host"] == "ats"  # hub first
 
     assert ms["ats"]["is_self"] is True
-    assert ms["ats"]["home_url"] == "https://ats.local/"
+    assert ms["ats"]["home_url"] == "https://192.0.2.10/"
+    assert ms["ats"]["mdns_url"] == "https://ats.local/"
     assert ms["ats"]["ip_url"] == "https://192.0.2.10/"
     assert ms["ats"]["other_ips"] == [{"ip": "192.0.2.11", "url": "https://192.0.2.11/"}]
     assert ms["jetson"]["other_ips"] == []  # roster entries from before `ips` existed
@@ -134,13 +135,14 @@ def test_machines_status_and_home_links(client):
     assert ms["pi"]["behind_latest"] is None  # no upgrade UI, no version
     assert ms["ats"]["upgrade_status"] == "idle"
 
-    assert ms["jetson"]["home_url"] == "https://jetson.local/"
+    assert ms["jetson"]["home_url"] == "https://192.0.2.20/"
     assert ms["jetson"]["ip_url"] == "https://192.0.2.20/"
     assert ms["jetson"]["mdns"] == "jetson.local"
 
     assert ms["pi"]["online"] is True
     assert ms["pi"]["can_upgrade"] is False
     assert ms["pi"]["ip_url"] is None  # IPv6 link-local: no clickable URL
+    assert ms["pi"]["home_url"] == "https://pi.local/"  # falls back to mDNS
 
     assert ms["down-box"]["online"] is False
 
