@@ -116,6 +116,7 @@ normally fine to ignore.
 | `/cozy/api/queue/start` | POST | begin draining; 409 if busy |
 | `/cozy/api/queue/stop` | POST | stop after the current job |
 | `/cozy/api/queue/remove` | POST | `{"id": ...}` |
+| `/cozy/api/queue/cancel` | POST | `{"id": ...}`; removes a pending job or interrupts the running one (result status `cancelled`); 404 if neither |
 | `/cozy/api/queue/clear` | POST | drop finished results |
 | `/cozy/api/queue/image?id=<id>` | GET | result PNG (`&kind=crop` for the crop) |
 | `/cozy/api/input-fit?name=<path>` | GET | what the input-size ceiling will do; `&x&y&w&h` measures a crop instead |

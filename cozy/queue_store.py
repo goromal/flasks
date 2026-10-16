@@ -159,11 +159,38 @@ class QueueStore:
                 self._write(data)
 
     def set_current_prompt_id(self, prompt_id):
+        """Record the ComfyUI prompt id; True if a cancel was already requested
+        (the caller must then interrupt it, since cancel_job saw no id)."""
         with self._lock:
             data = self._read()
             if data.get("current"):
                 data["current"]["prompt_id"] = prompt_id
                 self._write(data)
+                return bool(data["current"].get("cancel_requested"))
+            return False
+
+    def cancel_job(self, job_id):
+        """Cancel a pending or running job.
+
+        Returns (state, prompt_id): state is "removed" for a pending job,
+        "cancelling" for the current one (prompt_id is its ComfyUI prompt, or
+        None if not yet submitted), or None when the id is neither."""
+        with self._lock:
+            data = self._read()
+            if any(j.get("id") == job_id for j in data["jobs"]):
+                data["jobs"] = [j for j in data["jobs"] if j.get("id") != job_id]
+                self._write(data)
+                return "removed", None
+            current = data.get("current")
+            if current and current.get("id") == job_id:
+                current["cancel_requested"] = True
+                self._write(data)
+                return "cancelling", current.get("prompt_id")
+            return None, None
+
+    def current_cancel_requested(self):
+        current = self.read().get("current")
+        return bool(current and current.get("cancel_requested"))
 
     def finish_current(self, status, error=None, output=None, fit=None):
         with self._lock:
@@ -254,6 +281,8 @@ class Scheduler:
         self._stage_remote = stage_remote
         self._stop = threading.Event()
         self._thread = None
+        self._events_lock = threading.Lock()
+        self._events = None
 
     def start(self):
         """Begin draining the queue in a background thread. False if busy."""
@@ -274,6 +303,29 @@ class Scheduler:
 
     def stop(self):
         self._stop.set()
+
+    def cancel(self, job_id):
+        """Cancel job_id: drop it if pending; if running, interrupt it in
+        ComfyUI and unblock the runner so the job finishes as cancelled.
+        Returns the QueueStore.cancel_job state."""
+        state, prompt_id = self.store.cancel_job(job_id)
+        if state == "cancelling":
+            if prompt_id:
+                self.client.interrupt(prompt_id)
+            with self._events_lock:
+                if self._events is not None:
+                    self._events.abort()
+        return state
+
+    def _on_events(self, events):
+        with self._events_lock:
+            self._events = events
+            if self.store.current_cancel_requested():
+                events.abort()
+
+    def _on_prompt_id(self, prompt_id):
+        if self.store.set_current_prompt_id(prompt_id):
+            self.client.interrupt(prompt_id)
 
     def is_active(self):
         return self.store.read().get("active", False)
@@ -399,9 +451,12 @@ class Scheduler:
                 job.get("height", 800), image=image, basename=basename)
             record_pixels = eta_pixels if eta_pixels is not None else width * height
             client_id = uuid.uuid4().hex
+            if self.store.current_cancel_requested():
+                raise runner.RunnerError("cancelled")
             img = self._execute(self.client, graph, client_id,
                                 on_progress=self.store.set_current_progress,
-                                on_prompt_id=self.store.set_current_prompt_id)
+                                on_prompt_id=self._on_prompt_id,
+                                on_events=self._on_events)
             self._write_outputs(job["id"], img, source_path, rect, basename,
                                 (fit_info or {}).get("scale", 1.0))
             dur = self.store.finish_current(
@@ -410,8 +465,13 @@ class Scheduler:
                 eta.record_completion(self.store.state_dir, job["workflow"],
                                       record_pixels or 0, dur)
         except Exception as e:  # noqa: BLE001 - failure surfaces in results
-            self.store.finish_current("failed", error=str(e))
+            if self.store.current_cancel_requested():
+                self.store.finish_current("cancelled", error="cancelled")
+            else:
+                self.store.finish_current("failed", error=str(e))
         finally:
+            with self._events_lock:
+                self._events = None
             # Consumed intermediate; see JobStore._run.
             if staged_path:
                 try:

@@ -117,3 +117,17 @@ def test_run_lock_mutual_exclusion():
     lock.release()
     assert lock.busy() is False
     lock.release()  # idempotent, no raise
+
+
+def test_interrupted_prompt_raises():
+    msgs = [{"type": "execution_interrupted", "data": {"prompt_id": "pid"}}]
+    with pytest.raises(runner.RunnerError, match="interrupted"):
+        runner.execute(FakeClient(msgs), {}, "cid", sleep=lambda s: None)
+
+
+def test_on_events_receives_stream_before_submit():
+    seen = []
+    msgs = [{"type": "executing", "data": {"node": None, "prompt_id": "pid"}}]
+    runner.execute(FakeClient(msgs), {}, "cid", sleep=lambda s: None,
+                   on_events=seen.append)
+    assert len(seen) == 1
