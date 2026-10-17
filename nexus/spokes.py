@@ -4,6 +4,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 TIMEOUT_S = 2.0
+HEALTH_TIMEOUT_S = 8.0
 RUN_TIMEOUT_S = 10.0
 STREAM_TIMEOUT_S = 3600.0
 OPTION_KEYS = ("version", "commit", "branch", "source", "local", "boot")
@@ -81,6 +82,18 @@ class Spokes:
                 for host, m in machines.items()
             }
             return {host: f.result() for host, f in futures.items()}
+
+    def health(self, host, ip, upgrade_path):
+        """The spoke's latest bitd check results (list of dicts)."""
+        raw = self._request(
+            host,
+            self._url(host, ip, upgrade_path, "api/v1/health"),
+            timeout=HEALTH_TIMEOUT_S,
+        )
+        try:
+            return json.loads(raw)["checks"]
+        except (ValueError, KeyError, TypeError):
+            raise SpokeError("invalid health response")
 
     def start_run(self, host, ip, upgrade_path, opts):
         payload = {k: opts[k] for k in OPTION_KEYS if opts.get(k)}

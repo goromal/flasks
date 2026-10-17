@@ -26,10 +26,15 @@
     .stale #machines { opacity: .55; }
     /* Version/meta (often a 40-char commit hash) would otherwise widen the table. */
     .trunc { display: block; max-width: 10rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #health-dialog { border: 0; border-radius: 8px; padding: 0; width: min(640px, calc(100vw - 32px)); box-shadow: 0 .5rem 2rem rgba(0,0,0,.3); }
+    #health-dialog::backdrop { background: rgba(0,0,0,.4); }
+    .health-list .check { padding: .5rem 0; border-top: 1px solid #dee2e6; }
+    .health-list .check:first-child { border-top: 0; }
+    .health-list pre { white-space: pre-wrap; font-size: .8rem; background: #f8f9fa; border-radius: 4px; padding: .5rem; margin: .4rem 0 0; }
     @media (max-width: 575px) {
       .trunc { max-width: 5.5rem; }
       .machine-table > :not(caption) > * > * { padding: .4rem .3rem; }
-      /* Stack Home/Log/Forget so the table fits a phone without scrolling. */
+      /* Stack Home/Health/Log/Forget so the table fits a phone without scrolling. */
       .row-actions { flex-direction: column; align-items: stretch; }
       .home-btn { padding: .4rem .6rem; }
     }
@@ -111,6 +116,17 @@
   <div class="log-box" id="log">Select a machine's "Log" to follow its upgrade output.</div>
 </div>
 
+<dialog id="health-dialog">
+  <div class="d-flex align-items-center justify-content-between border-bottom px-3 py-2">
+    <h5 class="mb-0">Health <span class="text-muted small" id="health-host"></span></h5>
+    <div class="d-flex gap-1">
+      <button class="btn btn-sm btn-outline-secondary" onclick="loadHealth()">Reload</button>
+      <button class="btn btn-sm btn-outline-secondary" onclick="$('health-dialog').close()" aria-label="Close">&times;</button>
+    </div>
+  </div>
+  <div class="px-3 py-2" id="health-body"></div>
+</dialog>
+
 <script>
 const BASE = {{ subdomain|tojson }};
 const $ = id => document.getElementById(id);
@@ -171,6 +187,8 @@ function render() {
     const homeLink = `<a class="btn ${m.online ? 'btn-primary' : 'btn-outline-primary'} home-btn" href="${esc(m.home_url)}" title="${esc(m.home_url)}">Home &rarr;</a>`;
     const logBtn = m.can_upgrade && m.online && m.run_id
       ? `<button class="btn btn-sm btn-outline-secondary" onclick="followLog('${esc(m.host)}')">Log</button>` : '';
+    const healthBtn = m.can_upgrade && m.online && !stale
+      ? `<button class="btn btn-sm btn-outline-success" onclick="showHealth('${esc(m.host)}')" title="bitd check results">Health</button>` : '';
     const forgetBtn = !m.online && !m.is_self
       ? `<button class="btn btn-sm btn-outline-danger" onclick="forget('${esc(m.host)}')" title="Remove from Nexus until it is rediscovered">Forget</button>` : '';
     // The host name and Home both open home_url (the IP when linkable); the
@@ -190,7 +208,7 @@ function render() {
       <td>${badge(m)}${versionMark(m)}
           ${m.version ? `<span class="font-monospace small trunc mt-1" title="${esc(m.version)}">${esc(m.version)}</span>` : ''}
           ${m.meta ? `<span class="small text-muted font-monospace trunc" title="${esc(m.meta)}">${esc(m.meta)}</span>` : ''}</td>
-      <td class="text-end text-nowrap"><div class="d-inline-flex gap-1 row-actions">${homeLink}${logBtn}${forgetBtn}</div></td>
+      <td class="text-end text-nowrap"><div class="d-inline-flex gap-1 row-actions">${homeLink}${healthBtn}${logBtn}${forgetBtn}</div></td>
     </tr>`;
   });
   $('machines').innerHTML = rows.length ? rows.join('')
@@ -257,6 +275,71 @@ function followLog(host) {
     if (logSource) { logSource.close(); logSource = null; }
     appendLog('[nexus: log stream closed]');
   };
+}
+
+const CHECK_STATES = {
+  STATE_PASSED: ['passed', 'bg-success'],
+  STATE_FAILED: ['failed', 'bg-danger'],
+  STATE_TIMED_OUT: ['timed out', 'bg-danger'],
+  STATE_RUNNING: ['running', 'bg-warning text-dark'],
+  STATE_IDLE: ['not run', 'bg-secondary'],
+};
+let healthHost = null;
+
+function ago(ms) {
+  if (!ms) return '';
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 90) return `${s}s ago`;
+  if (s < 5400) return `${Math.round(s / 60)}m ago`;
+  if (s < 129600) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
+function renderCheck(c) {
+  const [label, cls] = CHECK_STATES[c.state] || ['unknown', 'bg-secondary'];
+  const bad = c.state === 'STATE_FAILED' || c.state === 'STATE_TIMED_OUT';
+  const kind = c.kind === 'KIND_REGRESSION' ? 'regression' : 'health';
+  const when = ago(c.finished_unix_ms || c.started_unix_ms);
+  // Detail is often just the state name again; only show it when it adds something.
+  const detail = c.detail && c.detail !== label ? `<div class="small text-muted">${esc(c.detail)}</div>` : '';
+  const fix = bad && c.remediation ? `<pre>${esc(c.remediation)}</pre>` : '';
+  return `<div class="check">
+    <div class="d-flex align-items-center gap-2">
+      <span class="badge ${cls}" style="min-width:4.5rem">${label}</span>
+      <span class="fw-semibold">${esc(c.name)}</span>
+      <span class="small text-muted">${kind}</span>
+      <span class="small text-muted ms-auto" title="${when ? new Date(c.finished_unix_ms || c.started_unix_ms).toLocaleString() : ''}">${when}</span>
+    </div>${detail}${fix}</div>`;
+}
+
+async function loadHealth() {
+  const host = healthHost;
+  const body = $('health-body');
+  body.innerHTML = '<div class="text-muted py-2">Loading&hellip;</div>';
+  try {
+    const r = await fetch(`${BASE}/api/health/${encodeURIComponent(host)}`);
+    const data = await r.json();
+    if (host !== healthHost) return;
+    if (!r.ok) { body.innerHTML = `<div class="text-danger py-2">${esc(data.error || 'Failed')}</div>`; return; }
+    const checks = data.checks || [];
+    if (!checks.length) { body.innerHTML = '<div class="text-muted py-2">No checks configured.</div>'; return; }
+    // Failures first, then by name.
+    const rank = c => (c.state === 'STATE_FAILED' || c.state === 'STATE_TIMED_OUT') ? 0 : 1;
+    checks.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+    const health = checks.filter(c => c.kind !== 'KIND_REGRESSION');
+    const passing = health.filter(c => c.state === 'STATE_PASSED').length;
+    body.innerHTML = `<div class="small text-muted mb-1">${passing}/${health.length} health checks passing</div>
+      <div class="health-list">${checks.map(renderCheck).join('')}</div>`;
+  } catch (e) {
+    if (host === healthHost) body.innerHTML = `<div class="text-danger py-2">${esc(e)}</div>`;
+  }
+}
+
+function showHealth(host) {
+  healthHost = host;
+  $('health-host').textContent = `${host}.local`;
+  $('health-dialog').showModal();
+  loadHealth();
 }
 
 $('upgrade-form').addEventListener('submit', async e => {
