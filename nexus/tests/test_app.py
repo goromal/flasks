@@ -70,6 +70,8 @@ class FakeSpokes:
 
         @app.route("/<host>/anix-upgrade/api/v1/health")
         def health(host):
+            if host == "old-box":
+                return "Not Found", 404
             if host == "jetson":
                 return jsonify({"error": "bitd is not installed on this machine"}), 404
             return jsonify({"checks": [{"name": "internet", "state": "STATE_PASSED"}]})
@@ -104,6 +106,7 @@ def client(tmp_path, fake):
         "jetson": {"ip": "192.0.2.20", "home": "/", "upgrade": "/anix-upgrade/"},
         "pi": {"ip": "fe80::3", "home": "/", "upgrade": None},
         "down-box": {"ip": "192.0.2.30", "home": "/", "upgrade": "/anix-upgrade/"},
+        "old-box": {"ip": "192.0.2.40", "home": "/", "upgrade": "/anix-upgrade/"},
     })
     app = create_app(
         state_dir=state,
@@ -241,3 +244,6 @@ def test_health_errors(client):
     assert resp.status_code == 404
     assert "not installed" in resp.get_json()["error"]
     assert client.get("/api/health/down-box").status_code == 503
+    resp = client.get("/api/health/old-box")  # spoke predates the health API
+    assert resp.status_code == 404
+    assert "upgrade it" in resp.get_json()["error"]

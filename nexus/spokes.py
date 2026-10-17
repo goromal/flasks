@@ -85,11 +85,18 @@ class Spokes:
 
     def health(self, host, ip, upgrade_path):
         """The spoke's latest bitd check results (list of dicts)."""
-        raw = self._request(
-            host,
-            self._url(host, ip, upgrade_path, "api/v1/health"),
-            timeout=HEALTH_TIMEOUT_S,
-        )
+        try:
+            raw = self._request(
+                host,
+                self._url(host, ip, upgrade_path, "api/v1/health"),
+                timeout=HEALTH_TIMEOUT_S,
+            )
+        except SpokeError as e:
+            # The route's own 404 carries a JSON error; Flask's generic one
+            # means the spoke predates the health API.
+            if e.status == 404 and str(e).startswith("HTTP Error"):
+                raise SpokeError("No health API on this machine yet; upgrade it", status=404)
+            raise
         try:
             return json.loads(raw)["checks"]
         except (ValueError, KeyError, TypeError):

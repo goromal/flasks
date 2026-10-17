@@ -26,11 +26,11 @@
     .stale #machines { opacity: .55; }
     /* Version/meta (often a 40-char commit hash) would otherwise widen the table. */
     .trunc { display: block; max-width: 10rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    #health-dialog { border: 0; border-radius: 8px; padding: 0; width: min(640px, calc(100vw - 32px)); box-shadow: 0 .5rem 2rem rgba(0,0,0,.3); }
+    #health-dialog { background: var(--bs-body-bg); color: var(--bs-body-color); border: 0; border-radius: 8px; padding: 0; width: min(640px, calc(100vw - 32px)); box-shadow: 0 .5rem 2rem rgba(0,0,0,.3); }
     #health-dialog::backdrop { background: rgba(0,0,0,.4); }
-    .health-list .check { padding: .5rem 0; border-top: 1px solid #dee2e6; }
+    .health-list .check { padding: .5rem 0; border-top: 1px solid var(--bs-border-color); }
     .health-list .check:first-child { border-top: 0; }
-    .health-list pre { white-space: pre-wrap; font-size: .8rem; background: #f8f9fa; border-radius: 4px; padding: .5rem; margin: .4rem 0 0; }
+    .health-list pre { white-space: pre-wrap; font-size: .8rem; background: var(--bs-tertiary-bg); border-radius: 4px; padding: .5rem; margin: .4rem 0 0; }
     @media (max-width: 575px) {
       .trunc { max-width: 5.5rem; }
       .machine-table > :not(caption) > * > * { padding: .4rem .3rem; }
