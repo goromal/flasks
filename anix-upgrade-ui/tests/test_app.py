@@ -221,3 +221,31 @@ def test_api_log_returns_content_for_valid_run_id(tmp_path):
 def test_api_log_returns_404_for_unknown_run_id(tmp_path):
     resp = make_client(tmp_path).get("/api/v1/log/00000000-0000-0000-0000-000000000000")
     assert resp.status_code == 404
+
+
+def health_client(tmp_path, script):
+    path = tmp_path / "fake-bitctl"
+    path.write_text("#!/bin/sh\n" + script + "\n")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    app = create_app(state_dir=str(tmp_path / "state"), bitctl_bin=str(path))
+    return app.test_client()
+
+
+def test_health_reports_bitctl_checks(tmp_path):
+    checks = [{"name": "internet", "kind": "KIND_HEALTH", "state": "STATE_PASSED"}]
+    client = health_client(tmp_path, f"[ \"$*\" = 'list --json' ] && echo '{json.dumps(checks)}'")
+    resp = client.get("/api/v1/health")
+    assert resp.status_code == 200
+    assert resp.get_json() == {"checks": checks}
+
+
+def test_health_bitctl_failure_is_503(tmp_path):
+    client = health_client(tmp_path, "echo 'error: connection refused' >&2; exit 1")
+    resp = client.get("/api/v1/health")
+    assert resp.status_code == 503
+    assert "connection refused" in resp.get_json()["error"]
+
+
+def test_health_without_bitctl_is_404(tmp_path):
+    client = make_client(tmp_path)
+    assert client.get("/api/v1/health").status_code == 404

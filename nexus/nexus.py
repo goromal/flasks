@@ -136,6 +136,19 @@ def create_app(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    @bp.route("/api/health/<host>")
+    def api_health(host):
+        host = bare_host(host)
+        rec = roster.list().get(host)
+        if rec is None or not rec.get("upgrade"):
+            return jsonify({"error": "Unknown machine or no upgrade UI"}), 404
+        try:
+            checks = spokes.health(host, rec.get("ip"), rec["upgrade"])
+        except SpokeError as e:
+            # A 404 from the spoke means bitd is not installed there.
+            return jsonify({"error": str(e)}), e.status or 503
+        return jsonify({"host": host, "checks": checks})
+
     @bp.route("/api/forget/<host>", methods=["POST"])
     def api_forget(host):
         if not roster.forget(bare_host(host)):

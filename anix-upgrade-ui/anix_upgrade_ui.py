@@ -1,11 +1,14 @@
 import argparse
+import json
 import os
+import subprocess
 
 from flask import Blueprint, Flask, Response, jsonify, render_template, request, send_file
 
 from run_store import RunStore
 
 DEFAULT_STATE_DIR = "~/.local/state/anix-upgrade-ui"
+BITCTL_TIMEOUT_S = 5
 
 
 def _read_file(path):
@@ -41,7 +44,31 @@ def _build_cmd(upgrade_bin, version, commit, branch, source, local, boot):
     return cmd
 
 
-def create_app(subdomain="", upgrade_bin="anix-upgrade", state_dir=DEFAULT_STATE_DIR):
+def bit_checks(bitctl_bin):
+    """Latest bitd results via `bitctl list --json`. Raises RuntimeError."""
+    try:
+        proc = subprocess.run(
+            [bitctl_bin, "list", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=BITCTL_TIMEOUT_S,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise RuntimeError(f"bitctl failed: {e}")
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout).strip() or f"bitctl exited {proc.returncode}")
+    try:
+        return json.loads(proc.stdout)
+    except ValueError:
+        raise RuntimeError("bitctl returned invalid JSON")
+
+
+def create_app(
+    subdomain="",
+    upgrade_bin="anix-upgrade",
+    state_dir=DEFAULT_STATE_DIR,
+    bitctl_bin=None,
+):
     store = RunStore(os.path.expanduser(state_dir))
     app = Flask(__name__)
     bp = Blueprint("anix_upgrade_ui", __name__, url_prefix=subdomain)
@@ -69,6 +96,16 @@ def create_app(subdomain="", upgrade_bin="anix-upgrade", state_dir=DEFAULT_STATE
             "version": current_version(),
             "meta": current_meta(),
         })
+
+    # Read-only bitd results for Nexus; bitd's own gRPC port stays on loopback.
+    @bp.route("/api/v1/health")
+    def api_health():
+        if not bitctl_bin:
+            return jsonify({"error": "bitd is not installed on this machine"}), 404
+        try:
+            return jsonify({"checks": bit_checks(bitctl_bin)})
+        except RuntimeError as e:
+            return jsonify({"error": str(e)}), 503
 
     @bp.route("/api/list-dirs", methods=["POST"])
     def list_dirs():
@@ -210,8 +247,14 @@ def main():
         default=DEFAULT_STATE_DIR,
         help="Directory for run log and state persistence",
     )
+    parser.add_argument(
+        "--bitctl-bin",
+        type=str,
+        default=None,
+        help="Path to bitctl; enables the read-only health API",
+    )
     args = parser.parse_args()
-    app = create_app(args.subdomain, args.anix_upgrade_bin, args.state_dir)
+    app = create_app(args.subdomain, args.anix_upgrade_bin, args.state_dir, args.bitctl_bin)
     app.run(host="0.0.0.0", port=args.port, debug=False, threaded=True)
 
 

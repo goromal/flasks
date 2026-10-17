@@ -68,6 +68,14 @@ class FakeSpokes:
                 yield "data: [DONE]\n\n"
             return Response(gen(), mimetype="text/event-stream")
 
+        @app.route("/<host>/anix-upgrade/api/v1/health")
+        def health(host):
+            if host == "old-box":
+                return "Not Found", 404
+            if host == "jetson":
+                return jsonify({"error": "bitd is not installed on this machine"}), 404
+            return jsonify({"checks": [{"name": "internet", "state": "STATE_PASSED"}]})
+
         self.port = _free_port()
         self.server = make_server("127.0.0.1", self.port, app, threaded=True)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -98,6 +106,7 @@ def client(tmp_path, fake):
         "jetson": {"ip": "192.0.2.20", "home": "/", "upgrade": "/anix-upgrade/"},
         "pi": {"ip": "fe80::3", "home": "/", "upgrade": None},
         "down-box": {"ip": "192.0.2.30", "home": "/", "upgrade": "/anix-upgrade/"},
+        "old-box": {"ip": "192.0.2.40", "home": "/", "upgrade": "/anix-upgrade/"},
     })
     app = create_app(
         state_dir=state,
@@ -220,3 +229,21 @@ def test_machines_latest_unknown(tmp_path, fake):
     data = app.test_client().get("/api/machines").get_json()
     assert data["latest"] is None
     assert data["machines"][0]["behind_latest"] is None
+
+
+def test_health_proxies_spoke_checks(client):
+    resp = client.get("/api/health/ats.local")
+    assert resp.status_code == 200
+    assert resp.get_json() == {"host": "ats", "checks": [{"name": "internet", "state": "STATE_PASSED"}]}
+
+
+def test_health_errors(client):
+    assert client.get("/api/health/pi").status_code == 404  # no upgrade UI
+    assert client.get("/api/health/ghost").status_code == 404
+    resp = client.get("/api/health/jetson")  # spoke without bitd
+    assert resp.status_code == 404
+    assert "not installed" in resp.get_json()["error"]
+    assert client.get("/api/health/down-box").status_code == 503
+    resp = client.get("/api/health/old-box")  # spoke predates the health API
+    assert resp.status_code == 404
+    assert "upgrade it" in resp.get_json()["error"]
