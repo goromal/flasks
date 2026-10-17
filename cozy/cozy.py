@@ -687,6 +687,18 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         queue_store.remove_job(data.get("id") or "")
         return flask.jsonify({"ok": True})
 
+    @bp.route("/api/queue/cancel", methods=["POST"])
+    @flask_login.login_required
+    def queue_cancel():
+        err = _queue_or_503()
+        if err:
+            return err
+        data = flask.request.get_json(force=True, silent=True) or {}
+        state = scheduler.cancel(data.get("id") or "")
+        if state is None:
+            return flask.jsonify({"error": "no pending or running job"}), 404
+        return flask.jsonify({"ok": True, "state": state})
+
     @bp.route("/api/queue/start", methods=["POST"])
     @flask_login.login_required
     def queue_start():

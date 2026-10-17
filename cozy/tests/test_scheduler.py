@@ -26,7 +26,7 @@ def _make(tmp_path, execute, gaps):
 def test_runs_jobs_in_order_and_records(tmp_path):
     order = []
 
-    def execute(client, graph, cid, on_progress=None, on_prompt_id=None):
+    def execute(client, graph, cid, on_progress=None, on_prompt_id=None, on_events=None):
         order.append(cid)
         return b"IMG"
 
@@ -42,7 +42,7 @@ def test_runs_jobs_in_order_and_records(tmp_path):
 def test_continue_on_failure(tmp_path):
     calls = []
 
-    def execute(client, graph, cid, on_progress=None, on_prompt_id=None):
+    def execute(client, graph, cid, on_progress=None, on_prompt_id=None, on_events=None):
         calls.append(1)
         if len(calls) == 1:
             raise runner.RunnerError("boom")
@@ -59,7 +59,7 @@ def test_continue_on_failure(tmp_path):
 def test_gap_between_but_not_after_last(tmp_path):
     gaps = []
 
-    def execute(client, graph, cid, on_progress=None, on_prompt_id=None):
+    def execute(client, graph, cid, on_progress=None, on_prompt_id=None, on_events=None):
         return b"IMG"
 
     store, sched = _make(tmp_path, execute, gaps)
@@ -77,7 +77,7 @@ def test_resume_finalizes_leftover_current(tmp_path):
                        "started_at": eta.now_iso()}
     store._write(data)
 
-    def execute(client, graph, cid, on_progress=None, on_prompt_id=None):
+    def execute(client, graph, cid, on_progress=None, on_prompt_id=None, on_events=None):
         return b"IMG"
 
     _, sched = _make(tmp_path, execute, [])
@@ -93,7 +93,7 @@ def test_remote_edit_job_staged_by_default(tmp_path, monkeypatch):
     # for "edit workflow requires an input image" on remote edit queue jobs.
     seen = {}
 
-    def fake_execute(client, graph, cid, on_progress=None, on_prompt_id=None):
+    def fake_execute(client, graph, cid, on_progress=None, on_prompt_id=None, on_events=None):
         return b"IMG"
 
     def fake_load_patch(path, prompt, w, h, image=None, basename=None):
@@ -134,7 +134,7 @@ def test_cropped_queue_job_writes_composite_and_crop(tmp_path):
     src = tmp_path / "a.png"
     src.write_bytes(_png((200, 160), (10, 20, 30)))
 
-    def execute(client, graph, cid, on_progress=None, on_prompt_id=None):
+    def execute(client, graph, cid, on_progress=None, on_prompt_id=None, on_events=None):
         return _png((64, 64), (200, 100, 50))
 
     store, sched = _make(tmp_path, execute, [])
@@ -158,7 +158,7 @@ def test_queue_job_basename_reaches_the_graph_and_the_composite(tmp_path):
     outdir = tmp_path / "out"
     seen = {}
 
-    def execute(client, graph, cid, on_progress=None, on_prompt_id=None):
+    def execute(client, graph, cid, on_progress=None, on_prompt_id=None, on_events=None):
         return _png((64, 64), (200, 100, 50))
 
     def load_patch(path, prompt, w, h, image=None, basename=None):
@@ -185,7 +185,7 @@ def test_staged_crop_is_deleted_after_the_job(tmp_path):
     src = tmp_path / "a.png"
     src.write_bytes(_png((200, 160), (10, 20, 30)))
 
-    def execute(client, graph, cid, on_progress=None, on_prompt_id=None):
+    def execute(client, graph, cid, on_progress=None, on_prompt_id=None, on_events=None):
         return _png((64, 64), (1, 2, 3))
 
     store, sched = _make(tmp_path, execute, [])
@@ -200,7 +200,7 @@ def test_cropped_queue_job_records_rect_area_as_eta_pixels(tmp_path):
     src = tmp_path / "a.png"
     src.write_bytes(_png((200, 160), (10, 20, 30)))
 
-    def execute(client, graph, cid, on_progress=None, on_prompt_id=None):
+    def execute(client, graph, cid, on_progress=None, on_prompt_id=None, on_events=None):
         return _png((64, 64), (1, 2, 3))
 
     store, sched = _make(tmp_path, execute, [])
@@ -216,7 +216,7 @@ def test_queue_cropped_job_saves_the_composite_to_the_output_dir(tmp_path):
     src = tmp_path / "a.png"
     src.write_bytes(_png((200, 160), (10, 20, 30)))
 
-    def execute(client, graph, cid, on_progress=None, on_prompt_id=None):
+    def execute(client, graph, cid, on_progress=None, on_prompt_id=None, on_events=None):
         return _png((64, 64), (200, 100, 50))
 
     store, sched = _make(tmp_path, execute, [])
@@ -260,7 +260,7 @@ def test_oversize_whole_image_queue_job_is_fitted_and_reaped(tmp_path):
     (tmp_path / "big.png").write_bytes(_noisy_png((600, 600)))
     seen = {}
 
-    def execute(client, graph, cid, on_progress=None, on_prompt_id=None):
+    def execute(client, graph, cid, on_progress=None, on_prompt_id=None, on_events=None):
         return _png((64, 64), (1, 2, 3))
 
     def load_patch(path, prompt, w, h, image=None, basename=None):
@@ -283,7 +283,7 @@ def test_oversize_whole_image_queue_job_is_fitted_and_reaped(tmp_path):
 def test_oversize_cropped_queue_job_composites_into_a_shrunk_canvas(tmp_path):
     (tmp_path / "big.png").write_bytes(_noisy_png((600, 600)))
 
-    def execute(client, graph, cid, on_progress=None, on_prompt_id=None):
+    def execute(client, graph, cid, on_progress=None, on_prompt_id=None, on_events=None):
         return _png((64, 64), (200, 100, 50))
 
     store, sched = _make_bounded(tmp_path, execute, 20 * 1024)
@@ -301,7 +301,7 @@ def test_whole_image_queue_job_within_budget_is_untouched(tmp_path):
     (tmp_path / "small.png").write_bytes(_png((64, 64), (10, 20, 30)))
     seen = {}
 
-    def execute(client, graph, cid, on_progress=None, on_prompt_id=None):
+    def execute(client, graph, cid, on_progress=None, on_prompt_id=None, on_events=None):
         return _png((64, 64), (1, 2, 3))
 
     def load_patch(path, prompt, w, h, image=None, basename=None):
@@ -319,7 +319,7 @@ def test_whole_image_queue_job_within_budget_is_untouched(tmp_path):
 
 
 def test_non_edit_queue_job_is_untouched(tmp_path):
-    def execute(client, graph, cid, on_progress=None, on_prompt_id=None):
+    def execute(client, graph, cid, on_progress=None, on_prompt_id=None, on_events=None):
         return b"IMG"
 
     store, sched = _make_bounded(tmp_path, execute, 20 * 1024)
@@ -329,3 +329,87 @@ def test_non_edit_queue_job_is_untouched(tmp_path):
     _drain(sched)
     res = store.read()["results"][0]
     assert res["status"] == "success"
+
+
+class _CancelClient:
+    def __init__(self):
+        self.interrupted = []
+
+    def interrupt(self, prompt_id):
+        self.interrupted.append(prompt_id)
+
+
+class _AbortableEvents:
+    def __init__(self):
+        self.aborted = False
+
+    def abort(self):
+        self.aborted = True
+
+
+def _make_cancel(tmp_path, execute):
+    store = queue_store.QueueStore(str(tmp_path))
+    client = _CancelClient()
+    sched = queue_store.Scheduler(
+        store, client=client, workflow_dir=str(tmp_path),
+        workflow_kinds={}, input_dir=str(tmp_path), output_dir=str(tmp_path),
+        run_lock=runner.RunLock(), rest_gap=30, execute=execute,
+        sleep=lambda s: None, load_patch=lambda *a, **k: ({}, 400, 800))
+    return store, sched, client
+
+
+def test_cancel_running_job_interrupts_and_records_cancelled(tmp_path):
+    events = _AbortableEvents()
+    holder = {}
+
+    def execute(client, graph, cid, on_progress=None, on_prompt_id=None,
+                on_events=None):
+        if holder.get("ran"):
+            return b"IMG"
+        holder["ran"] = True
+        on_events(events)
+        on_prompt_id("pid-1")
+        assert holder["sched"].cancel(holder["jid"]) == "cancelling"
+        assert events.aborted
+        raise RuntimeError("socket closed")
+
+    store, sched, client = _make_cancel(tmp_path, execute)
+    holder["sched"] = sched
+    holder["jid"] = store.add_job({"workflow": "imggen"})
+    other = store.add_job({"workflow": "imggen"})
+    _drain(sched)
+    results = store.read()["results"]
+    assert client.interrupted == ["pid-1"]
+    assert [(r["id"], r["status"]) for r in results][0] == (holder["jid"], "cancelled")
+    # The cancel targets only its own job; the queue keeps draining.
+    assert results[1]["id"] == other and results[1]["status"] == "success"
+
+
+def test_cancel_before_prompt_id_interrupts_once_submitted(tmp_path):
+    events = _AbortableEvents()
+    holder = {}
+
+    def execute(client, graph, cid, on_progress=None, on_prompt_id=None,
+                on_events=None):
+        assert holder["sched"].cancel(holder["jid"]) == "cancelling"
+        assert client.interrupted == []
+        on_events(events)
+        assert events.aborted
+        on_prompt_id("pid-2")
+        raise RuntimeError("socket closed")
+
+    store, sched, client = _make_cancel(tmp_path, execute)
+    holder["sched"] = sched
+    holder["jid"] = store.add_job({"workflow": "imggen"})
+    _drain(sched)
+    assert client.interrupted == ["pid-2"]
+    assert store.read()["results"][0]["status"] == "cancelled"
+
+
+def test_cancel_pending_job_removes_it(tmp_path):
+    store, sched, client = _make_cancel(tmp_path, lambda *a, **k: b"IMG")
+    jid = store.add_job({"workflow": "imggen"})
+    assert sched.cancel(jid) == "removed"
+    assert store.read()["jobs"] == []
+    assert sched.cancel(jid) is None
+    assert client.interrupted == []

@@ -60,23 +60,28 @@ def fetch_image(client, prompt_id):
 
 
 def execute(client, graph, client_id, on_progress=None, on_prompt_id=None,
-            sleep=time.sleep, oom_retries=1):
+            sleep=time.sleep, oom_retries=1, on_events=None):
     """Submit graph, follow progress to completion, return the output image
-    bytes. Raises RunnerError on execution error or missing output. A CUDA
-    OOM is retried up to oom_retries times before it is raised."""
+    bytes. Raises RunnerError on execution error, interruption, or missing
+    output. A CUDA OOM is retried up to oom_retries times before it is raised.
+    on_events receives the event stream before submission so a canceller can
+    abort() a blocked recv."""
     for attempt in range(oom_retries + 1):
         try:
             return _execute_once(client, graph, client_id, on_progress,
-                                 on_prompt_id, sleep)
+                                 on_prompt_id, sleep, on_events)
         except OutOfMemoryError:
             if attempt == oom_retries:
                 raise
 
 
-def _execute_once(client, graph, client_id, on_progress, on_prompt_id, sleep):
+def _execute_once(client, graph, client_id, on_progress, on_prompt_id, sleep,
+                  on_events=None):
     client.free()
     events = client.connect_events(client_id)
     try:
+        if on_events:
+            on_events(events)
         prompt_id = client.submit(graph, client_id)
         if on_prompt_id:
             on_prompt_id(prompt_id)
@@ -92,6 +97,8 @@ def _execute_once(client, graph, client_id, on_progress, on_prompt_id, sleep):
             elif mtype == "execution_error" and data.get("prompt_id") == prompt_id:
                 err = OutOfMemoryError if _is_oom(data) else RunnerError
                 raise err(str(data.get("exception_message", "execution error")))
+            elif mtype == "execution_interrupted" and data.get("prompt_id") == prompt_id:
+                raise RunnerError("interrupted")
             elif mtype == "executing" and data.get("node") is None \
                     and data.get("prompt_id") == prompt_id:
                 break

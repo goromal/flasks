@@ -1162,6 +1162,9 @@
                 if (j.status === "failed") {
                     cap.className = "failed";
                     cap.textContent = j.workflow + " FAILED: " + (j.error || "error");
+                } else if (j.status === "cancelled") {
+                    cap.className = "failed";
+                    cap.textContent = j.workflow + " CANCELLED";
                 } else {
                     cap.textContent = j.workflow + "  " + formatDuration(j.duration);
                 }

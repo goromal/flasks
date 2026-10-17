@@ -784,6 +784,9 @@ def queue_ctx(tmp_path, monkeypatch):
         def stop(self):
             self.started = False
 
+        def cancel(self, job_id):
+            return qs.cancel_job(job_id)[0]
+
         def is_active(self):
             return qs.read().get("active", False)
 
@@ -858,6 +861,17 @@ def test_queue_remove_and_clear(queue_ctx):
     assert c.post("/cozy/api/queue/remove", json={"id": jid}).status_code == 200
     assert qs.read()["jobs"] == []
     assert c.post("/cozy/api/queue/clear").status_code == 200
+
+
+def test_queue_cancel_removes_pending_and_404s_unknown(queue_ctx):
+    c, qs, sched, run_lock = queue_ctx
+    _login(c)
+    jid = c.post("/cozy/api/queue/add", json={"workflow": "imggen",
+                 "prompt": "p", "width": 400, "height": 800}).get_json()["id"]
+    r = c.post("/cozy/api/queue/cancel", json={"id": jid})
+    assert r.status_code == 200 and r.get_json()["state"] == "removed"
+    assert qs.read()["jobs"] == []
+    assert c.post("/cozy/api/queue/cancel", json={"id": jid}).status_code == 404
 
 
 def test_index_renders_with_queue_tabs(queue_ctx):

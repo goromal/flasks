@@ -19,6 +19,13 @@ class WsEvents:
                 continue
             return json.loads(msg)
 
+    def abort(self):
+        """Unblock a recv() waiting in another thread."""
+        try:
+            self._ws.abort()
+        except Exception:
+            pass
+
     def close(self):
         try:
             self._ws.close()
@@ -61,6 +68,24 @@ class ComfyUIClient:
                 resp.read()
         except Exception:
             pass
+
+    def interrupt(self, prompt_id):
+        """Stop prompt_id whether it is still queued in ComfyUI or running.
+
+        Deleting from ComfyUI's pending queue covers a prompt not yet picked
+        up; /interrupt with a prompt_id only stops that prompt if it is the one
+        executing. Best-effort: never raises."""
+        for path, body in (("/queue", {"delete": [prompt_id]}),
+                           ("/interrupt", {"prompt_id": prompt_id})):
+            req = urllib.request.Request(
+                self.base_url + path, data=json.dumps(body).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            try:
+                with urllib.request.urlopen(req) as resp:
+                    resp.read()
+            except Exception:
+                pass
 
     def history(self, prompt_id):
         with urllib.request.urlopen(self.base_url + "/history/" + prompt_id) as resp:

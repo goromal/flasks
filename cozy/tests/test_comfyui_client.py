@@ -54,3 +54,15 @@ def test_events_recv_skips_binary():
         ev = c.connect_events("cid")
         assert ev.recv() == {"type": "progress"}
     fake_ws.connect.assert_called_once()
+
+
+def test_interrupt_deletes_queued_and_interrupts_running_best_effort():
+    c = comfyui_client.ComfyUIClient("http://h:8188")
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=[OSError("down"), _resp(b"")]) as uo:
+        c.interrupt("pid")
+    reqs = [call[0][0] for call in uo.call_args_list]
+    assert [r.full_url for r in reqs] == ["http://h:8188/queue",
+                                         "http://h:8188/interrupt"]
+    assert json.loads(reqs[0].data) == {"delete": ["pid"]}
+    assert json.loads(reqs[1].data) == {"prompt_id": "pid"}
