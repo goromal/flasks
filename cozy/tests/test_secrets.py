@@ -24,9 +24,18 @@ def test_load_secrets_missing_field(tmp_path):
         cozy._load_secrets(str(p))
 
 
-def test_load_secrets_ok(tmp_path):
+def test_load_secrets_missing_username(tmp_path):
     p = tmp_path / "s.json"
     p.write_text(json.dumps({"secret_key": "abc", "password_hash": "scrypt:x"}))
+    with pytest.raises(SystemExit):
+        cozy._load_secrets(str(p))
+
+
+def test_load_secrets_ok(tmp_path):
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps({"username": "someone", "secret_key": "abc",
+                             "password_hash": "scrypt:x"}))
     data = cozy._load_secrets(str(p))
+    assert data["username"] == "someone"
     assert data["secret_key"] == "abc"
     assert data["password_hash"] == "scrypt:x"

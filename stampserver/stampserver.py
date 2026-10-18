@@ -75,7 +75,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--port", action="store", type=int, default=5000, help="Port to run the server on")
 parser.add_argument("--subdomain", action="store", type=str, default="/", help="Subdomain for a reverse proxy")
 parser.add_argument("--data-dir", action="store", type=str, default="", help="Directory containing the stampable elements")
-parser.add_argument("--secrets-file", action="store", type=str, required=True, help="Path to JSON file with secret_key and password_hash")
+parser.add_argument("--secrets-file", action="store", type=str, required=True, help="Path to JSON file with username, secret_key and password_hash")
 args = parser.parse_args()
 
 
@@ -87,7 +87,7 @@ def _load_secrets(path):
         sys.exit(f"stampserver: cannot read secrets file {path}: {e}")
     except json.JSONDecodeError as e:
         sys.exit(f"stampserver: invalid JSON in secrets file {path}: {e}")
-    missing = [k for k in ("secret_key", "password_hash") if not data.get(k)]
+    missing = [k for k in ("username", "secret_key", "password_hash") if not data.get(k)]
     if missing:
         sys.exit(f"stampserver: secrets file {path} missing keys: {', '.join(missing)}")
     return data
@@ -113,7 +113,7 @@ class User(flask_login.UserMixin):
     def check_password(self, password):
         return check_password_hash(_secrets["password_hash"], password)
     def get_id(self):
-        return "anonymous"
+        return _secrets["username"]
 
 user = User()
 
@@ -267,7 +267,7 @@ def file_url(name, ftype):
 @login_manager.user_loader
 def load_user(user_id):
     global user
-    if user_id == "anonymous":
+    if user_id == user.get_id():
         return user
     else:
         return None
