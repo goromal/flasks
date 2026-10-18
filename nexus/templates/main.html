@@ -81,8 +81,8 @@
           <div class="col-sm-4">
             <label class="form-label small fw-semibold" for="source-type">Upgrade source</label>
             <select class="form-select form-select-sm" id="source-type" onchange="onSourceTypeChange()">
+              <option value="version" selected>Version tag</option>
               <option value="default">Default (latest release)</option>
-              <option value="version">Version tag</option>
               <option value="branch">Branch</option>
               <option value="commit">Commit SHA</option>
               <option value="source">Source tree path</option>
@@ -137,6 +137,8 @@ let stale = false;
 const CACHE_KEY = `nexus-machines:${BASE}`;
 const LATEST_KEY = `nexus-latest:${BASE}`;
 let logSource = null;
+// The last version auto-filled into the tag field; a user-typed value is never overwritten.
+let autoVersion = '';
 const ansi = window.AnsiUp ? new AnsiUp() : null;
 
 const PLACEHOLDERS = {
@@ -153,6 +155,14 @@ function onSourceTypeChange() {
     $('source-value-label').textContent = PLACEHOLDERS[t][0];
     $('source-value').placeholder = PLACEHOLDERS[t][1];
   }
+  fillLatestVersion();
+}
+
+function fillLatestVersion() {
+  const input = $('source-value');
+  if ($('source-type').value !== 'version' || !latest) return;
+  if (input.value.trim() !== '' && input.value.trim() !== autoVersion) return;
+  input.value = autoVersion = latest;
 }
 
 function esc(s) {
@@ -177,6 +187,7 @@ function versionMark(m) {
 function renderLatest() {
   $('latest-badge').hidden = !latest;
   $('latest-badge').textContent = latest ? `master: ${latest}` : '';
+  fillLatestVersion();
 }
 
 function selectable(m) { return !stale && m.online && m.can_upgrade && m.upgrade_status !== 'running'; }
