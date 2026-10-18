@@ -7,6 +7,8 @@ import queue_store
 import runner
 import wormhole as wormhole_mod
 
+USERNAME = "someone"
+
 
 class FakeStore:
     def __init__(self, state_dir="/tmp"):
@@ -66,7 +68,7 @@ class FakeStore:
 @pytest.fixture
 def client(tmp_path):
     store = FakeStore()
-    app = cozy.create_app(store=store, workflows=["imggen", "imggen2"],
+    app = cozy.create_app(username=USERNAME, store=store, workflows=["imggen", "imggen2"],
                           workflow_dir=str(tmp_path), subdomain="/cozy")
     app.config["TESTING"] = True
     app.config["WTF_CSRF_ENABLED"] = False
@@ -76,7 +78,7 @@ def client(tmp_path):
 
 
 def _login(c):
-    return c.post("/cozy/login", data={"username": "anonymous", "password": "test"},
+    return c.post("/cozy/login", data={"username": USERNAME, "password": "test"},
                   follow_redirects=False)
 
 
@@ -88,6 +90,14 @@ def test_index_requires_login(client):
 def test_status_requires_login(client):
     r = client.get("/cozy/api/status", follow_redirects=False)
     assert r.status_code in (301, 302, 401)
+
+
+def test_login_uses_configured_username(client, monkeypatch):
+    monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
+    client.post("/cozy/login", data={"username": "not-" + USERNAME, "password": "test"})
+    assert client.get("/cozy/api/status").status_code == 401
+    _login(client)
+    assert client.get("/cozy/api/status").status_code == 200
 
 
 def test_unauthenticated_api_gets_json_401_not_a_login_page(client):
@@ -120,7 +130,7 @@ def token_app(tmp_path):
         def is_active(self):
             return False
 
-    app = cozy.create_app(store=store, workflows=["imggen"],
+    app = cozy.create_app(username=USERNAME, store=store, workflows=["imggen"],
                           workflow_dir=str(tmp_path), subdomain="/cozy",
                           input_dir=str(tmp_path), output_dir=str(tmp_path),
                           workflow_kinds={"imggen": "generate"},
@@ -278,7 +288,7 @@ def edit_client(tmp_path, monkeypatch):
     (out_dir / "gen.png").write_bytes(b"\x89PNG\r\n")
     (tmp_path / "secret.txt").write_text("nope")
     (tmp_path / "imgedit.api.json").write_text("{}")
-    app = cozy.create_app(store=store, workflows=["imggen", "imgedit"],
+    app = cozy.create_app(username=USERNAME, store=store, workflows=["imggen", "imgedit"],
                           workflow_dir=str(tmp_path), subdomain="/cozy",
                           input_dir=str(img_dir), output_dir=str(out_dir),
                           workflow_kinds={"imggen": "generate", "imgedit": "edit"})
@@ -344,7 +354,7 @@ def test_edit_generate_rejects_output_traversal(edit_client):
 
 def _restart_client(tmp_path, monkeypatch, restart_cmd):
     monkeypatch.setattr(cozy, "_check_password", lambda pw: True)
-    app = cozy.create_app(store=FakeStore(), workflows=["imggen"],
+    app = cozy.create_app(username=USERNAME, store=FakeStore(), workflows=["imggen"],
                           workflow_dir=str(tmp_path), subdomain="/cozy",
                           restart_cmd=restart_cmd)
     app.config["TESTING"] = True
@@ -390,7 +400,7 @@ def _flush_client(tmp_path, monkeypatch):
     in_dir.mkdir()
     out_dir = tmp_path / "output"
     out_dir.mkdir()
-    app = cozy.create_app(store=FakeStore(), workflows=["imggen"],
+    app = cozy.create_app(username=USERNAME, store=FakeStore(), workflows=["imggen"],
                           workflow_dir=str(tmp_path), subdomain="/cozy",
                           input_dir=str(in_dir), output_dir=str(out_dir))
     app.config["TESTING"] = True
@@ -417,7 +427,7 @@ def test_flush_runs_existing_scripts_only(tmp_path, monkeypatch):
     assert r.status_code == 200 and r.get_json() == {"ok": True, "ran": 0}
     assert calls == []
     # Only the input-dir script exists: run just that one.
-    script = c._in_dir / "flush.sh"
+    script = c._in_dir / ".flush.sh"
     script.write_text("#!/usr/bin/env bash\n")
     r = c.post("/cozy/api/flush")
     assert r.status_code == 200 and r.get_json()["ran"] == 1
@@ -428,7 +438,7 @@ def test_flush_reports_script_failure(tmp_path, monkeypatch):
     def boom(cmd, **kw):
         raise cozy.subprocess.CalledProcessError(1, cmd, stderr="disk full")
     c = _flush_client(tmp_path, monkeypatch)
-    (c._out_dir / "flush.sh").write_text("#!/usr/bin/env bash\n")
+    (c._out_dir / ".flush.sh").write_text("#!/usr/bin/env bash\n")
     monkeypatch.setattr(cozy.subprocess, "run", boom)
     _login(c)
     r = c.post("/cozy/api/flush")
@@ -487,7 +497,7 @@ def pdb_client(tmp_path, monkeypatch):
     fake = FakeWormhole()
     monkeypatch.setattr(cozy, "wormhole", fake)
     store = FakeStore()
-    app = cozy.create_app(store=store, workflows=["imggen"],
+    app = cozy.create_app(username=USERNAME, store=store, workflows=["imggen"],
                           workflow_dir=str(tmp_path), subdomain="/cozy",
                           prompt_db_dir="/default/prompts")
     app.config["TESTING"] = True
@@ -584,7 +594,7 @@ def remote_edit_client(tmp_path, monkeypatch):
     in_dir = tmp_path / "input"
     in_dir.mkdir()
     (tmp_path / "imgedit.api.json").write_text("{}")
-    app = cozy.create_app(store=store, workflows=["imgedit"],
+    app = cozy.create_app(username=USERNAME, store=store, workflows=["imgedit"],
                           workflow_dir=str(tmp_path), subdomain="/cozy",
                           input_dir=str(in_dir),
                           output_dir=str(tmp_path / "output"),
@@ -791,7 +801,7 @@ def queue_ctx(tmp_path, monkeypatch):
             return qs.read().get("active", False)
 
     sched = FakeSched()
-    app = cozy.create_app(store=store, workflows=["imggen", "imggen2"],
+    app = cozy.create_app(username=USERNAME, store=store, workflows=["imggen", "imggen2"],
                           workflow_dir=str(tmp_path), subdomain="/cozy",
                           input_dir=str(tmp_path), output_dir=str(tmp_path),
                           workflow_kinds={"imggen": "generate"},
@@ -963,7 +973,7 @@ def _edit_client(tmp_path, monkeypatch, size=(200, 160)):
     open(os.path.join(str(tmp_path), "edit.api.json"), "w").write("{}")
     open(os.path.join(str(tmp_path), "imggen.api.json"), "w").write("{}")
     store = FakeStore()
-    app = cozy.create_app(store=store, workflows=["edit", "imggen"],
+    app = cozy.create_app(username=USERNAME, store=store, workflows=["edit", "imggen"],
                           workflow_dir=str(tmp_path), subdomain="/cozy",
                           input_dir=str(indir), output_dir=str(tmp_path / "out"),
                           workflow_kinds={"edit": "edit"})
@@ -1045,7 +1055,7 @@ def test_image_kind_crop(tmp_path, monkeypatch):
     store.image_path = str(tmp_path / "output.png")
     store.crop_image_path = str(tmp_path / "output-crop.png")
     open(store.image_path, "wb").write(b"PRIMARY")
-    app = cozy.create_app(store=store, workflows=["imggen"],
+    app = cozy.create_app(username=USERNAME, store=store, workflows=["imggen"],
                           workflow_dir=str(tmp_path), subdomain="/cozy")
     app.config["TESTING"] = True
     app.config["WTF_CSRF_ENABLED"] = False
@@ -1074,7 +1084,7 @@ def test_queue_image_kind_crop(tmp_path, monkeypatch):
         run_lock=runner.RunLock(), rest_gap=0,
         execute=lambda *a, **k: b"X", sleep=lambda s: None,
         load_patch=lambda *a, **k: ({}, 400, 800))
-    app = cozy.create_app(store=FakeStore(), workflows=["imggen"],
+    app = cozy.create_app(username=USERNAME, store=FakeStore(), workflows=["imggen"],
                           workflow_dir=str(tmp_path), subdomain="/cozy",
                           queue_store=qs, scheduler=sched)
     app.config["TESTING"] = True
@@ -1106,7 +1116,7 @@ def test_queue_image_rejects_traversal(tmp_path, monkeypatch):
         run_lock=runner.RunLock(), rest_gap=0,
         execute=lambda *a, **k: b"X", sleep=lambda s: None,
         load_patch=lambda *a, **k: ({}, 400, 800))
-    app = cozy.create_app(store=FakeStore(), workflows=["imggen"],
+    app = cozy.create_app(username=USERNAME, store=FakeStore(), workflows=["imggen"],
                           workflow_dir=str(tmp_path), subdomain="/cozy",
                           queue_store=qs, scheduler=sched)
     app.config["TESTING"] = True
@@ -1252,7 +1262,7 @@ def _fit_client(tmp_path, monkeypatch, max_bytes):
     (indir / "a.png").write_bytes(_noisy_png((64, 64)))
     open(os.path.join(str(tmp_path), "edit.api.json"), "w").write("{}")
     store = FakeStore()
-    app = cozy.create_app(store=store, workflows=["edit"],
+    app = cozy.create_app(username=USERNAME, store=store, workflows=["edit"],
                           workflow_dir=str(tmp_path), subdomain="/cozy",
                           input_dir=str(indir), output_dir=str(tmp_path / "out"),
                           workflow_kinds={"edit": "edit"},

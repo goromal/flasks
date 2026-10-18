@@ -41,7 +41,7 @@ def _load_secrets(path):
         sys.exit(f"cozy: cannot read secrets file {path}: {e}")
     except json.JSONDecodeError as e:
         sys.exit(f"cozy: invalid JSON in secrets file {path}: {e}")
-    missing = [k for k in ("secret_key", "password_hash") if not data.get(k)]
+    missing = [k for k in ("username", "secret_key", "password_hash") if not data.get(k)]
     if missing:
         sys.exit(f"cozy: secrets file {path} missing keys: {', '.join(missing)}")
     return data
@@ -130,11 +130,14 @@ class LoginForm(flask_wtf.FlaskForm):
 
 
 class User(flask_login.UserMixin):
+    def __init__(self, username):
+        self.username = username
+
     def get_id(self):
-        return "anonymous"
+        return self.username
 
 
-def create_app(store, workflows, workflow_dir, subdomain="/cozy",
+def create_app(store, workflows, workflow_dir, username, subdomain="/cozy",
                input_dir=None, output_dir=None, workflow_kinds=None,
                secret_key=None, password_hash=None, restart_cmd=None,
                prompt_db_dir=None, queue_store=None, scheduler=None,
@@ -170,11 +173,11 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
         }), 413
 
     login_manager = flask_login.LoginManager()
-    user = User()
+    user = User(username)
 
     @login_manager.user_loader
     def load_user(user_id):
-        return user if user_id == "anonymous" else None
+        return user if user_id == user.get_id() else None
 
     @login_manager.request_loader
     def load_user_from_token(req):
@@ -784,16 +787,16 @@ def create_app(store, workflows, workflow_dir, subdomain="/cozy",
     @flask_login.login_required
     def flush():
         # Staged remote images and staged crops are cozy's own artifacts; remove
-        # them here rather than assuming the admin flush.sh scripts recurse into
+        # them here rather than assuming the admin .flush.sh scripts recurse into
         # subdirectories.
         for sub in ("wormhole", crop.CROP_SUBDIR, fit.SUBDIR):
             shutil.rmtree(os.path.join(input_dir, sub), ignore_errors=True)
-        # Run a flush.sh (if present) in the input and output dirs. The scripts
+        # Run a .flush.sh (if present) in the input and output dirs. The scripts
         # are placed there out-of-band by the admin; a missing one is a no-op, so
         # the button is always available and simply flushes whatever is wired up.
         ran = 0
         for d in (input_dir, output_dir):
-            script = os.path.join(d, "flush.sh")
+            script = os.path.join(d, ".flush.sh")
             if not os.path.isfile(script):
                 continue
             try:
@@ -840,7 +843,7 @@ def run():
                         help="Directory of saved prompt .txt files "
                              "(default <state-dir>/prompts)")
     parser.add_argument("--secrets-file", type=str, required=True,
-                        help="Path to JSON file with secret_key and password_hash")
+                        help="Path to JSON file with username, secret_key and password_hash")
     parser.add_argument("--comfyui-restart-cmd", type=str, default="",
                         help="Command run to restart ComfyUI (e.g. "
                              "'systemctl restart comfyui.service'); empty hides the restart button")
@@ -878,6 +881,7 @@ def run():
                      workflow_dir=workflow_dir, subdomain=args.subdomain,
                      input_dir=input_dir, output_dir=output_dir,
                      workflow_kinds=workflow_kinds,
+                     username=secrets["username"],
                      secret_key=secrets["secret_key"].encode(),
                      password_hash=secrets["password_hash"],
                      restart_cmd=restart_cmd,
