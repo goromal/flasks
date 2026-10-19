@@ -981,7 +981,7 @@
             <h2>Stamp Categories</h2>
             {% if stamps %}
             <input type="search" id="stampSearch" class="stamp-search"
-                   placeholder="Filter labels (use * as wildcard)…"
+                   placeholder="Filter labels…" autocomplete="off" spellcheck="false"
                    oninput="filterStamps(this.value)">
             {% endif %}
             <ul id="stampListUl">
@@ -1360,21 +1360,78 @@
 
         // ===== STAMP SEARCH =====
 
-        function filterStamps(query) {
-            const items = document.querySelectorAll('#stampListUl li[data-stamp]');
-            if (!query.trim()) {
-                items.forEach(li => li.style.display = '');
-                return;
+        let stampEntries = null;
+
+        function getStampEntries() {
+            if (!stampEntries) {
+                const ul = document.getElementById('stampListUl');
+                stampEntries = Array.from(ul.querySelectorAll('li[data-stamp]'), (li, i) => ({
+                    li, i, label: li.dataset.stamp, lower: li.dataset.stamp.toLowerCase(),
+                }));
             }
-            // Escape regex metacharacters then restore * as .*
-            const pattern = query.trim()
-                .split('*')
-                .map(s => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
-                .join('.*');
-            const re = new RegExp('^' + pattern + '$', 'i');
-            items.forEach(li => {
-                li.style.display = re.test(li.dataset.stamp) ? '' : 'none';
-            });
+            return stampEntries;
+        }
+
+        // Subsequence match; higher scores favor contiguous runs and word starts.
+        // Returns -1 when q is not a subsequence of s.
+        function fuzzyScore(q, s) {
+            let score = 0, run = 0, j = 0;
+            for (let k = 0; k < q.length; k++) {
+                const ch = q[k];
+                if (ch === ' ') continue;
+                const found = s.indexOf(ch, j);
+                if (found < 0) return -1;
+                run = found === j && k > 0 ? run + 1 : 0;
+                score += 1 + run * 2;
+                if (found === 0 || /[\s_\-.\/]/.test(s[found - 1])) score += 3;
+                j = found + 1;
+            }
+            return score - s.length * 0.01;
+        }
+
+        let stampFilterFrame = 0;
+
+        function filterStamps(query) {
+            cancelAnimationFrame(stampFilterFrame);
+            stampFilterFrame = requestAnimationFrame(() => applyStampFilter(query));
+        }
+
+        function applyStampFilter(query) {
+            const entries = getStampEntries();
+            const ul = document.getElementById('stampListUl');
+            const anchor = ul.querySelector(':scope > li:not([data-stamp])');
+            const trimmed = query.trim();
+            let ranked;
+            if (!trimmed) {
+                ranked = entries.map(e => ({ e, score: 0 }));
+            } else {
+                const quoted = trimmed.match(/^"(.*?)"?$/);
+                if (quoted) {
+                    ranked = entries.filter(e => e.label === quoted[1]).map(e => ({ e, score: 0 }));
+                } else {
+                    const q = trimmed.toLowerCase();
+                    ranked = [];
+                    for (const e of entries) {
+                        const score = fuzzyScore(q, e.lower);
+                        if (score >= 0) ranked.push({ e, score });
+                    }
+                    ranked.sort((a, b) => b.score - a.score || a.e.i - b.e.i);
+                }
+            }
+            const shown = new Set();
+            const frag = document.createDocumentFragment();
+            for (const { e } of ranked) {
+                shown.add(e);
+                e.li.style.display = '';
+                frag.appendChild(e.li);
+            }
+            for (const e of entries) {
+                if (!shown.has(e)) {
+                    e.li.style.display = 'none';
+                    frag.appendChild(e.li);
+                }
+            }
+            ul.insertBefore(frag, anchor);
         }
 
         function drawOverlay(canvas, rect, infoEl) {
