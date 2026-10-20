@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import shlex
 import subprocess
 
 from flask import Blueprint, Flask, Response, jsonify, render_template, request, send_file
@@ -9,6 +10,8 @@ from run_store import RunStore
 
 DEFAULT_STATE_DIR = "~/.local/state/anix-upgrade-ui"
 BITCTL_TIMEOUT_S = 5
+# Long enough for the 202 to reach Nexus before the network goes down.
+REBOOT_DELAY_S = 3
 
 
 def _read_file(path):
@@ -25,6 +28,14 @@ def current_version():
 
 def current_meta():
     return _read_file("~/.anix-meta")
+
+
+def read_uptime(path="/proc/uptime"):
+    """Whole seconds since boot, or None if unavailable."""
+    try:
+        return int(float(_read_file(path).split()[0]))
+    except (IndexError, ValueError):
+        return None
 
 
 def _build_cmd(upgrade_bin, version, commit, branch, source, local, boot):
@@ -63,13 +74,30 @@ def bit_checks(bitctl_bin):
         raise RuntimeError("bitctl returned invalid JSON")
 
 
+def schedule_reboot(reboot_cmd, log_path):
+    """Run reboot_cmd after REBOOT_DELAY_S in its own session, so neither this
+    request nor a restart of this service can cancel it. Raises OSError."""
+    with open(log_path, "ab") as log:
+        subprocess.Popen(
+            ["sh", "-c", f'sleep {REBOOT_DELAY_S}; exec "$@"', "reboot", *reboot_cmd],
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+
+
 def create_app(
     subdomain="",
     upgrade_bin="anix-upgrade",
     state_dir=DEFAULT_STATE_DIR,
     bitctl_bin=None,
+    uptime=read_uptime,
+    reboot_cmd=None,
+    reboot=schedule_reboot,
 ):
-    store = RunStore(os.path.expanduser(state_dir))
+    state_dir = os.path.expanduser(state_dir)
+    store = RunStore(state_dir)
     app = Flask(__name__)
     bp = Blueprint("anix_upgrade_ui", __name__, url_prefix=subdomain)
 
@@ -95,6 +123,7 @@ def create_app(
             "finished_at": state.get("finished_at"),
             "version": current_version(),
             "meta": current_meta(),
+            "uptime_s": uptime(),
         })
 
     # Read-only bitd results for Nexus; bitd's own gRPC port stays on loopback.
@@ -106,6 +135,18 @@ def create_app(
             return jsonify({"checks": bit_checks(bitctl_bin)})
         except RuntimeError as e:
             return jsonify({"error": str(e)}), 503
+
+    @bp.route("/api/v1/reboot", methods=["POST"])
+    def api_reboot():
+        if not reboot_cmd:
+            return jsonify({"error": "Reboot is not configured on this machine"}), 404
+        if store.read_state().get("status") == "running":
+            return jsonify({"error": "An upgrade is running; reboot after it finishes"}), 409
+        try:
+            reboot(reboot_cmd, os.path.join(state_dir, "reboot.log"))
+        except OSError as e:
+            return jsonify({"error": f"Could not schedule reboot: {e}"}), 500
+        return jsonify({"rebooting": True, "delay_s": REBOOT_DELAY_S}), 202
 
     @bp.route("/api/list-dirs", methods=["POST"])
     def list_dirs():
@@ -253,8 +294,20 @@ def main():
         default=None,
         help="Path to bitctl; enables the read-only health API",
     )
+    parser.add_argument(
+        "--reboot-cmd",
+        type=str,
+        default=None,
+        help="Command that reboots this machine; enables the reboot API",
+    )
     args = parser.parse_args()
-    app = create_app(args.subdomain, args.anix_upgrade_bin, args.state_dir, args.bitctl_bin)
+    app = create_app(
+        args.subdomain,
+        args.anix_upgrade_bin,
+        args.state_dir,
+        args.bitctl_bin,
+        reboot_cmd=shlex.split(args.reboot_cmd) if args.reboot_cmd else None,
+    )
     app.run(host="0.0.0.0", port=args.port, debug=False, threaded=True)
 
 

@@ -8,7 +8,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from anix_upgrade_ui import create_app
+import anix_upgrade_ui
+from anix_upgrade_ui import create_app, read_uptime, schedule_reboot
 
 
 def make_fake_bin(tmp_path, script):
@@ -45,6 +46,24 @@ def test_status_idle_initially(tmp_path):
     data = make_client(tmp_path).get("/status").get_json()
     assert data["running"] is False
     assert data["status"] == "idle"
+
+
+def test_status_reports_uptime(tmp_path):
+    app = create_app(
+        upgrade_bin=make_fake_bin(tmp_path, "echo done"),
+        state_dir=str(tmp_path / "state"),
+        uptime=lambda: 93784,
+    )
+    assert app.test_client().get("/status").get_json()["uptime_s"] == 93784
+
+
+def test_read_uptime(tmp_path):
+    path = tmp_path / "uptime"
+    path.write_text("93784.52 371234.10\n")
+    assert read_uptime(str(path)) == 93784
+    assert read_uptime(str(tmp_path / "missing")) is None
+    (tmp_path / "empty").write_text("")
+    assert read_uptime(str(tmp_path / "empty")) is None
 
 
 def test_run_returns_202_then_success(tmp_path):
@@ -249,3 +268,52 @@ def test_health_bitctl_failure_is_503(tmp_path):
 def test_health_without_bitctl_is_404(tmp_path):
     client = make_client(tmp_path)
     assert client.get("/api/v1/health").status_code == 404
+
+
+def make_reboot_client(tmp_path, script="echo done", reboot_cmd=("fake-reboot",)):
+    calls = []
+    app = create_app(
+        upgrade_bin=make_fake_bin(tmp_path, script),
+        state_dir=str(tmp_path / "state"),
+        reboot_cmd=list(reboot_cmd) if reboot_cmd else None,
+        reboot=lambda cmd, log_path: calls.append((cmd, log_path)),
+    )
+    return app.test_client(), calls
+
+
+def test_reboot_schedules_command(tmp_path):
+    client, calls = make_reboot_client(tmp_path)
+    resp = client.post("/api/v1/reboot")
+    assert resp.status_code == 202
+    assert resp.get_json()["rebooting"] is True
+    assert calls == [(["fake-reboot"], str(tmp_path / "state" / "reboot.log"))]
+
+
+def test_reboot_unconfigured_returns_404(tmp_path):
+    client, calls = make_reboot_client(tmp_path, reboot_cmd=None)
+    resp = client.post("/api/v1/reboot")
+    assert resp.status_code == 404
+    assert "not configured" in resp.get_json()["error"]
+    assert calls == []
+
+
+def test_reboot_refused_while_upgrading(tmp_path):
+    client, calls = make_reboot_client(tmp_path, script="sleep 2")
+    assert client.post("/api/v1/run", json={}).status_code == 202
+    resp = client.post("/api/v1/reboot")
+    assert resp.status_code == 409
+    assert calls == []
+    wait_status(client, "success")
+    assert client.post("/api/v1/reboot").status_code == 202
+
+
+def test_schedule_reboot_runs_detached_after_delay(tmp_path, monkeypatch):
+    monkeypatch.setattr(anix_upgrade_ui, "REBOOT_DELAY_S", 0)
+    marker = tmp_path / "rebooted"
+    log = tmp_path / "reboot.log"
+    schedule_reboot(["sh", "-c", f"echo bye; touch {marker}"], str(log))
+    deadline = time.monotonic() + 5
+    while not marker.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert marker.exists()
+    assert log.read_text().strip() == "bye"

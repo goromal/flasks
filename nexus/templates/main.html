@@ -21,6 +21,14 @@
     .host-name { font-weight: 600; font-size: 1.15rem; text-decoration: none; }
     .host-name:hover { text-decoration: underline; }
     .home-btn { font-weight: 600; padding: .45rem 1.1rem; }
+    /* One line of machine tabs; scrolls sideways instead of wrapping on a phone. */
+    #log-tabs { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; }
+    #log-tabs .nav-link { white-space: nowrap; padding: .35rem .75rem; }
+    /* The active tab shares the log box's dark fill so it reads as attached. */
+    #log-tabs .nav-link.active { background: #1e1e1e; color: #d4d4d4; border-color: #1e1e1e; }
+    /* anix-theme.css restyles .log-box with its own palette; match it when present. */
+    :root[data-anix-theme] #log-tabs .nav-link.active { background: var(--anix-surface-alt); color: var(--anix-text); border-color: var(--anix-border) var(--anix-border) var(--anix-surface-alt); }
+    #log-tabs:not(:empty) + .log-box { border-top-left-radius: 0; }
     .row-offline .host-name { opacity: .6; }
     /* Last-known list shown from the browser cache until the first live response. */
     .stale #machines { opacity: .55; }
@@ -34,7 +42,7 @@
     @media (max-width: 575px) {
       .trunc { max-width: 5.5rem; }
       .machine-table > :not(caption) > * > * { padding: .4rem .3rem; }
-      /* Stack Home/Health/Log/Forget so the table fits a phone without scrolling. */
+      /* Stack Home/Health/Reboot/Forget so the table fits a phone without scrolling. */
       .row-actions { flex-direction: column; align-items: stretch; }
       .home-btn { padding: .4rem .6rem; }
     }
@@ -109,11 +117,9 @@
     </div>
   </div>
 
-  <div class="d-flex align-items-center gap-2 mb-2">
-    <h5 class="mb-0">Log</h5>
-    <span id="log-host" class="text-muted small"></span>
-  </div>
-  <div class="log-box" id="log">Select a machine's "Log" to follow its upgrade output.</div>
+  <h5 class="mb-2">Log</h5>
+  <ul class="nav nav-tabs border-bottom-0" id="log-tabs" role="tablist"></ul>
+  <div class="log-box" id="log">Pick a machine tab to follow its upgrade output.</div>
 </div>
 
 <dialog id="health-dialog">
@@ -137,6 +143,10 @@ let stale = false;
 const CACHE_KEY = `nexus-machines:${BASE}`;
 const LATEST_KEY = `nexus-latest:${BASE}`;
 let logSource = null;
+let logHost = null;
+// host -> ms timestamp of a reboot request, until the machine reports a fresh uptime.
+const rebooting = {};
+const REBOOT_GIVE_UP_MS = 10 * 60 * 1000;
 // The last version auto-filled into the tag field; a user-typed value is never overwritten.
 let autoVersion = '';
 const ansi = window.AnsiUp ? new AnsiUp() : null;
@@ -190,16 +200,37 @@ function renderLatest() {
   fillLatestVersion();
 }
 
+function fmtUptime(s) {
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+}
+
 function selectable(m) { return !stale && m.online && m.can_upgrade && m.upgrade_status !== 'running'; }
 
+// A reboot is done once the machine answers with an uptime shorter than the
+// time since the request (or we stop waiting).
+function settleReboots() {
+  const now = Date.now();
+  for (const m of machines) {
+    const t = rebooting[m.host];
+    if (t === undefined) continue;
+    const back = m.online && m.uptime_s != null && m.uptime_s * 1000 < now - t;
+    if (back || now - t > REBOOT_GIVE_UP_MS) delete rebooting[m.host];
+  }
+}
+
 function render() {
+  settleReboots();
   const rows = machines.map(m => {
     if (!selectable(m)) selected.delete(m.host);
     const homeLink = `<a class="btn ${m.online ? 'btn-primary' : 'btn-outline-primary'} home-btn" href="${esc(m.home_url)}" title="${esc(m.home_url)}">Home &rarr;</a>`;
-    const logBtn = m.can_upgrade && m.online && m.run_id
-      ? `<button class="btn btn-sm btn-outline-secondary" onclick="followLog('${esc(m.host)}')">Log</button>` : '';
     const healthBtn = m.can_upgrade && m.online && !stale
       ? `<button class="btn btn-sm btn-outline-success" onclick="showHealth('${esc(m.host)}')" title="bitd check results">Health</button>` : '';
+    const isRebooting = m.host in rebooting;
+    const rebootBtn = m.can_upgrade && m.online && !stale
+      ? `<button class="btn btn-sm btn-outline-danger" onclick="reboot('${esc(m.host)}')"
+           ${isRebooting || m.upgrade_status === 'running' ? 'disabled' : ''}
+           title="${m.upgrade_status === 'running' ? 'Wait for the upgrade to finish' : 'Reboot this machine'}">Reboot</button>` : '';
     const forgetBtn = !m.online && !m.is_self
       ? `<button class="btn btn-sm btn-outline-danger" onclick="forget('${esc(m.host)}')" title="Remove from Nexus until it is rediscovered">Forget</button>` : '';
     // The host name and Home both open home_url (the IP when linkable); the
@@ -209,6 +240,9 @@ function render() {
     const others = (m.other_ips || []).map(o => o.url
       ? `<a class="small text-muted" href="${esc(o.url)}">${esc(o.ip)}</a>`
       : `<span class="small text-muted">${esc(o.ip)}</span>`).join(' · ');
+    // Cached (stale) rows would show an outdated uptime, so only show it live.
+    const up = m.online && !stale && m.uptime_s != null
+      ? `<span class="small text-muted" title="Uptime">up ${fmtUptime(m.uptime_s)}</span>` : '';
     const seen = !m.online && m.last_seen ? `<div class="small text-muted">last seen ${esc(m.last_seen)}</div>` : '';
     return `<tr class="${m.online ? '' : 'row-offline'}">
       <td><input class="form-check-input" type="checkbox" ${selectable(m) ? '' : 'disabled'}
@@ -216,10 +250,11 @@ function render() {
       <td><span class="dot ${m.online ? 'on' : 'off'} me-2" title="${m.online ? 'online' : 'offline'}"></span>
           <a class="host-name" href="${esc(m.home_url)}">${esc(m.host)}</a>${m.is_self ? ' <span class="badge bg-info">hub</span>' : ''}
           <div>${ip}${others ? ` <span class="small text-muted" title="Other interfaces">(also ${others})</span>` : ''}</div>${seen}</td>
-      <td>${badge(m)}${versionMark(m)}
+      <td>${isRebooting ? '<span class="badge bg-danger">rebooting…</span> ' : ''}${badge(m)}${versionMark(m)}
           ${m.version ? `<span class="font-monospace small trunc mt-1" title="${esc(m.version)}">${esc(m.version)}</span>` : ''}
-          ${m.meta ? `<span class="small text-muted font-monospace trunc" title="${esc(m.meta)}">${esc(m.meta)}</span>` : ''}</td>
-      <td class="text-end text-nowrap"><div class="d-inline-flex gap-1 row-actions">${homeLink}${healthBtn}${logBtn}${forgetBtn}</div></td>
+          ${m.meta ? `<span class="small text-muted font-monospace trunc" title="${esc(m.meta)}">${esc(m.meta)}</span>` : ''}
+          ${up}</td>
+      <td class="text-end text-nowrap"><div class="d-inline-flex gap-1 row-actions">${homeLink}${healthBtn}${rebootBtn}${forgetBtn}</div></td>
     </tr>`;
   });
   $('machines').innerHTML = rows.length ? rows.join('')
@@ -227,7 +262,24 @@ function render() {
   $('machines-card').classList.toggle('stale', stale);
   $('stale-note').hidden = !stale;
   renderLatest();
+  renderLogTabs();
   updateRunBtn();
+}
+
+// One tab per online machine with an upgrade UI. Machines with no runs yet are
+// listed but disabled; the followed machine keeps its tab even if it drops off.
+function renderLogTabs() {
+  const tabs = stale ? [] : machines.filter(m => m.online && m.can_upgrade);
+  if (logHost && !tabs.some(m => m.host === logHost)) tabs.push({host: logHost, run_id: true});
+  $('log-tabs').innerHTML = tabs.map(m => {
+    const active = m.host === logHost;
+    const running = m.upgrade_status === 'running'
+      ? ' <span class="spinner-border spinner-border-sm text-primary ms-1" role="status" aria-label="upgrading"></span>' : '';
+    const title = m.run_id ? '' : ' title="No upgrade runs yet"';
+    return `<li class="nav-item" role="presentation"><button type="button" role="tab"
+      class="nav-link ${active ? 'active' : ''}" aria-selected="${active}" ${m.run_id ? '' : 'disabled'}${title}
+      onclick="followLog('${esc(m.host)}')">${esc(m.host)}${running}</button></li>`;
+  }).join('');
 }
 
 function toggle(host, on) { on ? selected.add(host) : selected.delete(host); updateRunBtn(); }
@@ -260,6 +312,21 @@ async function refresh(force) {
   }
 }
 
+async function reboot(host) {
+  const hub = machines.find(m => m.host === host)?.is_self;
+  const msg = `Reboot ${host}?` + (hub ? '\n\nThis is the Nexus hub: this page will be unreachable until it is back.' : '');
+  if (!confirm(msg)) return;
+  try {
+    const r = await fetch(`${BASE}/api/reboot/${encodeURIComponent(host)}`, {method: 'POST'});
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { alert(`${host}: ${data.error || 'reboot failed'}`); return; }
+    rebooting[host] = Date.now();
+    render();
+  } catch (e) {
+    alert(`${host}: ${e}`);
+  }
+}
+
 async function forget(host) {
   await fetch(`${BASE}/api/forget/${encodeURIComponent(host)}`, {method: 'POST'});
   refresh(false);
@@ -276,7 +343,8 @@ function appendLog(text) {
 function followLog(host) {
   if (logSource) logSource.close();
   $('log').textContent = '';
-  $('log-host').textContent = `${host}.local`;
+  logHost = host;
+  renderLogTabs();
   logSource = new EventSource(`${BASE}/api/stream/${encodeURIComponent(host)}`);
   logSource.onmessage = e => {
     if (e.data === '[DONE]') { logSource.close(); logSource = null; refresh(false); return; }

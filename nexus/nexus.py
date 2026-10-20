@@ -76,6 +76,8 @@ def create_app(
             "meta": probe.get("meta"),
             "upgrade_status": probe.get("upgrade_status"),
             "run_id": probe.get("run_id"),
+            # None when the spoke has no upgrade UI or predates uptime reporting.
+            "uptime_s": probe.get("uptime_s"),
         }
 
     @bp.route("/")
@@ -148,6 +150,18 @@ def create_app(
             # A 404 from the spoke means bitd is not installed there.
             return jsonify({"error": str(e)}), e.status or 503
         return jsonify({"host": host, "checks": checks})
+
+    @bp.route("/api/reboot/<host>", methods=["POST"])
+    def api_reboot(host):
+        host = bare_host(host)
+        rec = roster.list().get(host)
+        if rec is None or not rec.get("upgrade"):
+            return jsonify({"error": "Unknown machine or no upgrade UI"}), 404
+        try:
+            spokes.reboot(host, rec.get("ip"), rec["upgrade"])
+        except SpokeError as e:
+            return jsonify({"error": str(e)}), e.status or 503
+        return jsonify({"rebooting": host}), 202
 
     @bp.route("/api/forget/<host>", methods=["POST"])
     def api_forget(host):

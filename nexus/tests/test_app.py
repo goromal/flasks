@@ -35,6 +35,7 @@ class FakeSpokes:
     def __init__(self):
         self.state = {}  # host -> {"status", "run_id"}
         self.runs = []  # (host, payload)
+        self.reboots = []  # hosts
         app = Flask("fake-spokes")
 
         @app.before_request
@@ -49,7 +50,10 @@ class FakeSpokes:
         @app.route("/<host>/anix-upgrade/status")
         def status(host):
             st = self.state.get(host, {"status": "idle", "run_id": None})
-            return jsonify(dict(st, version="1.2.3", meta="meta-" + host))
+            body = dict(st, version="1.2.3", meta="meta-" + host)
+            if host != "jetson":  # jetson plays a spoke from before uptime reporting
+                body["uptime_s"] = 93784
+            return jsonify(body)
 
         @app.route("/<host>/anix-upgrade/api/v1/run", methods=["POST"])
         def run(host):
@@ -67,6 +71,15 @@ class FakeSpokes:
                 yield f"data: building {host} {run_id}\n\n"
                 yield "data: [DONE]\n\n"
             return Response(gen(), mimetype="text/event-stream")
+
+        @app.route("/<host>/anix-upgrade/api/v1/reboot", methods=["POST"])
+        def reboot(host):
+            if host == "old-box":
+                return "Not Found", 404
+            if self.state.get(host, {}).get("status") == "running":
+                return jsonify({"error": "An upgrade is running; reboot after it finishes"}), 409
+            self.reboots.append(host)
+            return jsonify({"rebooting": True, "delay_s": 3}), 202
 
         @app.route("/<host>/anix-upgrade/api/v1/health")
         def health(host):
@@ -143,6 +156,10 @@ def test_machines_status_and_home_links(client):
     assert ms["ats"]["behind_latest"] is True  # fake spokes report 1.2.3, master is 1.3.0
     assert ms["pi"]["behind_latest"] is None  # no upgrade UI, no version
     assert ms["ats"]["upgrade_status"] == "idle"
+    assert ms["ats"]["uptime_s"] == 93784
+    assert ms["jetson"]["uptime_s"] is None  # older spoke omits it
+    assert ms["pi"]["uptime_s"] is None  # no upgrade UI to ask
+    assert ms["down-box"]["uptime_s"] is None
 
     assert ms["jetson"]["home_url"] == "https://192.0.2.20/"
     assert ms["jetson"]["ip_url"] == "https://192.0.2.20/"
@@ -247,3 +264,24 @@ def test_health_errors(client):
     resp = client.get("/api/health/old-box")  # spoke predates the health API
     assert resp.status_code == 404
     assert "upgrade it" in resp.get_json()["error"]
+
+
+def test_reboot_proxies_to_spoke(client, fake):
+    resp = client.post("/api/reboot/jetson.local")
+    assert resp.status_code == 202
+    assert resp.get_json() == {"rebooting": "jetson"}
+    assert fake.reboots == ["jetson"]
+
+
+def test_reboot_errors(client, fake):
+    assert client.post("/api/reboot/pi").status_code == 404  # no upgrade UI
+    assert client.post("/api/reboot/ghost").status_code == 404
+    assert client.post("/api/reboot/down-box").status_code == 503
+    resp = client.post("/api/reboot/old-box")  # spoke predates the reboot API
+    assert resp.status_code == 404
+    assert "upgrade it" in resp.get_json()["error"]
+    fake.state["ats"] = {"status": "running", "run_id": "run-ats"}
+    resp = client.post("/api/reboot/ats")
+    assert resp.status_code == 409
+    assert "upgrade is running" in resp.get_json()["error"]
+    assert fake.reboots == []
