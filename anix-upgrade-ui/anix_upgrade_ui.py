@@ -27,6 +27,14 @@ def current_meta():
     return _read_file("~/.anix-meta")
 
 
+def read_uptime(path="/proc/uptime"):
+    """Whole seconds since boot, or None if unavailable."""
+    try:
+        return int(float(_read_file(path).split()[0]))
+    except (IndexError, ValueError):
+        return None
+
+
 def _build_cmd(upgrade_bin, version, commit, branch, source, local, boot):
     cmd = [upgrade_bin]
     if version:
@@ -68,6 +76,7 @@ def create_app(
     upgrade_bin="anix-upgrade",
     state_dir=DEFAULT_STATE_DIR,
     bitctl_bin=None,
+    uptime=read_uptime,
 ):
     store = RunStore(os.path.expanduser(state_dir))
     app = Flask(__name__)
@@ -95,6 +104,7 @@ def create_app(
             "finished_at": state.get("finished_at"),
             "version": current_version(),
             "meta": current_meta(),
+            "uptime_s": uptime(),
         })
 
     # Read-only bitd results for Nexus; bitd's own gRPC port stays on loopback.

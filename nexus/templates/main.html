@@ -190,6 +190,11 @@ function renderLatest() {
   fillLatestVersion();
 }
 
+function fmtUptime(s) {
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+}
+
 function selectable(m) { return !stale && m.online && m.can_upgrade && m.upgrade_status !== 'running'; }
 
 function render() {
@@ -209,6 +214,9 @@ function render() {
     const others = (m.other_ips || []).map(o => o.url
       ? `<a class="small text-muted" href="${esc(o.url)}">${esc(o.ip)}</a>`
       : `<span class="small text-muted">${esc(o.ip)}</span>`).join(' · ');
+    // Cached (stale) rows would show an outdated uptime, so only show it live.
+    const up = m.online && !stale && m.uptime_s != null
+      ? `<span class="small text-muted" title="Uptime">up ${fmtUptime(m.uptime_s)}</span>` : '';
     const seen = !m.online && m.last_seen ? `<div class="small text-muted">last seen ${esc(m.last_seen)}</div>` : '';
     return `<tr class="${m.online ? '' : 'row-offline'}">
       <td><input class="form-check-input" type="checkbox" ${selectable(m) ? '' : 'disabled'}
@@ -218,7 +226,8 @@ function render() {
           <div>${ip}${others ? ` <span class="small text-muted" title="Other interfaces">(also ${others})</span>` : ''}</div>${seen}</td>
       <td>${badge(m)}${versionMark(m)}
           ${m.version ? `<span class="font-monospace small trunc mt-1" title="${esc(m.version)}">${esc(m.version)}</span>` : ''}
-          ${m.meta ? `<span class="small text-muted font-monospace trunc" title="${esc(m.meta)}">${esc(m.meta)}</span>` : ''}</td>
+          ${m.meta ? `<span class="small text-muted font-monospace trunc" title="${esc(m.meta)}">${esc(m.meta)}</span>` : ''}
+          ${up}</td>
       <td class="text-end text-nowrap"><div class="d-inline-flex gap-1 row-actions">${homeLink}${healthBtn}${logBtn}${forgetBtn}</div></td>
     </tr>`;
   });

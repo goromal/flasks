@@ -76,6 +76,8 @@ def create_app(
             "meta": probe.get("meta"),
             "upgrade_status": probe.get("upgrade_status"),
             "run_id": probe.get("run_id"),
+            # None when the spoke has no upgrade UI or predates uptime reporting.
+            "uptime_s": probe.get("uptime_s"),
         }
 
     @bp.route("/")

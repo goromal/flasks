@@ -66,6 +66,7 @@ class Spokes:
                     "meta": data.get("meta"),
                     "upgrade_status": data.get("status", "idle"),
                     "run_id": data.get("run_id"),
+                    "uptime_s": data.get("uptime_s"),
                 }
             self._request(host, self.base_url(host, ip) + "/")
             return {"online": True}

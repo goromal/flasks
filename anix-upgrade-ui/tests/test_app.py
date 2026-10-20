@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from anix_upgrade_ui import create_app
+from anix_upgrade_ui import create_app, read_uptime
 
 
 def make_fake_bin(tmp_path, script):
@@ -45,6 +45,24 @@ def test_status_idle_initially(tmp_path):
     data = make_client(tmp_path).get("/status").get_json()
     assert data["running"] is False
     assert data["status"] == "idle"
+
+
+def test_status_reports_uptime(tmp_path):
+    app = create_app(
+        upgrade_bin=make_fake_bin(tmp_path, "echo done"),
+        state_dir=str(tmp_path / "state"),
+        uptime=lambda: 93784,
+    )
+    assert app.test_client().get("/status").get_json()["uptime_s"] == 93784
+
+
+def test_read_uptime(tmp_path):
+    path = tmp_path / "uptime"
+    path.write_text("93784.52 371234.10\n")
+    assert read_uptime(str(path)) == 93784
+    assert read_uptime(str(tmp_path / "missing")) is None
+    (tmp_path / "empty").write_text("")
+    assert read_uptime(str(tmp_path / "empty")) is None
 
 
 def test_run_returns_202_then_success(tmp_path):

@@ -49,7 +49,10 @@ class FakeSpokes:
         @app.route("/<host>/anix-upgrade/status")
         def status(host):
             st = self.state.get(host, {"status": "idle", "run_id": None})
-            return jsonify(dict(st, version="1.2.3", meta="meta-" + host))
+            body = dict(st, version="1.2.3", meta="meta-" + host)
+            if host != "jetson":  # jetson plays a spoke from before uptime reporting
+                body["uptime_s"] = 93784
+            return jsonify(body)
 
         @app.route("/<host>/anix-upgrade/api/v1/run", methods=["POST"])
         def run(host):
@@ -143,6 +146,10 @@ def test_machines_status_and_home_links(client):
     assert ms["ats"]["behind_latest"] is True  # fake spokes report 1.2.3, master is 1.3.0
     assert ms["pi"]["behind_latest"] is None  # no upgrade UI, no version
     assert ms["ats"]["upgrade_status"] == "idle"
+    assert ms["ats"]["uptime_s"] == 93784
+    assert ms["jetson"]["uptime_s"] is None  # older spoke omits it
+    assert ms["pi"]["uptime_s"] is None  # no upgrade UI to ask
+    assert ms["down-box"]["uptime_s"] is None
 
     assert ms["jetson"]["home_url"] == "https://192.0.2.20/"
     assert ms["jetson"]["ip_url"] == "https://192.0.2.20/"
