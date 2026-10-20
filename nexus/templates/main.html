@@ -26,6 +26,8 @@
     #log-tabs .nav-link { white-space: nowrap; padding: .35rem .75rem; }
     /* The active tab shares the log box's dark fill so it reads as attached. */
     #log-tabs .nav-link.active { background: #1e1e1e; color: #d4d4d4; border-color: #1e1e1e; }
+    /* anix-theme.css restyles .log-box with its own palette; match it when present. */
+    :root[data-anix-theme] #log-tabs .nav-link.active { background: var(--anix-surface-alt); color: var(--anix-text); border-color: var(--anix-border) var(--anix-border) var(--anix-surface-alt); }
     #log-tabs:not(:empty) + .log-box { border-top-left-radius: 0; }
     .row-offline .host-name { opacity: .6; }
     /* Last-known list shown from the browser cache until the first live response. */
