@@ -35,6 +35,7 @@ class FakeSpokes:
     def __init__(self):
         self.state = {}  # host -> {"status", "run_id"}
         self.runs = []  # (host, payload)
+        self.reboots = []  # hosts
         app = Flask("fake-spokes")
 
         @app.before_request
@@ -70,6 +71,15 @@ class FakeSpokes:
                 yield f"data: building {host} {run_id}\n\n"
                 yield "data: [DONE]\n\n"
             return Response(gen(), mimetype="text/event-stream")
+
+        @app.route("/<host>/anix-upgrade/api/v1/reboot", methods=["POST"])
+        def reboot(host):
+            if host == "old-box":
+                return "Not Found", 404
+            if self.state.get(host, {}).get("status") == "running":
+                return jsonify({"error": "An upgrade is running; reboot after it finishes"}), 409
+            self.reboots.append(host)
+            return jsonify({"rebooting": True, "delay_s": 3}), 202
 
         @app.route("/<host>/anix-upgrade/api/v1/health")
         def health(host):
@@ -254,3 +264,24 @@ def test_health_errors(client):
     resp = client.get("/api/health/old-box")  # spoke predates the health API
     assert resp.status_code == 404
     assert "upgrade it" in resp.get_json()["error"]
+
+
+def test_reboot_proxies_to_spoke(client, fake):
+    resp = client.post("/api/reboot/jetson.local")
+    assert resp.status_code == 202
+    assert resp.get_json() == {"rebooting": "jetson"}
+    assert fake.reboots == ["jetson"]
+
+
+def test_reboot_errors(client, fake):
+    assert client.post("/api/reboot/pi").status_code == 404  # no upgrade UI
+    assert client.post("/api/reboot/ghost").status_code == 404
+    assert client.post("/api/reboot/down-box").status_code == 503
+    resp = client.post("/api/reboot/old-box")  # spoke predates the reboot API
+    assert resp.status_code == 404
+    assert "upgrade it" in resp.get_json()["error"]
+    fake.state["ats"] = {"status": "running", "run_id": "run-ats"}
+    resp = client.post("/api/reboot/ats")
+    assert resp.status_code == 409
+    assert "upgrade is running" in resp.get_json()["error"]
+    assert fake.reboots == []

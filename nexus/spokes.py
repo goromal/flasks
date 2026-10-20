@@ -113,6 +113,21 @@ class Spokes:
         )
         return json.loads(raw)["run_id"]
 
+    def reboot(self, host, ip, upgrade_path):
+        """Ask the spoke to reboot itself after a short delay."""
+        try:
+            self._request(
+                host,
+                self._url(host, ip, upgrade_path, "api/v1/reboot"),
+                data={},
+                timeout=RUN_TIMEOUT_S,
+            )
+        except SpokeError as e:
+            # As with health: Flask's generic 404 means the spoke predates the API.
+            if e.status == 404 and str(e).startswith("HTTP Error"):
+                raise SpokeError("No reboot API on this machine yet; upgrade it", status=404)
+            raise
+
     def stream(self, host, ip, upgrade_path, run_id):
         """Yield raw SSE bytes from the spoke's log stream."""
         url = self._url(host, ip, upgrade_path, f"api/v1/stream/{run_id}")

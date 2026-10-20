@@ -151,6 +151,18 @@ def create_app(
             return jsonify({"error": str(e)}), e.status or 503
         return jsonify({"host": host, "checks": checks})
 
+    @bp.route("/api/reboot/<host>", methods=["POST"])
+    def api_reboot(host):
+        host = bare_host(host)
+        rec = roster.list().get(host)
+        if rec is None or not rec.get("upgrade"):
+            return jsonify({"error": "Unknown machine or no upgrade UI"}), 404
+        try:
+            spokes.reboot(host, rec.get("ip"), rec["upgrade"])
+        except SpokeError as e:
+            return jsonify({"error": str(e)}), e.status or 503
+        return jsonify({"rebooting": host}), 202
+
     @bp.route("/api/forget/<host>", methods=["POST"])
     def api_forget(host):
         if not roster.forget(bare_host(host)):
