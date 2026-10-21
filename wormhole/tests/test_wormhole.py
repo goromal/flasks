@@ -122,6 +122,14 @@ class ResolveHost(unittest.TestCase):
         patcher = mock.patch.object(wormhole, "_SECRETS_DIR", self._tmp.name)
         patcher.start()
         self.addCleanup(patcher.stop)
+        self._known_hosts = os.path.join(self._tmp.name, "ssh_known_hosts")
+        patcher = mock.patch.object(wormhole, "_SYSTEM_KNOWN_HOSTS", self._known_hosts)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _write_known_hosts(self, contents):
+        with open(self._known_hosts, "w") as f:
+            f.write(contents)
 
     def _write_hint(self, name, contents):
         d = os.path.join(self._tmp.name, name)
@@ -163,6 +171,34 @@ class ResolveHost(unittest.TestCase):
         run.assert_called_once_with(
             ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
              "--", "192.168.50.86", "pwd"], None)
+
+    def test_ssh_argv_pins_host_key_alias_when_system_pinned(self):
+        self._write_hint("box", "192.168.50.86\n")
+        self._write_known_hosts(
+            "other.local ssh-ed25519 AAAAother\n"
+            "box.local ssh-ed25519 AAAAbox\n")
+        with mock.patch.object(wormhole, "_run", return_value=b"/home/andrew\n") as run:
+            wormhole.home("box.local")
+        run.assert_called_once_with(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+             "-o", "HostKeyAlias=box.local", "--", "192.168.50.86", "pwd"], None)
+
+    def test_ssh_argv_no_alias_when_name_not_pinned(self):
+        self._write_hint("box", "192.168.50.86\n")
+        self._write_known_hosts("notbox.local,box.localx ssh-ed25519 AAAA\n")
+        with mock.patch.object(wormhole, "_run", return_value=b"/home/andrew\n") as run:
+            wormhole.home("box.local")
+        run.assert_called_once_with(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+             "--", "192.168.50.86", "pwd"], None)
+
+    def test_ssh_argv_no_alias_without_ip_hint(self):
+        self._write_known_hosts("box.local ssh-ed25519 AAAAbox\n")
+        with mock.patch.object(wormhole, "_run", return_value=b"/home/andrew\n") as run:
+            wormhole.home("box.local")
+        run.assert_called_once_with(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+             "--", "box.local", "pwd"], None)
 
 
 class Cli(unittest.TestCase):
