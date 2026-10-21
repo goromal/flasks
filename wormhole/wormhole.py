@@ -9,6 +9,8 @@ instead.
 An "<name>.local" mDNS host is transparently redirected to the direct LAN
 IP in ~/secrets/<name>/i.txt when that file exists (mDNS doesn't propagate
 over the VPN); without it the .local name is used as-is. See _resolve_host.
+When the .local name has a host key pinned in /etc/ssh/ssh_known_hosts, ssh
+is told to verify the IP against that pinned name (see _ssh_target).
 
 Remote operations shell out to ssh with argv arrays (never a local shell)
 and quote the remote-side paths with shlex.quote. Remote file names
@@ -30,6 +32,7 @@ _TIMEOUT_SECS = 60
 # redirected to a direct LAN IP recorded in ~/secrets/<name>/i.txt.
 _SECRETS_DIR = os.path.expanduser("~/secrets")
 _MDNS_SUFFIX = ".local"
+_SYSTEM_KNOWN_HOSTS = "/etc/ssh/ssh_known_hosts"
 
 
 class WormholeError(Exception):
@@ -177,9 +180,45 @@ def _explain_auth_failure(message):
     return message + " [wormhole: " + "; ".join(problems) + "]"
 
 
-def _ssh(host, remote_cmd, input_bytes=None):
+def _system_pinned(name):
+    """Whether the system known_hosts file has an entry for name.
+
+    NixOS writes programs.ssh.knownHosts unhashed, one "names keytype key"
+    line per host, so a plain parse is enough; anything unreadable means
+    "not pinned".
+    """
     try:
-        return _run(["ssh", *_SSH_OPTS, "--", resolve_host(host), remote_cmd],
+        with open(_SYSTEM_KNOWN_HOSTS) as f:
+            for line in f:
+                fields = line.split()
+                if fields and not fields[0].startswith(("#", "@", "|")) \
+                        and name in fields[0].split(","):
+                    return True
+    except OSError:
+        pass
+    return False
+
+
+def _ssh_target(host):
+    """ssh options and destination for host.
+
+    Redirecting "<name>.local" to a LAN IP makes ssh look the host key up
+    under the IP, which the fleet's declarative pins (keyed by .local name)
+    never match, so BatchMode fails with "Host key verification failed".
+    HostKeyAlias keeps the lookup on the pinned name. Only applied when the
+    name really is pinned system-wide, so a key accepted earlier under the
+    bare IP in ~/.ssh/known_hosts keeps working.
+    """
+    target = resolve_host(host)
+    if target != host and _system_pinned(host):
+        return ("-o", "HostKeyAlias=" + host), target
+    return (), target
+
+
+def _ssh(host, remote_cmd, input_bytes=None):
+    alias_opts, target = _ssh_target(host)
+    try:
+        return _run(["ssh", *_SSH_OPTS, *alias_opts, "--", target, remote_cmd],
                     input_bytes)
     except WormholeError as e:
         raise WormholeError(_explain_auth_failure(str(e))) from None
