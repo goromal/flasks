@@ -1,10 +1,12 @@
 :root { --agent-w: 45vw; }
+/* The toggle sits in the page flow on the title line (not floating), so the
+   site's floating page controls can't cover it. */
+.page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 #agent-toggle {
-    position: fixed; right: 16px; bottom: 16px; z-index: 20; margin: 0;
-    border-radius: 999px; padding: 10px 18px; background: #1e1e1e; color: #fff; border: 0;
+    margin: 0; border-radius: 999px; padding: 10px 18px;
+    background: #1e1e1e; color: #fff; border: 0;
 }
 body.agent-open { margin-right: calc(var(--agent-w) + 20px); }
-body.agent-open #agent-toggle { right: calc(var(--agent-w) + 16px); }
 #agent-panel {
     position: fixed; top: 0; right: 0; bottom: 0; width: var(--agent-w); z-index: 10;
     background: #1e1e1e; color: #d4d4d4; display: flex;
@@ -45,8 +47,10 @@ body.agent-open .anix-page-controls { display: none !important; }  /* theirs is 
     #agent-panel { width: 100vw !important; }
     #agent-resize { display: none; }
     body.agent-open { margin-right: 20px; overflow: hidden; }
+    /* The open panel covers the page, so pin the toggle over the panel's
+       top bar to keep a way to close it. */
     body.agent-open #agent-toggle {
-        top: calc(env(safe-area-inset-top, 0px) + 4px); bottom: auto; right: 6px;
+        position: fixed; top: calc(env(safe-area-inset-top, 0px) + 4px); right: 6px;
         z-index: 30; padding: 6px 12px; font-size: 14px;
     }
     #agent-body .agent-bar { padding-right: 84px; }

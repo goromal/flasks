@@ -55,7 +55,12 @@
 </head>
 
 <body>
-    <h1>Let's Budget! 💸</h1>
+    <header class="page-head">
+        <h1>Let's Budget! 💸</h1>
+        {% if agent_enabled %}
+        <button id="agent-toggle" type="button" aria-expanded="false">Agent</button>
+        {% endif %}
+    </header>
 
     <div class="section">
         <h2>Upload CSVs</h2>
@@ -180,7 +185,6 @@
             .catch(() => {});
     </script>
     {% if agent_enabled %}
-    <button id="agent-toggle" type="button" aria-expanded="false">Agent</button>
     <aside id="agent-panel" data-base="{{ subdomain }}/agent" hidden aria-label="Agent companion">
         <div id="agent-resize" title="Drag to resize"></div>
         <div id="agent-body"><p class="agent-msg">Loading…</p></div>
