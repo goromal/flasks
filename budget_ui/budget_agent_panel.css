@@ -19,7 +19,10 @@ body.agent-open #agent-toggle { right: calc(var(--agent-w) + 16px); }
 .agent-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .agent-row button { margin-top: 0; }
 .agent-bar { display: flex; gap: 8px; align-items: center; padding: 6px 8px; background: #2a2a2a; }
-.agent-bar .agent-name { flex: 1; font-family: monospace; overflow: hidden; text-overflow: ellipsis; }
+.agent-bar .agent-name { flex: 1; min-width: 0; font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The site-wide floating page controls (theme/home) sit on top of the panel's
+   terminal and key row; hide them while the panel is open. */
+body.agent-open .anix-page-controls { display: none; }
 .agent-bar button { margin-top: 0; padding: 4px 10px; font-size: 14px; }
 .agent-frame { flex: 1; border: 0; width: 100%; background: #000; }
 #agent-body a { color: #9cf; }
