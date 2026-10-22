@@ -23,3 +23,28 @@ body.agent-open #agent-toggle { right: calc(var(--agent-w) + 16px); }
 .agent-bar button { margin-top: 0; padding: 4px 10px; font-size: 14px; }
 .agent-frame { flex: 1; border: 0; width: 100%; background: #000; }
 #agent-body a { color: #9cf; }
+#agent-body .agent-keys {
+    flex: 0 0 auto; display: flex; gap: 6px; padding: 6px;
+    background: #10151d; border-top: 1px solid #2d3b4c;
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+}
+#agent-body .agent-keys button {
+    flex: 1 0 auto; min-width: 46px; margin: 0; padding: 12px 10px;
+    border: 1px solid #3a4b5e; border-radius: 8px;
+    background: #1b2634; color: #eef4f8;
+    font: 650 16px/1 system-ui, sans-serif;
+    cursor: pointer; touch-action: manipulation; user-select: none;
+}
+#agent-body .agent-keys button:active, #agent-body .agent-keys button.active { background: #2f81f7; }
+/* Phones: the panel takes the whole screen; the toggle moves to the top bar so
+   it doesn't cover the key row. */
+@media (max-width: 700px) {
+    #agent-panel { width: 100vw !important; }
+    #agent-resize { display: none; }
+    body.agent-open { margin-right: 20px; overflow: hidden; }
+    body.agent-open #agent-toggle {
+        top: calc(env(safe-area-inset-top, 0px) + 4px); bottom: auto; right: 6px;
+        z-index: 30; padding: 6px 12px; font-size: 14px;
+    }
+    #agent-body .agent-bar { padding-right: 84px; }
+}
