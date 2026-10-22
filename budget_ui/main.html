@@ -6,6 +6,9 @@
     <meta charset="utf-8">
     <link rel="icon" type="image/svg+xml" href="{{ subdomain }}/favicon.svg">
     <script src="https://cdn.jsdelivr.net/npm/ansi_up@5/ansi_up.min.js"></script>
+    {% if agent_enabled %}
+    <link rel="stylesheet" href="{{ subdomain }}/static/budget_agent_panel.css">
+    {% endif %}
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -176,6 +179,14 @@
             })
             .catch(() => {});
     </script>
+    {% if agent_enabled %}
+    <button id="agent-toggle" type="button" aria-expanded="false">Agent</button>
+    <aside id="agent-panel" data-base="{{ subdomain }}/agent" hidden aria-label="Agent companion">
+        <div id="agent-resize" title="Drag to resize"></div>
+        <div id="agent-body"><p class="agent-msg">Loading…</p></div>
+    </aside>
+    <script src="{{ subdomain }}/static/budget_agent_panel.js"></script>
+    {% endif %}
 </body>
 
 </html>
