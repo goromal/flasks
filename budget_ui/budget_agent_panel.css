@@ -1,0 +1,57 @@
+:root { --agent-w: 45vw; }
+/* The toggle sits in the page flow on the title line (not floating), so the
+   site's floating page controls can't cover it. */
+.page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+#agent-toggle {
+    margin: 0; border-radius: 999px; padding: 10px 18px;
+    background: #1e1e1e; color: #fff; border: 0;
+}
+body.agent-open { margin-right: calc(var(--agent-w) + 20px); }
+#agent-panel {
+    position: fixed; top: 0; right: 0; bottom: 0; width: var(--agent-w); z-index: 10;
+    background: #1e1e1e; color: #d4d4d4; display: flex;
+}
+#agent-panel[hidden] { display: none; }
+#agent-resize { width: 6px; cursor: ew-resize; background: #333; flex: none; touch-action: none; }
+#agent-body { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#agent-body form, .agent-center { margin: auto; display: flex; flex-direction: column; gap: 10px; padding: 16px; }
+#agent-body input { padding: 8px; font-size: 16px; }
+.agent-msg { margin: auto; }
+.agent-error { color: #f88; }
+.agent-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.agent-row button { margin-top: 0; }
+.agent-bar { display: flex; gap: 8px; align-items: center; padding: 6px 8px; background: #2a2a2a; }
+.agent-bar .agent-name { flex: 1; min-width: 0; font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The site-wide floating page controls (theme/home) sit on top of the panel's
+   terminal and key row; hide them while the panel is open. */
+body.agent-open .anix-page-controls { display: none !important; }  /* theirs is !important too */
+.agent-bar button { margin-top: 0; padding: 4px 10px; font-size: 14px; }
+.agent-frame { flex: 1; border: 0; width: 100%; background: #000; }
+#agent-body a { color: #9cf; }
+#agent-body .agent-keys {
+    flex: 0 0 auto; display: flex; gap: 6px; padding: 6px;
+    background: #10151d; border-top: 1px solid #2d3b4c;
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+}
+#agent-body .agent-keys button {
+    flex: 1 0 auto; min-width: 46px; margin: 0; padding: 12px 10px;
+    border: 1px solid #3a4b5e; border-radius: 8px;
+    background: #1b2634; color: #eef4f8;
+    font: 650 16px/1 system-ui, sans-serif;
+    cursor: pointer; touch-action: manipulation; user-select: none;
+}
+#agent-body .agent-keys button:active, #agent-body .agent-keys button.active { background: #2f81f7; }
+/* Phones: the panel takes the whole screen; the toggle moves to the top bar so
+   it doesn't cover the key row. */
+@media (max-width: 700px) {
+    #agent-panel { width: 100vw !important; }
+    #agent-resize { display: none; }
+    body.agent-open { margin-right: 20px; overflow: hidden; }
+    /* The open panel covers the page, so pin the toggle over the panel's
+       top bar to keep a way to close it. */
+    body.agent-open #agent-toggle {
+        position: fixed; top: calc(env(safe-area-inset-top, 0px) + 4px); right: 6px;
+        z-index: 30; padding: 6px 12px; font-size: 14px;
+    }
+    #agent-body .agent-bar { padding-right: 84px; }
+}

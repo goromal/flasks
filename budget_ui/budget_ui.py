@@ -18,6 +18,14 @@ parser.add_argument("--config-file", type=str, default="~/configs/budget-tool.js
                     help="Path to default budget config JSON file")
 parser.add_argument("--state-dir", type=str, default="~/.local/state/budget-ui",
                     help="Directory for run log and state persistence")
+parser.add_argument("--agents", type=str, default="",
+                    help="Comma-separated agent CLIs for the companion (empty = disabled)")
+parser.add_argument("--agent-secrets", type=str, default="",
+                    help="Companion secrets JSON (secret_key, password_hash)")
+parser.add_argument("--agent-spool", type=str, default="/tmp/budget-agent")
+parser.add_argument("--agent-tmux", type=str, default="tmux")
+parser.add_argument("--agent-tmux-config", type=str, default="")
+parser.add_argument("--agent-session-cmd", type=str, default="budget-agent-session")
 args = parser.parse_args()
 
 # Expand paths
@@ -67,7 +75,8 @@ def index():
     return render_template('main.html',
                            sources=sources,
                            statuses=statuses,
-                           subdomain=args.subdomain)
+                           subdomain=args.subdomain,
+                           agent_enabled=AGENT_ENABLED)
 
 @bp.route('/upload/<account>', methods=['POST'])
 def upload_csv(account):
@@ -136,6 +145,23 @@ def custom_static(filename):
     return app.send_static_file(filename)
 
 app.register_blueprint(bp)
+
+AGENT_ENABLED = bool(args.agents.strip() and args.agent_secrets)
+if AGENT_ENABLED:
+    from agent_companion import AgentAuth, AgentSessions, create_agent_blueprint, load_secrets
+    os.makedirs(args.agent_spool, mode=0o700, exist_ok=True)
+    _key, _pwhash = load_secrets(args.agent_secrets)
+    app.register_blueprint(create_agent_blueprint(
+        AgentAuth(_key, _pwhash),
+        AgentSessions(
+            agents=[a for a in args.agents.replace(",", " ").split() if a],
+            spool_dir=args.agent_spool, tmux_bin=args.agent_tmux,
+            config=args.agent_tmux_config or None,
+            session_command=args.agent_session_cmd,
+        ),
+        url_prefix=f"{args.subdomain}/agent",
+        cookie_path=f"{args.subdomain}/" if args.subdomain else "/",
+    ))
 
 def run():
     global args, app
