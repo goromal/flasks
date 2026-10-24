@@ -830,12 +830,6 @@
                 </div>
             </div>
 
-            <div class="control-group">
-                <label>File Actions</label>
-                <div class="btn-group">
-                    <button class="btn" onclick="duplicateImage()">Duplicate Image</button>
-                </div>
-            </div>
         </details>
 
         <div class="image-container">
@@ -884,12 +878,6 @@
                 </div>
             </div>
 
-            <div class="control-group">
-                <label>File Actions</label>
-                <div class="btn-group">
-                    <button class="btn" onclick="duplicateVideo()">Duplicate Video</button>
-                </div>
-            </div>
             <div class="control-group">
                 <label>Playback</label>
                 <div id="videoTools"></div>
@@ -967,7 +955,7 @@
                 <input type="checkbox" id="apply_all" name="apply_all" style="width:auto; margin:0; cursor:pointer;">
                 <label for="apply_all" style="margin:0; font-weight:500; color:#495057; cursor:pointer;">Restamp every file under this stamp (sub-stamps included)</label>
             </div>
-            <p class="upload-hint">Restamp replaces &ldquo;{{ stamp_path[-1] }}&rdquo;; Add Sub-stamp files this item one level deeper. Leave the text empty to apply staged edits only, or skip when no edits are staged.</p>
+            <p class="upload-hint">Restamp replaces &ldquo;{{ stamp_path[-1] }}&rdquo;; Add Sub-stamp files this item one level deeper. Leave the text empty to apply staged edits only, or duplicate with Keep original and no edits. Otherwise, an empty submit skips this file.</p>
             <div class="btn-group">
                 <button type="submit" class="btn" name="action" value="restamp">Apply / Restamp</button>
                 {% if '' not in stamp_path %}
@@ -978,7 +966,7 @@
                 {% endif %}
             </div>
             {% else %}
-            <p class="upload-hint">Leave the text empty to apply staged edits without stamping.</p>
+            <p class="upload-hint">Leave the text empty to apply staged edits without stamping, or duplicate with Keep original and no edits.</p>
             <input type="submit" value="Apply / Stamp">
             {% endif %}
         </form>
@@ -1649,23 +1637,6 @@
             showStatus('White rectangle queued; use the stamp form to apply it.');
         }
 
-        // ===== IMAGE DUPLICATE =====
-
-        function duplicateImage() {
-            const filename = getCurrentFilename();
-            if (!filename) { showStatus('Error: Could not determine filename', true); return; }
-            fetch('{{ urlroot }}api/duplicate-image', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename })
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) { showStatus('Image duplicated as: ' + data.new_filename); setTimeout(() => location.reload(), 1500); }
-                else showStatus('Error: ' + (data.error || 'Unknown error'), true);
-            })
-            .catch(err => showStatus('Error: ' + err.message, true));
-        }
-
         // ===== SCREENSHOT =====
 
         function saveScreenshot() {
@@ -1691,23 +1662,6 @@
             stagedRotation = (stagedRotation + degrees + 360) % 360;
             updateStagedSummary();
             showStatus(stagedRotation ? `Rotation queued: ${stagedRotation}°` : 'Rotation cleared');
-        }
-
-        // ===== VIDEO DUPLICATE =====
-
-        function duplicateVideo() {
-            const filename = getCurrentFilename();
-            if (!filename) { showStatus('Error: Could not determine filename', true); return; }
-            fetch('{{ urlroot }}api/duplicate-video', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename })
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) { showStatus('Video duplicated as: ' + data.new_filename); setTimeout(() => location.reload(), 1500); }
-                else showStatus('Error: ' + (data.error || 'Unknown error'), true);
-            })
-            .catch(err => showStatus('Error: ' + err.message, true));
         }
 
         // ===== VIDEO CROP =====

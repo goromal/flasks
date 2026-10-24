@@ -352,12 +352,14 @@ def index():
                 if not ok:
                     flask.flash(result)
                     valid = False
-            if valid and (result or edits):
-                copy = flask.request.form.get('preserve_originals') == 'on'
+            copy = flask.request.form.get('preserve_originals') == 'on'
+            if valid and (result or edits or copy):
                 if edits:
                     stampserver.edit_current([], [result] if result else [], edits, copy=copy, advance=bool(result))
                 elif result:
                     stampserver.stamp(result, copy=copy)
+                elif copy:
+                    stampserver.edit_current([], [], [], copy=True)
         except IdentityConflictError as e:
             flask.flash(_identity_conflict_message(e))
         except FileExistsError as e:
@@ -406,6 +408,9 @@ def _handle_restamp_post(path):
             return
         edits = _form_edits(form)
         if text.strip() == "" and not edits:
+            if form.get("action") == "restamp" and copy and form.get("apply_all") != "on":
+                stampserver.edit_current(path, path, [], copy=True)
+                return
             stampserver.skip()
             return
         if text.strip():
