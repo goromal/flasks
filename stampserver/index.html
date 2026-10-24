@@ -246,6 +246,22 @@
             max-height: max(280px, calc(100dvh - 220px));
         }
 
+        .video-tools {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            padding: 10px;
+            background: #fff;
+            font-size: 0.9rem;
+        }
+
+        .video-tools input { width: 72px; }
+        .video-tools input[type="range"] { flex: 1; min-width: 120px; width: auto; }
+        .video-tools button, .video-tools input { min-height: 36px; }
+        .video-tools button { cursor: pointer; }
+        .video-tools .video-time { font-variant-numeric: tabular-nums; }
+
         #cropCanvas,
         #videoCropCanvas,
         #whiteRectCanvas {
@@ -889,7 +905,7 @@
         </div>
 
         <div class="image-container">
-            <video id="currentVideo" controls loop preload="metadata" playsinline>
+            <video id="currentVideo" controls loop preload="auto" playsinline>
                 <source src="{{ file }}#t=0.001" type="{% if file.lower().endswith('.mov') %}video/quicktime{% else %}video/mp4{% endif %}" />
             </video>
             <canvas id="videoCropCanvas"></canvas>
@@ -907,7 +923,7 @@
         </details>
 
         <div class="image-container">
-            <video id="currentVideo" controls loop preload="metadata" playsinline>
+            <video id="currentVideo" controls loop preload="auto" playsinline>
                 <source src="{{ file }}#t=0.001" type="video/webm" />
             </video>
         </div>
@@ -924,7 +940,7 @@
         </details>
 
         <div class="image-container">
-            <video id="currentVideo" controls loop preload="metadata" playsinline>
+            <video id="currentVideo" controls loop preload="auto" playsinline>
                 <source src="{{ file }}#t=0.001" type="video/mp4" />
             </video>
         </div>
@@ -1029,6 +1045,84 @@
     </div>
 
     <script>
+        function initVideoTools(video) {
+            if (!video) return;
+            const tools = document.createElement('div');
+            tools.className = 'video-tools';
+            tools.innerHTML = '<label>Step <input type="number" min="0.01" max="60" step="0.01" value="0.1" aria-label="Seek step in seconds"> s</label>' +
+                '<button type="button" class="video-back">− Step</button>' +
+                '<button type="button" class="video-forward">+ Step</button>' +
+                '<input type="range" min="0" max="1" step="0.01" value="0" disabled aria-label="Seek through video">' +
+                '<label>Time <input type="number" min="0" step="0.01" aria-label="Video time in seconds"> s</label>' +
+                '<span class="video-time"></span>' +
+                '<label>Speed <input type="number" min="0.1" max="4" step="0.05" value="1" aria-label="Playback speed"> ×</label>' +
+                '<button type="button" class="video-reload" title="Reload the video at the current time if playback stalls">Retry</button>';
+            video.insertAdjacentElement('afterend', tools);
+            const inputs = tools.querySelectorAll('input');
+            const step = inputs[0], scrub = inputs[1], time = inputs[2], speed = inputs[3];
+            const display = tools.querySelector('.video-time');
+            function seek(target) {
+                if (video.readyState === 0 || !Number.isFinite(target)) return;
+                video.currentTime = Math.max(0, Math.min(target, Number.isFinite(video.duration) ? video.duration : target));
+            }
+            let pendingSeek = null, seekTimer = null;
+            function stepSeek(direction) {
+                const amount = Number(step.value);
+                if (!(amount >= 0.01 && amount <= 60)) return;
+                pendingSeek = (pendingSeek === null ? video.currentTime : pendingSeek) + direction * amount;
+                clearTimeout(seekTimer);
+                seekTimer = setTimeout(() => { seek(pendingSeek); pendingSeek = null; }, 80);
+            }
+            tools.querySelector('.video-back').onclick = () => stepSeek(-1);
+            tools.querySelector('.video-forward').onclick = () => stepSeek(1);
+            time.onchange = () => {
+                clearTimeout(seekTimer);
+                pendingSeek = null;
+                seek(Number(time.value));
+            };
+            let scrubbing = false;
+            scrub.onpointerdown = () => { scrubbing = true; };
+            scrub.onpointerup = scrub.onpointercancel = () => { scrubbing = false; };
+            scrub.oninput = () => { time.value = Number(scrub.value).toFixed(2); };
+            scrub.onchange = () => {
+                clearTimeout(seekTimer);
+                pendingSeek = null;
+                seek(Number(scrub.value));
+            };
+            speed.onchange = () => {
+                const value = Number(speed.value);
+                if (value >= 0.1 && value <= 4) video.playbackRate = value;
+                speed.value = video.playbackRate;
+            };
+            tools.querySelector('.video-reload').onclick = () => {
+                const position = video.currentTime, playing = !video.paused, rate = video.playbackRate;
+                const autoplay = video.autoplay;
+                video.autoplay = false;
+                video.addEventListener('loadedmetadata', () => {
+                    seek(position);
+                    video.playbackRate = rate;
+                    video.autoplay = autoplay;
+                    if (playing) video.play().catch(() => {});
+                    else video.pause();
+                }, { once: true });
+                video.load();
+            };
+            function update() {
+                scrub.disabled = !Number.isFinite(video.duration);
+                if (!scrub.disabled) scrub.max = video.duration;
+                if (!scrubbing) scrub.value = video.currentTime;
+                if (document.activeElement !== time && !scrubbing) time.value = video.currentTime.toFixed(2);
+                display.textContent = '/ ' + (Number.isFinite(video.duration) ? video.duration.toFixed(2) : '—') + ' s';
+            }
+            video.addEventListener('timeupdate', update);
+            video.addEventListener('seeked', update);
+            video.addEventListener('loadedmetadata', update);
+            video.addEventListener('ratechange', () => { speed.value = video.playbackRate; });
+            update();
+        }
+
+        initVideoTools(document.getElementById('currentVideo'));
+
         // ===== STATUS =====
 
         function showStatus(message, isError = false) {
