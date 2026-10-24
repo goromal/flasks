@@ -108,3 +108,21 @@ def test_discover_tolerates_missing_binary(tmp_path):
     r = Roster(str(tmp_path), browse_cmd=["/nonexistent/avahi-browse"])
     r.discover()
     assert r.list() == {}
+
+
+def test_discover_records_advertised_hosts_only_on_success(tmp_path):
+    out = tmp_path / "out.txt"
+    out.write_text(AVAHI_OUT)
+    script = tmp_path / "fake-browse"
+    script.write_text(f"#!/bin/sh\ncat {out}\n[ ! -e {tmp_path / 'fail'} ]\n")
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    r = Roster(str(tmp_path / "state"), browse_cmd=[str(script)])
+    r.merge({"renamed": {"ip": "192.0.2.10", "home": "/", "upgrade": None}})
+    assert r.advertised is None
+    r.discover()
+    assert r.advertised == {"ats", "ats-pi"}
+    (tmp_path / "fail").write_text("")
+    out.write_text("")
+    r.discover(force=True)  # a failed browse keeps the last listing
+    assert r.advertised == {"ats", "ats-pi"}
+    assert set(r.list()) == {"ats", "ats-pi", "renamed"}

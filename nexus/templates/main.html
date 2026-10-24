@@ -231,7 +231,10 @@ function render() {
       ? `<button class="btn btn-sm btn-outline-danger" onclick="reboot('${esc(m.host)}')"
            ${isRebooting || m.upgrade_status === 'running' ? 'disabled' : ''}
            title="${m.upgrade_status === 'running' ? 'Wait for the upgrade to finish' : 'Reboot this machine'}">Reboot</button>` : '';
-    const forgetBtn = !m.online && !m.is_self
+    // A host missing from mDNS can still answer on its IP (Avahi renamed the
+    // machine, so the new name owns that IP), so it is forgettable too.
+    const unlisted = m.advertised === false && !m.is_self;
+    const forgetBtn = (!m.online || unlisted) && !m.is_self
       ? `<button class="btn btn-sm btn-outline-danger" onclick="forget('${esc(m.host)}')" title="Remove from Nexus until it is rediscovered">Forget</button>` : '';
     // The host name and Home both open home_url (the IP when linkable); the
     // mDNS name stays available as an alternate link.
@@ -243,7 +246,8 @@ function render() {
     // Cached (stale) rows would show an outdated uptime, so only show it live.
     const up = m.online && !stale && m.uptime_s != null
       ? `<span class="small text-muted" title="Uptime">up ${fmtUptime(m.uptime_s)}</span>` : '';
-    const seen = !m.online && m.last_seen ? `<div class="small text-muted">last seen ${esc(m.last_seen)}</div>` : '';
+    const seen = (!m.online || unlisted) && m.last_seen
+      ? `<div class="small text-muted">${unlisted && m.online ? 'not advertised over mDNS; ' : ''}last seen ${esc(m.last_seen)}</div>` : '';
     return `<tr class="${m.online ? '' : 'row-offline'}">
       <td><input class="form-check-input" type="checkbox" ${selectable(m) ? '' : 'disabled'}
            ${selected.has(m.host) ? 'checked' : ''} onchange="toggle('${esc(m.host)}', this.checked)"></td>
