@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 
 SERVICE_TYPE = "_anix-nexus._tcp"
 DISCOVERY_TTL_S = 30
+# Browsing and resolving every host on a busy multi-homed LAN can take >10 s.
+BROWSE_TIMEOUT_S = 20
 
 
 def _now():
@@ -107,6 +109,8 @@ class Roster:
         self.route_metrics = route_metrics
         self._lock = threading.Lock()
         self._last_discovery = 0.0
+        # Hosts in the latest successful mDNS browse; None until one succeeds.
+        self.advertised = None
 
     def _read(self):
         try:
@@ -148,12 +152,16 @@ class Roster:
             return
         self._last_discovery = time.monotonic()
         try:
-            out = subprocess.run(
+            result = subprocess.run(
                 self.browse_cmd + ["-rtp", SERVICE_TYPE],
                 capture_output=True,
                 text=True,
-                timeout=10,
-            ).stdout
+                timeout=BROWSE_TIMEOUT_S,
+            )
         except (OSError, subprocess.TimeoutExpired):
             return
-        self.merge(parse_avahi(out, self.route_metrics()))
+        if result.returncode != 0:
+            return
+        records = parse_avahi(result.stdout, self.route_metrics())
+        self.merge(records)
+        self.advertised = set(records)

@@ -285,3 +285,29 @@ def test_reboot_errors(client, fake):
     assert resp.status_code == 409
     assert "upgrade is running" in resp.get_json()["error"]
     assert fake.reboots == []
+
+
+def test_machines_flags_hosts_missing_from_mdns(tmp_path, fake):
+    # old-box answers on its IP but is no longer advertised (Avahi renamed it).
+    browse = tmp_path / "fake-browse"
+    browse.write_text(
+        "#!/bin/sh\necho '=;eth0;IPv4;ats;_anix-nexus._tcp;local;ats.local;192.0.2.10;80;\"home=/\"'\n"
+    )
+    browse.chmod(0o755)
+    state = str(tmp_path / "state")
+    Roster(state).merge({"old-box": {"ip": "192.0.2.40", "home": "/", "upgrade": "/anix-upgrade/"}})
+    app = create_app(
+        state_dir=state,
+        browse_cmd=[str(browse)],
+        self_host="ats",
+        spokes=Spokes(base_url=fake.base_url, timeout=1.0),
+        latest=FakeLatest(),
+    )
+    ms = by_host(app.test_client().get("/api/machines"))
+    assert ms["ats"]["advertised"] is True
+    assert ms["old-box"]["advertised"] is False
+    assert ms["old-box"]["online"] is True
+
+
+def test_machines_advertised_unknown_without_discovery(client):
+    assert by_host(client.get("/api/machines"))["jetson"]["advertised"] is None

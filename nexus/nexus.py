@@ -43,7 +43,7 @@ def create_app(
     app = Flask(__name__)
     bp = Blueprint("nexus", __name__, url_prefix=subdomain)
 
-    def machine_view(host, rec, probe, latest_version):
+    def machine_view(host, rec, probe, latest_version, advertised):
         is_self = host == self_host
         home = rec.get("home") or "/"
         ip = rec.get("ip")
@@ -70,6 +70,9 @@ def create_app(
             ],
             "can_upgrade": bool(rec.get("upgrade")),
             "last_seen": rec.get("last_seen"),
+            # False when the latest mDNS browse did not list this host, e.g. after
+            # Avahi renamed the machine; its IP may still answer for the new name.
+            "advertised": None if advertised is None else host in advertised,
             "online": probe.get("online", False),
             "version": probe.get("version"),
             "behind_latest": is_behind(probe.get("version"), latest_version),
@@ -90,7 +93,10 @@ def create_app(
         machines = roster.list()
         probes = spokes.probe_all(machines)
         latest_version = latest.get()
-        views = [machine_view(h, machines[h], probes.get(h, {}), latest_version) for h in machines]
+        views = [
+            machine_view(h, machines[h], probes.get(h, {}), latest_version, roster.advertised)
+            for h in machines
+        ]
         # Hub first, then alphabetical.
         views.sort(key=lambda m: (not m["is_self"], m["host"]))
         return jsonify({"machines": views, "self_host": self_host, "latest": latest_version})
