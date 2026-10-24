@@ -797,7 +797,7 @@
                 <label>Crop</label>
                 <div class="btn-group">
                     <button class="btn" id="enableCropBtn" onclick="enableCropMode()">Crop Image</button>
-                    <button class="btn btn-danger" id="applyCropBtn" onclick="applyCrop()" style="display: none;">Apply Crop</button>
+                    <button class="btn" id="applyCropBtn" onclick="applyCrop()" style="display: none;">Set Crop</button>
                     <button class="btn" id="cancelCropBtn" onclick="cancelCrop()" style="display: none;">Cancel</button>
                 </div>
                 <div id="cropInfo" class="crop-info" style="display: none;">
@@ -809,7 +809,7 @@
                 <label>White Rectangle</label>
                 <div class="btn-group">
                     <button class="btn" id="enableWhiteRectBtn" onclick="enableWhiteRectMode()">Draw White Rect</button>
-                    <button class="btn btn-danger" id="applyWhiteRectBtn" onclick="applyWhiteRect()" style="display: none;">Apply White Rect</button>
+                    <button class="btn" id="applyWhiteRectBtn" onclick="applyWhiteRect()" style="display: none;">Set White Rect</button>
                     <button class="btn" id="cancelWhiteRectBtn" onclick="cancelWhiteRect()" style="display: none;">Cancel</button>
                 </div>
                 <div id="whiteRectInfo" class="crop-info" style="display: none;">
@@ -820,13 +820,12 @@
             <div class="control-group">
                 <label>Add Whitespace</label>
                 <div class="whitespace-inputs">
-                    <label class="ws-field">Top<input type="number" id="wsTop" class="ws-input" min="0" value="0" oninput="updateWhitespacePreview()"></label>
-                    <label class="ws-field">Bottom<input type="number" id="wsBottom" class="ws-input" min="0" value="0" oninput="updateWhitespacePreview()"></label>
-                    <label class="ws-field">Left<input type="number" id="wsLeft" class="ws-input" min="0" value="0" oninput="updateWhitespacePreview()"></label>
-                    <label class="ws-field">Right<input type="number" id="wsRight" class="ws-input" min="0" value="0" oninput="updateWhitespacePreview()"></label>
+                    <label class="ws-field">Top<input type="number" id="wsTop" class="ws-input" min="0" value="0" oninput="updateWhitespacePreview(); updateStagedSummary()"></label>
+                    <label class="ws-field">Bottom<input type="number" id="wsBottom" class="ws-input" min="0" value="0" oninput="updateWhitespacePreview(); updateStagedSummary()"></label>
+                    <label class="ws-field">Left<input type="number" id="wsLeft" class="ws-input" min="0" value="0" oninput="updateWhitespacePreview(); updateStagedSummary()"></label>
+                    <label class="ws-field">Right<input type="number" id="wsRight" class="ws-input" min="0" value="0" oninput="updateWhitespacePreview(); updateStagedSummary()"></label>
                 </div>
                 <div class="btn-group">
-                    <button class="btn" onclick="applyWhitespace()">Apply Whitespace</button>
                     <button class="btn" onclick="resetWhitespace()">Reset</button>
                 </div>
             </div>
@@ -862,7 +861,7 @@
                 <label>Crop</label>
                 <div class="btn-group">
                     <button class="btn" id="enableVideoCropBtn" onclick="enableVideoCropMode()">Crop Video</button>
-                    <button class="btn btn-danger" id="applyVideoCropBtn" onclick="applyVideoCrop()" style="display: none;">Apply Crop</button>
+                    <button class="btn" id="applyVideoCropBtn" onclick="applyVideoCrop()" style="display: none;">Set Crop</button>
                     <button class="btn" id="cancelVideoCropBtn" onclick="cancelVideoCrop()" style="display: none;">Cancel</button>
                 </div>
                 <div id="videoCropInfo" class="crop-info" style="display: none;">
@@ -900,17 +899,12 @@
         <div class="edit-points-section" id="editPointsSection">
             <h4>Edit Points (sorted by time)</h4>
             <ol class="edit-points-list" id="editPointsList"></ol>
-            <div style="display:flex; align-items:center; gap:10px; margin:10px 0;">
-                <input type="checkbox" id="preserveTrimOriginal" checked style="width:auto; margin:0; cursor:pointer;">
-                <label for="preserveTrimOriginal" style="margin:0; font-weight:500; color:#495057; cursor:pointer;">Save trimmed clip as a new file (keep this video)</label>
-            </div>
-            <button class="btn btn-danger" id="applyEditsBtn" onclick="applyEdits()"
-                    style="display: none; flex: none; min-width: 180px; width: auto;">Apply Edits</button>
+            <p class="upload-hint">Use the stamp form below to save this clip. Leave the stamp text empty to trim without changing its stamp.</p>
         </div>
 
         <div class="image-container">
             <video id="currentVideo" controls loop preload="auto" playsinline>
-                <source src="{{ file }}#t=0.001" type="{% if file.lower().endswith('.mov') %}video/quicktime{% else %}video/mp4{% endif %}" />
+                <source src="{{ file }}#t=0.001" type="{% if file.split('?')[0].lower().endswith('.mov') %}video/quicktime{% else %}video/mp4{% endif %}" />
             </video>
             <canvas id="videoCropCanvas"></canvas>
         </div>
@@ -960,20 +954,22 @@
 
         <form id="stampForm" action="{{ urlroot }}{{ root }}" method="POST">
             <textarea id="text" name="text" placeholder="Enter stamp text here..."></textarea>
+            <input type="hidden" id="editsInput" name="edits" value="">
+            <p id="stagedEditsSummary" class="upload-hint" style="display:none;"></p>
+            {% if ftype in ('PNG', 'JPG', 'WEBP', 'HEIC', 'MP4') %}
+            <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
+                <input type="checkbox" id="preserve_originals" name="preserve_originals" {% if ftype == 'MP4' %}checked{% endif %} style="width:auto; margin:0; cursor:pointer;">
+                <label for="preserve_originals" style="margin:0; font-weight:500; color:#495057; cursor:pointer;">Keep original (save a separate copy)</label>
+            </div>
+            {% endif %}
             {% if root.startswith('restamp/') %}
             <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
                 <input type="checkbox" id="apply_all" name="apply_all" style="width:auto; margin:0; cursor:pointer;">
                 <label for="apply_all" style="margin:0; font-weight:500; color:#495057; cursor:pointer;">Restamp every file under this stamp (sub-stamps included)</label>
             </div>
-            {% if stamp_path | length == 1 %}
-            <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
-                <input type="checkbox" id="preserve_originals" name="preserve_originals" style="width:auto; margin:0; cursor:pointer;">
-                <label for="preserve_originals" style="margin:0; font-weight:500; color:#495057; cursor:pointer;">Copy when restamping (keep files under the current stamp)</label>
-            </div>
-            {% endif %}
-            <p class="upload-hint">Restamp replaces &ldquo;{{ stamp_path[-1] }}&rdquo;; Add Sub-stamp files this item one level deeper. Leave the text empty to skip.</p>
+            <p class="upload-hint">Restamp replaces &ldquo;{{ stamp_path[-1] }}&rdquo;; Add Sub-stamp files this item one level deeper. Leave the text empty to apply staged edits only, or skip when no edits are staged.</p>
             <div class="btn-group">
-                <button type="submit" class="btn" name="action" value="restamp">Restamp</button>
+                <button type="submit" class="btn" name="action" value="restamp">Apply / Restamp</button>
                 {% if '' not in stamp_path %}
                 <button type="submit" class="btn" name="action" value="substamp">Add Sub-stamp</button>
                 {% endif %}
@@ -982,7 +978,8 @@
                 {% endif %}
             </div>
             {% else %}
-            <input type="submit" value="Submit!">
+            <p class="upload-hint">Leave the text empty to apply staged edits without stamping.</p>
+            <input type="submit" value="Apply / Stamp">
             {% endif %}
         </form>
         {% endif %}
@@ -1221,41 +1218,34 @@
             const form = document.getElementById('stampForm');
             if (!form) return;
             form.addEventListener('submit', function(e) {
-                // Remove Sub-stamp ignores the text field entirely.
                 if (e.submitter && e.submitter.value === 'unsubstamp') return;
                 const ta = document.getElementById('text');
                 if (!ta) return;
                 const val = ta.value.trim();
-                if (val === '') return;
                 if (val.indexOf('.') !== -1 || val.indexOf('/') !== -1) {
                     e.preventDefault();
                     showStatus("Stamp names may not contain '.' or '/'.", true);
+                    return;
                 }
+                const edits = collectEdits();
+                if (edits.length && document.getElementById('apply_all')?.checked) {
+                    e.preventDefault();
+                    showStatus('Apply edits to this file, or restamp all files without edits.', true);
+                    return;
+                }
+                document.getElementById('editsInput').value = JSON.stringify(edits);
+                if (edits.length) showLoading('Applying edits...');
             });
         })();
 
         // ===== IMAGE ROTATE =====
 
+        let stagedRotation = 0, stagedCrop = null, stagedWhiteout = null, stagedVideoCrop = null;
+
         function rotateImage(degrees) {
-            const filename = getCurrentFilename();
-            if (!filename) { showStatus('Error: Could not determine filename', true); return; }
-            const normalizedDegrees = ((degrees % 360) + 360) % 360;
-            fetch('{{ urlroot }}api/rotate-image', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename, degrees: normalizedDegrees })
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) {
-                    showStatus('Image rotated successfully!');
-                    const img = document.getElementById('currentImage');
-                    img.src = img.src.split('?')[0] + '?t=' + Date.now();
-                } else {
-                    showStatus('Error: ' + (data.error || 'Unknown error'), true);
-                }
-            })
-            .catch(err => showStatus('Error: ' + err.message, true));
+            stagedRotation = (stagedRotation + degrees + 360) % 360;
+            showStatus(stagedRotation ? `Rotation queued: ${stagedRotation}°` : 'Rotation cleared');
+            updateStagedSummary();
         }
 
         // ===== IMAGE WHITESPACE =====
@@ -1291,33 +1281,7 @@
                 document.getElementById(id).value = 0;
             });
             clearWhitespacePreview();
-        }
-
-        function applyWhitespace() {
-            const filename = getCurrentFilename();
-            if (!filename) { showStatus('Error: Could not determine filename', true); return; }
-            const vals = readWhitespaceValues();
-            if (vals.top + vals.bottom + vals.left + vals.right === 0) {
-                showStatus('Error: Enter at least one whitespace value', true);
-                return;
-            }
-            fetch('{{ urlroot }}api/pad-image', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename, top: vals.top, bottom: vals.bottom, left: vals.left, right: vals.right })
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) {
-                    showStatus('Whitespace added successfully!');
-                    resetWhitespace();
-                    const img = document.getElementById('currentImage');
-                    img.src = img.src.split('?')[0] + '?t=' + Date.now();
-                } else {
-                    showStatus('Error: ' + (data.error || 'Unknown error'), true);
-                }
-            })
-            .catch(err => showStatus('Error: ' + err.message, true));
+            updateStagedSummary();
         }
 
         // ===== FLOATING ACTION BAR (mobile) =====
@@ -1376,7 +1340,7 @@
             cropRect = { left: margin, top: margin, right: canvas.width - margin, bottom: canvas.height - margin };
             setupCropHandlers();
             drawCropOverlay();
-            showFloatingActions(applyCrop, cancelCrop, 'Apply Crop');
+            showFloatingActions(applyCrop, cancelCrop, 'Set Crop');
             const img = document.getElementById('currentImage');
             if (img && typeof ResizeObserver !== 'undefined') {
                 resizeObserver = new ResizeObserver(() => {
@@ -1392,6 +1356,7 @@
         }
 
         function cancelCrop() {
+            stagedCrop = null;
             cropMode = false; dragState = null;
             const canvas = document.getElementById('cropCanvas');
             canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
@@ -1402,6 +1367,7 @@
             document.getElementById('cancelCropBtn').style.display = 'none';
             hideFloatingActions();
             if (resizeObserver) { resizeObserver.disconnect(); resizeObserver = null; }
+            updateStagedSummary();
         }
 
         // Guard against accumulating duplicate listeners when crop mode is toggled
@@ -1571,8 +1537,6 @@
         }
 
         function applyCrop() {
-            const filename = getCurrentFilename();
-            if (!filename) { showStatus('Error: Could not determine filename', true); return; }
             const img = document.getElementById('currentImage');
             const scaleX = img.naturalWidth/img.offsetWidth, scaleY = img.naturalHeight/img.offsetHeight;
             const w = cropRect.right-cropRect.left, h = cropRect.bottom-cropRect.top;
@@ -1581,19 +1545,10 @@
             const aw=Math.floor(cropRect.right*scaleX)-ax, ah=Math.floor(cropRect.bottom*scaleY)-ay;
             const sx=Math.max(0,Math.min(ax,img.naturalWidth-1)), sy=Math.max(0,Math.min(ay,img.naturalHeight-1));
             const sw=Math.max(1,Math.min(aw,img.naturalWidth-sx)), sh=Math.max(1,Math.min(ah,img.naturalHeight-sy));
-            fetch('{{ urlroot }}api/crop-image', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename, x: sx, y: sy, width: sw, height: sh })
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) {
-                    showStatus('Image cropped successfully!'); cancelCrop();
-                    const img = document.getElementById('currentImage');
-                    img.src = img.src.split('?')[0] + '?t=' + Date.now();
-                } else { showStatus('Error: ' + (data.error || 'Unknown error'), true); }
-            })
-            .catch(err => showStatus('Error: ' + err.message, true));
+            cancelCrop();
+            stagedCrop = { type: 'crop', x: sx, y: sy, width: sw, height: sh };
+            updateStagedSummary();
+            showStatus('Crop queued; use the stamp form to apply it.');
         }
 
         // ===== WHITE RECTANGLE =====
@@ -1624,7 +1579,7 @@
             whiteRect = { left: margin, top: margin, right: canvas.width - margin, bottom: canvas.height - margin };
             makeCropHandlers(canvas, () => whiteRect, r => { whiteRect = r; drawWhiteRectOverlay(); });
             drawWhiteRectOverlay();
-            showFloatingActions(applyWhiteRect, cancelWhiteRect, 'Apply White Rect');
+            showFloatingActions(applyWhiteRect, cancelWhiteRect, 'Set White Rect');
             const img = document.getElementById('currentImage');
             if (img && typeof ResizeObserver !== 'undefined') {
                 whiteRectResizeObserver = new ResizeObserver(() => {
@@ -1640,6 +1595,7 @@
         }
 
         function cancelWhiteRect() {
+            stagedWhiteout = null;
             whiteRectMode = false;
             const canvas = document.getElementById('whiteRectCanvas');
             canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
@@ -1650,6 +1606,7 @@
             document.getElementById('cancelWhiteRectBtn').style.display = 'none';
             hideFloatingActions();
             if (whiteRectResizeObserver) { whiteRectResizeObserver.disconnect(); whiteRectResizeObserver = null; }
+            updateStagedSummary();
         }
 
         function drawWhiteRectOverlay() {
@@ -1678,8 +1635,6 @@
         }
 
         function applyWhiteRect() {
-            const filename = getCurrentFilename();
-            if (!filename) { showStatus('Error: Could not determine filename', true); return; }
             const img = document.getElementById('currentImage');
             const scaleX = img.naturalWidth/img.offsetWidth, scaleY = img.naturalHeight/img.offsetHeight;
             const w = whiteRect.right-whiteRect.left, h = whiteRect.bottom-whiteRect.top;
@@ -1688,19 +1643,10 @@
             const aw=Math.floor(whiteRect.right*scaleX)-ax, ah=Math.floor(whiteRect.bottom*scaleY)-ay;
             const sx=Math.max(0,Math.min(ax,img.naturalWidth-1)), sy=Math.max(0,Math.min(ay,img.naturalHeight-1));
             const sw=Math.max(1,Math.min(aw,img.naturalWidth-sx)), sh=Math.max(1,Math.min(ah,img.naturalHeight-sy));
-            fetch('{{ urlroot }}api/whiteout-image', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename, x: sx, y: sy, width: sw, height: sh })
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) {
-                    showStatus('White rectangle applied!'); cancelWhiteRect();
-                    const img = document.getElementById('currentImage');
-                    img.src = img.src.split('?')[0] + '?t=' + Date.now();
-                } else { showStatus('Error: ' + (data.error || 'Unknown error'), true); }
-            })
-            .catch(err => showStatus('Error: ' + err.message, true));
+            cancelWhiteRect();
+            stagedWhiteout = { type: 'whiteout', x: sx, y: sy, width: sw, height: sh };
+            updateStagedSummary();
+            showStatus('White rectangle queued; use the stamp form to apply it.');
         }
 
         // ===== IMAGE DUPLICATE =====
@@ -1742,25 +1688,9 @@
         // ===== VIDEO ROTATE =====
 
         function rotateVideo(degrees) {
-            const filename = getCurrentFilename();
-            if (!filename) { showStatus('Error: Could not determine filename', true); return; }
-            showLoading('Rotating video...');
-            fetch('{{ urlroot }}api/rotate-video', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename, degrees })
-            })
-            .then(r => r.json())
-            .then(data => {
-                hideLoading();
-                if (data.success) {
-                    showStatus('Video rotated successfully!');
-                    const v = document.getElementById('currentVideo');
-                    const source = v.querySelector('source');
-                    source.src = source.src.split('?')[0].split('#')[0] + '?t=' + Date.now() + '#t=0.001';
-                    v.load();
-                } else { showStatus('Error: ' + (data.error || 'Unknown error'), true); }
-            })
-            .catch(err => { hideLoading(); showStatus('Error: ' + err.message, true); });
+            stagedRotation = (stagedRotation + degrees + 360) % 360;
+            updateStagedSummary();
+            showStatus(stagedRotation ? `Rotation queued: ${stagedRotation}°` : 'Rotation cleared');
         }
 
         // ===== VIDEO DUPLICATE =====
@@ -1805,7 +1735,7 @@
             videoCropRect = { left: margin, top: margin, right: canvas.width-margin, bottom: canvas.height-margin };
             makeCropHandlers(canvas, () => videoCropRect, r => { videoCropRect = r; drawVideoCropOverlay(); });
             drawVideoCropOverlay();
-            showFloatingActions(applyVideoCrop, cancelVideoCrop, 'Apply Crop');
+            showFloatingActions(applyVideoCrop, cancelVideoCrop, 'Set Crop');
             const video = document.getElementById('currentVideo');
             if (video && typeof ResizeObserver !== 'undefined') {
                 videoResizeObserver = new ResizeObserver(() => {
@@ -1821,6 +1751,7 @@
         }
 
         function cancelVideoCrop() {
+            stagedVideoCrop = null;
             videoCropMode = false;
             const canvas = document.getElementById('videoCropCanvas');
             if (!canvas) return;
@@ -1832,6 +1763,7 @@
             document.getElementById('cancelVideoCropBtn').style.display = 'none';
             hideFloatingActions();
             if (videoResizeObserver) { videoResizeObserver.disconnect(); videoResizeObserver = null; }
+            updateStagedSummary();
         }
 
         function drawVideoCropOverlay() {
@@ -1839,8 +1771,6 @@
         }
 
         function applyVideoCrop() {
-            const filename = getCurrentFilename();
-            if (!filename) { showStatus('Error: Could not determine filename', true); return; }
             const video = document.getElementById('currentVideo');
             if (!video.videoWidth || !video.videoHeight) { showStatus('Error: Video dimensions not available yet', true); return; }
             const scaleX = video.videoWidth/video.offsetWidth, scaleY = video.videoHeight/video.offsetHeight;
@@ -1852,23 +1782,9 @@
             const sx=Math.max(0,Math.min(ax,video.videoWidth-1)), sy=Math.max(0,Math.min(ay,video.videoHeight-1));
             const sw=Math.max(2,Math.min(aw,video.videoWidth-sx)), sh=Math.max(2,Math.min(ah,video.videoHeight-sy));
             cancelVideoCrop();
-            showLoading('Cropping video...');
-            fetch('{{ urlroot }}api/crop-video', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename, x: sx, y: sy, width: sw, height: sh })
-            })
-            .then(r => r.json())
-            .then(data => {
-                hideLoading();
-                if (data.success) {
-                    showStatus('Video cropped successfully!');
-                    const v = document.getElementById('currentVideo');
-                    const source = v.querySelector('source');
-                    source.src = source.src.split('?')[0].split('#')[0] + '?t=' + Date.now() + '#t=0.001';
-                    v.load();
-                } else { showStatus('Error: ' + (data.error || 'Unknown error'), true); }
-            })
-            .catch(err => { hideLoading(); showStatus('Error: ' + err.message, true); });
+            stagedVideoCrop = { type: 'crop', x: sx, y: sy, width: sw, height: sh };
+            updateStagedSummary();
+            showStatus('Video crop queued; use the stamp form to apply it.');
         }
 
         // ===== EDIT POINTS =====
@@ -1890,8 +1806,7 @@
         function renderEditPoints() {
             const section = document.getElementById('editPointsSection');
             const list = document.getElementById('editPointsList');
-            const applyBtn = document.getElementById('applyEditsBtn');
-            if (!section || !list || !applyBtn) return;
+            if (!section || !list) return;
             const sorted = [...editPoints].sort((a, b) => a.time - b.time);
             list.innerHTML = '';
             sorted.forEach(pt => {
@@ -1912,36 +1827,31 @@
             });
             const has = editPoints.length > 0;
             section.style.display = has ? 'block' : 'none';
-            applyBtn.style.display = has ? 'inline-block' : 'none';
+            updateStagedSummary();
         }
 
-        function applyEdits() {
-            const filename = getCurrentFilename();
-            if (!filename) { showStatus('Error: Could not determine filename', true); return; }
-            if (!editPoints.length) { showStatus('Error: No edit points defined', true); return; }
-            const preserveOriginal = document.getElementById('preserveTrimOriginal').checked;
-            showLoading('Applying edits...');
-            fetch('{{ urlroot }}api/trim-video', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename, preserve_original: preserveOriginal, edit_points: editPoints.map(p => ({ type: p.type, time: p.time })) })
-            })
-            .then(r => r.json())
-            .then(data => {
-                hideLoading();
-                if (data.success) {
-                    editPoints = []; renderEditPoints();
-                    if (data.new_filename) {
-                        showStatus('Saved trimmed clip as ' + data.new_filename);
-                    } else {
-                        showStatus('Edits applied successfully!');
-                        const v = document.getElementById('currentVideo');
-                        const source = v.querySelector('source');
-                        source.src = source.src.split('?')[0].split('#')[0] + '?t=' + Date.now() + '#t=0.001';
-                        v.load();
-                    }
-                } else { showStatus('Error: ' + (data.error || 'Unknown error'), true); }
-            })
-            .catch(err => { hideLoading(); showStatus('Error: ' + err.message, true); });
+        function collectEdits() {
+            const edits = [];
+            if (document.getElementById('currentImage')) {
+                if (stagedWhiteout) edits.push(stagedWhiteout);
+                if (stagedCrop) edits.push(stagedCrop);
+                if (stagedRotation) edits.push({ type: 'rotate', degrees: stagedRotation });
+                const padding = readWhitespaceValues();
+                if (Object.values(padding).some(Boolean)) edits.push({ type: 'pad', ...padding });
+            } else if (document.getElementById('currentVideo')) {
+                if (stagedVideoCrop) edits.push(stagedVideoCrop);
+                if (stagedRotation) edits.push({ type: 'rotate', degrees: stagedRotation });
+                if (editPoints.length) edits.push({ type: 'trim', points: editPoints.map(({ type, time }) => ({ type, time })) });
+            }
+            return edits;
+        }
+
+        function updateStagedSummary() {
+            const summary = document.getElementById('stagedEditsSummary');
+            if (!summary) return;
+            const names = collectEdits().map(edit => edit.type);
+            summary.textContent = names.length ? 'Queued edits: ' + names.join(', ') + '. Apply them with the stamp form.' : '';
+            summary.style.display = names.length ? 'block' : 'none';
         }
         // ===== RESTAMP AUTO-PLAY =====
 
