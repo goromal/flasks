@@ -233,12 +233,14 @@ class StampServer:
     def replace_stamp(self, path, segment, copy=False):
         self._require_current_at(path)
         rename_to_path(RES_DIR, self.filedeck, replace_segment(path, len(path) - 1, segment), copy=copy)
-        self._drop_current()
+        if not copy:
+            self._drop_current()
 
     def replace_stamp_all(self, path, segment, copy=False):
         """Rename the whole subtree under `path`. Returns skipped filenames."""
         _, skipped = rename_subtree(RES_DIR, os.listdir(RES_DIR), path, segment, copy=copy)
-        self.filelist = []
+        if not copy:
+            self.filelist = []
         return skipped
 
     def substamp(self, path, segment):
