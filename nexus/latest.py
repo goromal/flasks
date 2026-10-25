@@ -1,18 +1,32 @@
+import json
 import re
 import threading
 import time
 import urllib.request
+from datetime import datetime
 
 MASTER_VERSION_URL = "https://raw.githubusercontent.com/goromal/anixpkgs/master/ANIX_VERSION"
 # raw.githubusercontent.com caches for ~5 min, so polling faster gains nothing.
 TTL_S = 300.0
 TIMEOUT_S = 5.0
+REPO_URL = "https://github.com/goromal/anixpkgs"
+COMMITS_API = "https://api.github.com/repos/goromal/anixpkgs/commits"
+CHANGES_RAW_URL = "https://raw.githubusercontent.com/goromal/anixpkgs/master/changes"
+CHANGES_COUNT = 5
+# Unauthenticated GitHub API calls are limited to 60/hour per IP; this spends 2 per refresh.
+CHANGES_TTL_S = 900.0
+_BUMP = re.compile(r"ANIX_VERSION\s*->\s*v?(\d+\.\d+\.\d+)")
+_PR_TITLE = re.compile(r"\(#(\d+)\)\s*$")
 _SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
 
 
 def _fetch_url(url, timeout=TIMEOUT_S):
     with urllib.request.urlopen(url, timeout=timeout) as resp:
         return resp.read().decode()
+
+
+def _commit_time(c):
+    return datetime.fromisoformat(c["commit"]["committer"]["date"].replace("Z", "+00:00"))
 
 
 def parse_version(s):
@@ -29,15 +43,15 @@ def is_behind(version, latest):
     return v < lv
 
 
-class LatestVersion:
-    """The anixpkgs version on master, i.e. what a default upgrade installs.
+class _Background:
+    """A remote value refreshed in the background at most once per ttl.
 
     get() never blocks: a stale value triggers a background refresh and the last
-    known value (None until the first fetch succeeds) is returned meanwhile.
+    known value (None until the first load succeeds) is returned meanwhile.
+    Subclasses implement _load(), which returns the new value or raises.
     """
 
-    def __init__(self, url=MASTER_VERSION_URL, ttl=TTL_S, fetch=_fetch_url, clock=time.monotonic):
-        self.url = url
+    def __init__(self, ttl, fetch, clock):
         self.ttl = ttl
         self.fetch = fetch
         self.clock = clock
@@ -48,10 +62,7 @@ class LatestVersion:
 
     def _refresh(self):
         try:
-            value = str(self.fetch(self.url)).strip()
-            if parse_version(value) is None:
-                raise ValueError(f"unexpected ANIX_VERSION: {value!r}")
-            self.value = value
+            self.value = self._load()
         except Exception:
             pass  # Offline or GitHub hiccup: keep the last known value.
         finally:
@@ -68,3 +79,64 @@ class LatestVersion:
         if start:
             threading.Thread(target=self._refresh, daemon=True).start()
         return self.value
+
+
+class LatestVersion(_Background):
+    """The anixpkgs version on master, i.e. what a default upgrade installs."""
+
+    def __init__(self, url=MASTER_VERSION_URL, ttl=TTL_S, fetch=_fetch_url, clock=time.monotonic):
+        super().__init__(ttl, fetch, clock)
+        self.url = url
+
+    def _load(self):
+        value = str(self.fetch(self.url)).strip()
+        if parse_version(value) is None:
+            raise ValueError(f"unexpected ANIX_VERSION: {value!r}")
+        return value
+
+
+class RecentChanges(_Background):
+    """The newest changelog entries on anixpkgs master and the versions that shipped them.
+
+    Every merged PR with a changelog entry lands as one squash commit "Title (#N)"
+    adding changes/pr-N.md, and the release bot follows it with a commit
+    "Bump <level> ANIX_VERSION -> X.Y.Z". So an entry shipped in the first bump
+    committed at or after it; entries with no bump yet have version None.
+    """
+
+    def __init__(self, count=CHANGES_COUNT, ttl=CHANGES_TTL_S, fetch=_fetch_url, clock=time.monotonic):
+        super().__init__(ttl, fetch, clock)
+        self.count = count
+
+    def _commits(self, path, per_page):
+        url = f"{COMMITS_API}?sha=master&path={path}&per_page={per_page}"
+        return json.loads(self.fetch(url))
+
+    def _load(self):
+        # A few spare bumps so the oldest entry still finds its version.
+        bumps = []
+        for c in self._commits("ANIX_VERSION", self.count + 5):
+            m = _BUMP.search(c["commit"]["message"])
+            if m:
+                bumps.append((_commit_time(c), m.group(1)))
+        bumps.sort()
+        entries = []
+        for c in self._commits("changes", self.count):
+            when = _commit_time(c)
+            title = c["commit"]["message"].splitlines()[0].strip()
+            m = _PR_TITLE.search(title)
+            pr = int(m.group(1)) if m else None
+            text = title[: m.start()].strip() if m else title
+            if pr is not None:
+                try:
+                    text = str(self.fetch(f"{CHANGES_RAW_URL}/pr-{pr}.md")).strip() or text
+                except Exception:
+                    pass  # The commit title is the PR title; good enough.
+            entries.append({
+                "text": text,
+                "pr": pr,
+                "pr_url": f"{REPO_URL}/pull/{pr}" if pr is not None else c.get("html_url"),
+                "date": c["commit"]["committer"]["date"],
+                "version": next((v for t, v in bumps if t >= when), None),
+            })
+        return entries

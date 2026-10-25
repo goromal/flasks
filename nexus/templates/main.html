@@ -39,6 +39,10 @@
     .health-list .check { padding: .5rem 0; border-top: 1px solid var(--bs-border-color); }
     .health-list .check:first-child { border-top: 0; }
     .health-list pre { white-space: pre-wrap; font-size: .8rem; background: var(--bs-tertiary-bg); border-radius: 4px; padding: .5rem; margin: .4rem 0 0; }
+    .changes-list li { display: flex; gap: .6rem; align-items: baseline; padding: .3rem 0; border-top: 1px solid var(--bs-border-color); }
+    .changes-list li:first-child { border-top: 0; }
+    .changes-list .ver { flex: 0 0 4.5rem; text-align: center; }
+    .changes-list .what { flex: 1; min-width: 0; overflow-wrap: anywhere; }
     @media (max-width: 575px) {
       .trunc { max-width: 5.5rem; }
       .machine-table > :not(caption) > * > * { padding: .4rem .3rem; }
@@ -78,6 +82,13 @@
           </tbody>
         </table>
       </div>
+    </div>
+  </div>
+
+  <div class="card mb-4" id="changes-card" hidden>
+    <div class="card-body">
+      <h5 class="card-title">Recent changes <span class="small text-muted fw-normal">on anixpkgs master</span></h5>
+      <ul class="list-unstyled mb-0 changes-list" id="changes"></ul>
     </div>
   </div>
 
@@ -141,6 +152,7 @@ let machines = [];
 let latest = null;
 let stale = false;
 const CACHE_KEY = `nexus-machines:${BASE}`;
+const CHANGES_KEY = `nexus-changes:${BASE}`;
 const LATEST_KEY = `nexus-latest:${BASE}`;
 let logSource = null;
 let logHost = null;
@@ -456,11 +468,37 @@ $('upgrade-form').addEventListener('submit', async e => {
   }
 });
 
+function renderChanges(changes) {
+  $('changes-card').hidden = !changes?.length;
+  if (!changes?.length) return;
+  $('changes').innerHTML = changes.map(c => {
+    const ver = c.version
+      ? `<span class="badge bg-light text-dark border font-monospace ver">${esc(c.version)}</span>`
+      : '<span class="badge bg-warning-subtle text-warning-emphasis border ver" title="Merged; release not bumped yet">unreleased</span>';
+    const pr = c.pr ? ` <a class="small text-muted" href="${esc(c.pr_url)}" target="_blank" rel="noopener">#${c.pr}</a>` : '';
+    const when = c.date ? ` <span class="small text-muted" title="${esc(c.date)}">${ago(Date.parse(c.date))}</span>` : '';
+    return `<li>${ver}<span class="what">${esc(c.text)}${pr}${when}</span></li>`;
+  }).join('');
+}
+
+// GitHub data the hub refreshes every 15 minutes, so poll it slowly.
+async function refreshChanges() {
+  try {
+    const changes = (await (await fetch(`${BASE}/api/changelog`)).json()).changes;
+    if (!changes) return;  // Hub has not reached GitHub yet; keep what is shown.
+    renderChanges(changes);
+    try { localStorage.setItem(CHANGES_KEY, JSON.stringify(changes)); } catch (e) {}
+  } catch (e) {
+    console.error('changelog refresh failed', e);
+  }
+}
+
 // Show the last known list immediately; the live probe can take a few seconds.
 function loadCached() {
   try {
     latest = localStorage.getItem(LATEST_KEY);
     renderLatest();
+    renderChanges(JSON.parse(localStorage.getItem(CHANGES_KEY)));
     const cached = JSON.parse(localStorage.getItem(CACHE_KEY));
     if (Array.isArray(cached) && cached.length) { machines = cached; stale = true; render(); }
   } catch (e) {}
@@ -470,6 +508,8 @@ onSourceTypeChange();
 loadCached();
 refresh(false);
 setInterval(() => refresh(false), 5000);
+refreshChanges();
+setInterval(refreshChanges, 60000);
 </script>
 </body>
 </html>

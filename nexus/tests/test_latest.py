@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import threading
@@ -7,7 +8,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from latest import LatestVersion, is_behind, parse_version
+from latest import LatestVersion, RecentChanges, is_behind, parse_version
 
 
 @pytest.mark.parametrize("s,expected", [
@@ -102,3 +103,71 @@ def test_keeps_last_known_value_on_failure(failure):
     wait_idle(lv)
     assert lv.get() == "9.6.6"
     assert results == []
+
+
+def _commit(message, date, sha="abc"):
+    return {"commit": {"message": message, "committer": {"date": date}},
+            "html_url": f"https://github.com/goromal/anixpkgs/commit/{sha}"}
+
+
+def _github(changes, bumps, files):
+    def fetch(url):
+        if "path=changes" in url:
+            return json.dumps(changes)
+        if "path=ANIX_VERSION" in url:
+            return json.dumps(bumps)
+        name = url.rsplit("/", 1)[1]
+        if name in files:
+            return files[name]
+        raise OSError("404")
+    return fetch
+
+
+def test_recent_changes_pairs_entries_with_their_release_bump():
+    changes = [
+        _commit("Unreleased thing (#12)", "2026-10-25T06:00:00Z"),
+        _commit("Second fix (#11)\n\nbody", "2026-10-25T05:36:26Z"),
+        _commit("No changelog file (#10)", "2026-10-25T02:13:01Z"),
+        _commit("Hand-edited changelog", "2026-10-24T01:00:00Z", sha="def"),
+    ]
+    bumps = [
+        _commit("Bump patch ANIX_VERSION -> 9.16.3", "2026-10-25T05:36:40Z"),
+        _commit("Bump patch ANIX_VERSION -> 9.16.2", "2026-10-25T02:13:19Z"),
+        _commit("Manual ANIX_VERSION tweak", "2026-10-24T12:00:00Z"),
+        _commit("Bump minor ANIX_VERSION -> 9.16.0", "2026-10-24T01:00:30Z"),
+    ]
+    files = {"pr-12.md": "Unreleased thing\n", "pr-11.md": "Second fix, as written in the PR comment\n"}
+    rc = RecentChanges(count=4, fetch=_github(changes, bumps, files))
+    got = rc._load()
+    assert [(c["text"], c["pr"], c["version"]) for c in got] == [
+        ("Unreleased thing", 12, None),
+        ("Second fix, as written in the PR comment", 11, "9.16.3"),
+        ("No changelog file", 10, "9.16.2"),  # falls back to the commit title
+        ("Hand-edited changelog", None, "9.16.0"),
+    ]
+    assert got[1]["pr_url"] == "https://github.com/goromal/anixpkgs/pull/11"
+    assert got[3]["pr_url"] == "https://github.com/goromal/anixpkgs/commit/def"
+    assert got[1]["date"] == "2026-10-25T05:36:26Z"
+
+
+def test_recent_changes_keeps_last_known_list_when_github_fails():
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        if len(calls) > 3:
+            raise OSError("rate limited")
+        return _github([_commit("A (#1)", "2026-10-25T00:00:00Z")],
+                       [_commit("Bump patch ANIX_VERSION -> 1.0.1", "2026-10-25T00:00:10Z")],
+                       {"pr-1.md": "A"})(url)
+
+    clock = Clock()
+    rc = RecentChanges(ttl=10, fetch=fetch, clock=clock)
+    rc.get()
+    wait_idle(rc)
+    first = rc.get()
+    assert first[0]["version"] == "1.0.1"
+    clock.t = 10
+    rc.get()
+    wait_idle(rc)
+    assert rc.get() == first
