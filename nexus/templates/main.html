@@ -41,7 +41,11 @@
     .health-list pre { white-space: pre-wrap; font-size: .8rem; background: var(--bs-tertiary-bg); border-radius: 4px; padding: .5rem; margin: .4rem 0 0; }
     .changes-list li { display: flex; gap: .6rem; align-items: baseline; padding: .3rem 0; border-top: 1px solid var(--bs-border-color); }
     .changes-list li:first-child { border-top: 0; }
-    .changes-list .ver { flex: 0 0 4.5rem; text-align: center; }
+    .changes-list .ver { flex: 0 0 6rem; text-align: center; }
+    /* The anixpkgs PatchRelease / MinorRelease / MajorRelease PR label colors. */
+    .changes-list .ver.lvl-patch { background: #a2eeef; color: #000; border-color: #a2eeef !important; }
+    .changes-list .ver.lvl-minor { background: #1D76DB; color: #fff; border-color: #1D76DB !important; }
+    .changes-list .ver.lvl-major { background: #0052AA; color: #fff; border-color: #0052AA !important; }
     .changes-list .what { flex: 1; min-width: 0; overflow-wrap: anywhere; }
     @media (max-width: 575px) {
       .trunc { max-width: 5.5rem; }
@@ -468,12 +472,16 @@ $('upgrade-form').addEventListener('submit', async e => {
   }
 });
 
+const LEVELS = ['patch', 'minor', 'major'];
+
 function renderChanges(changes) {
   $('changes-card').hidden = !changes?.length;
   if (!changes?.length) return;
   $('changes').innerHTML = changes.map(c => {
     const ver = c.version
-      ? `<span class="badge bg-light text-dark border font-monospace ver">${esc(c.version)}</span>`
+      ? (LEVELS.includes(c.level)
+        ? `<span class="badge border font-monospace ver lvl-${c.level}" title="${c.level} release">${esc(c.version)}</span>`
+        : `<span class="badge bg-light text-dark border font-monospace ver">${esc(c.version)}</span>`)
       : '<span class="badge bg-warning-subtle text-warning-emphasis border ver" title="Merged; release not bumped yet">unreleased</span>';
     const pr = c.pr ? ` <a class="small text-muted" href="${esc(c.pr_url)}" target="_blank" rel="noopener">#${c.pr}</a>` : '';
     const when = c.date ? ` <span class="small text-muted" title="${esc(c.date)}">${ago(Date.parse(c.date))}</span>` : '';

@@ -134,16 +134,17 @@ def test_recent_changes_pairs_entries_with_their_release_bump():
         _commit("Bump patch ANIX_VERSION -> 9.16.3", "2026-10-25T05:36:40Z"),
         _commit("Bump patch ANIX_VERSION -> 9.16.2", "2026-10-25T02:13:19Z"),
         _commit("Manual ANIX_VERSION tweak", "2026-10-24T12:00:00Z"),
+        _commit("ANIX_VERSION -> 9.16.1", "2026-10-24T11:00:00Z"),  # version, no level
         _commit("Bump minor ANIX_VERSION -> 9.16.0", "2026-10-24T01:00:30Z"),
     ]
     files = {"pr-12.md": "Unreleased thing\n", "pr-11.md": "Second fix, as written in the PR comment\n"}
     rc = RecentChanges(count=4, fetch=_github(changes, bumps, files))
     got = rc._load()
-    assert [(c["text"], c["pr"], c["version"]) for c in got] == [
-        ("Unreleased thing", 12, None),
-        ("Second fix, as written in the PR comment", 11, "9.16.3"),
-        ("No changelog file", 10, "9.16.2"),  # falls back to the commit title
-        ("Hand-edited changelog", None, "9.16.0"),
+    assert [(c["text"], c["pr"], c["version"], c["level"]) for c in got] == [
+        ("Unreleased thing", 12, None, None),
+        ("Second fix, as written in the PR comment", 11, "9.16.3", "patch"),
+        ("No changelog file", 10, "9.16.2", "patch"),  # falls back to the commit title
+        ("Hand-edited changelog", None, "9.16.0", "minor"),
     ]
     assert got[1]["pr_url"] == "https://github.com/goromal/anixpkgs/pull/11"
     assert got[3]["pr_url"] == "https://github.com/goromal/anixpkgs/commit/def"
@@ -171,3 +172,11 @@ def test_recent_changes_keeps_last_known_list_when_github_fails():
     rc.get()
     wait_idle(rc)
     assert rc.get() == first
+
+
+def test_recent_changes_level_is_none_when_bump_message_omits_it():
+    rc = RecentChanges(count=1, fetch=_github(
+        [_commit("A (#1)", "2026-10-25T00:00:00Z")],
+        [_commit("ANIX_VERSION -> 2.0.0", "2026-10-25T00:00:10Z")],
+        {}))
+    assert [(c["version"], c["level"]) for c in rc._load()] == [("2.0.0", None)]

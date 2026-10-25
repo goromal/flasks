@@ -15,7 +15,7 @@ CHANGES_RAW_URL = "https://raw.githubusercontent.com/goromal/anixpkgs/master/cha
 CHANGES_COUNT = 5
 # Unauthenticated GitHub API calls are limited to 60/hour per IP; this spends 2 per refresh.
 CHANGES_TTL_S = 900.0
-_BUMP = re.compile(r"ANIX_VERSION\s*->\s*v?(\d+\.\d+\.\d+)")
+_BUMP = re.compile(r"(?:Bump\s+(patch|minor|major)\s+)?ANIX_VERSION\s*->\s*v?(\d+\.\d+\.\d+)", re.IGNORECASE)
 _PR_TITLE = re.compile(r"\(#(\d+)\)\s*$")
 _SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
 
@@ -118,7 +118,8 @@ class RecentChanges(_Background):
         for c in self._commits("ANIX_VERSION", self.count + 5):
             m = _BUMP.search(c["commit"]["message"])
             if m:
-                bumps.append((_commit_time(c), m.group(1)))
+                level = m.group(1).lower() if m.group(1) else None
+                bumps.append((_commit_time(c), m.group(2), level))
         bumps.sort()
         entries = []
         for c in self._commits("changes", self.count):
@@ -132,11 +133,14 @@ class RecentChanges(_Background):
                     text = str(self.fetch(f"{CHANGES_RAW_URL}/pr-{pr}.md")).strip() or text
                 except Exception:
                     pass  # The commit title is the PR title; good enough.
+            version, level = next(((v, lvl) for t, v, lvl in bumps if t >= when), (None, None))
             entries.append({
                 "text": text,
                 "pr": pr,
                 "pr_url": f"{REPO_URL}/pull/{pr}" if pr is not None else c.get("html_url"),
                 "date": c["commit"]["committer"]["date"],
-                "version": next((v for t, v in bumps if t >= when), None),
+                "version": version,
+                # patch|minor|major, matching the anixpkgs PR release labels; None if unknown.
+                "level": level,
             })
         return entries
