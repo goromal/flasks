@@ -13,6 +13,7 @@ REPO_URL = "https://github.com/goromal/anixpkgs"
 COMMITS_API = "https://api.github.com/repos/goromal/anixpkgs/commits"
 CHANGES_RAW_URL = "https://raw.githubusercontent.com/goromal/anixpkgs/master/changes"
 CHANGES_COUNT = 5
+BUMPS_PAGE = 100  # GitHub's max per_page.
 # Unauthenticated GitHub API calls are limited to 60/hour per IP; this spends 2 per refresh.
 CHANGES_TTL_S = 900.0
 _BUMP = re.compile(r"(?:Bump\s+(patch|minor|major)\s+)?ANIX_VERSION\s*->\s*v?(\d+\.\d+\.\d+)", re.IGNORECASE)
@@ -99,30 +100,41 @@ class RecentChanges(_Background):
     """The newest changelog entries on anixpkgs master and the versions that shipped them.
 
     Every merged PR with a changelog entry lands as one squash commit "Title (#N)"
-    adding changes/pr-N.md, and the release bot follows it with a commit
-    "Bump <level> ANIX_VERSION -> X.Y.Z". So an entry shipped in the first bump
-    committed at or after it; entries with no bump yet have version None.
+    adding changes/pr-N.md, and a release PR's merge is followed by the bot's
+    commit "Bump <level> ANIX_VERSION -> X.Y.Z". So an entry shipped in the first
+    bump committed at or after it. Either can happen without the other: an entry
+    merged without a release ships in the next bump (version None until then),
+    and a bump without an entry is just never anyone's first bump.
     """
 
     def __init__(self, count=CHANGES_COUNT, ttl=CHANGES_TTL_S, fetch=_fetch_url, clock=time.monotonic):
         super().__init__(ttl, fetch, clock)
         self.count = count
 
-    def _commits(self, path, per_page):
+    def _commits(self, path, per_page, since=None):
         url = f"{COMMITS_API}?sha=master&path={path}&per_page={per_page}"
+        if since:
+            url += f"&since={since}"
         return json.loads(self.fetch(url))
 
     def _load(self):
-        # A few spare bumps so the oldest entry still finds its version.
+        changes = self._commits("changes", self.count)
+        if not changes:
+            return []
+        # Every bump since the oldest entry, however many releases had no entry.
+        # Bumps come newest first, so a full page may have cut off the earliest.
+        since = min(c["commit"]["committer"]["date"] for c in changes)
+        page = self._commits("ANIX_VERSION", BUMPS_PAGE, since=since)
+        covered_from = min(map(_commit_time, page)) if len(page) >= BUMPS_PAGE else None
         bumps = []
-        for c in self._commits("ANIX_VERSION", self.count + 5):
+        for c in page:
             m = _BUMP.search(c["commit"]["message"])
             if m:
                 level = m.group(1).lower() if m.group(1) else None
                 bumps.append((_commit_time(c), m.group(2), level))
         bumps.sort()
         entries = []
-        for c in self._commits("changes", self.count):
+        for c in changes:
             when = _commit_time(c)
             title = c["commit"]["message"].splitlines()[0].strip()
             m = _PR_TITLE.search(title)
@@ -133,7 +145,10 @@ class RecentChanges(_Background):
                     text = str(self.fetch(f"{CHANGES_RAW_URL}/pr-{pr}.md")).strip() or text
                 except Exception:
                     pass  # The commit title is the PR title; good enough.
-            version, level = next(((v, lvl) for t, v, lvl in bumps if t >= when), (None, None))
+            if covered_from is not None and when < covered_from:
+                version, level = None, None  # Its first bump fell off the page; don't guess.
+            else:
+                version, level = next(((v, lvl) for t, v, lvl in bumps if t >= when), (None, None))
             entries.append({
                 "text": text,
                 "pr": pr,
