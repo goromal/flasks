@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from flask import Blueprint, Flask, Response, jsonify, render_template, request
 
-from latest import LatestVersion, is_behind
+from latest import LatestVersion, RecentChanges, is_behind
 from roster import Roster, bare_host
 from spokes import OPTION_KEYS, SpokeError, Spokes
 
@@ -34,11 +34,15 @@ def create_app(
     self_host=None,
     spokes=None,
     latest=None,
+    changes=None,
 ):
     roster = Roster(os.path.expanduser(state_dir), browse_cmd=browse_cmd)
     spokes = spokes or Spokes()
     latest = latest or LatestVersion()
-    latest.get()  # Start the first fetch now so it is ready for the first page load.
+    changes = changes or RecentChanges()
+    # Start the first fetches now so they are ready for the first page load.
+    latest.get()
+    changes.get()
     self_host = bare_host(self_host or socket.gethostname())
     app = Flask(__name__)
     bp = Blueprint("nexus", __name__, url_prefix=subdomain)
@@ -100,6 +104,11 @@ def create_app(
         # Hub first, then alphabetical.
         views.sort(key=lambda m: (not m["is_self"], m["host"]))
         return jsonify({"machines": views, "self_host": self_host, "latest": latest_version})
+
+    @bp.route("/api/changelog")
+    def api_changelog():
+        # None until the first GitHub fetch succeeds.
+        return jsonify({"changes": changes.get()})
 
     @bp.route("/api/upgrade", methods=["POST"])
     def api_upgrade():

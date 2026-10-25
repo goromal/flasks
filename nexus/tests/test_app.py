@@ -23,6 +23,9 @@ class FakeLatest:
         return self.value
 
 
+CHANGES = [{"text": "Fix a thing", "pr": 7, "pr_url": "u", "date": "2026-10-24T00:00:00Z", "version": "1.3.0"}]
+
+
 def _free_port():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -126,6 +129,7 @@ def client(tmp_path, fake):
         self_host="ats",
         spokes=Spokes(base_url=fake.base_url, timeout=1.0),
         latest=FakeLatest(),
+        changes=FakeLatest(CHANGES),
     )
     return app.test_client()
 
@@ -234,6 +238,10 @@ def test_machines_reports_latest_master_version(client):
     assert client.get("/api/machines").get_json()["latest"] == "1.3.0"
 
 
+def test_changelog(client):
+    assert client.get("/api/changelog").get_json() == {"changes": CHANGES}
+
+
 def test_machines_latest_unknown(tmp_path, fake):
     state = str(tmp_path / "state")
     Roster(state).merge({"ats": {"ip": "192.0.2.10", "home": "/", "upgrade": "/anix-upgrade/"}})
@@ -242,6 +250,7 @@ def test_machines_latest_unknown(tmp_path, fake):
         self_host="ats",
         spokes=Spokes(base_url=fake.base_url, timeout=1.0),
         latest=FakeLatest(None),
+        changes=FakeLatest(None),
     )
     data = app.test_client().get("/api/machines").get_json()
     assert data["latest"] is None
@@ -302,6 +311,7 @@ def test_machines_flags_hosts_missing_from_mdns(tmp_path, fake):
         self_host="ats",
         spokes=Spokes(base_url=fake.base_url, timeout=1.0),
         latest=FakeLatest(),
+        changes=FakeLatest(CHANGES),
     )
     ms = by_host(app.test_client().get("/api/machines"))
     assert ms["ats"]["advertised"] is True
