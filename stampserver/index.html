@@ -246,6 +246,42 @@
             max-height: max(280px, calc(100dvh - 220px));
         }
 
+        #queuedPreviewCanvas {
+            position: absolute;
+            pointer-events: none;
+            display: none;
+        }
+
+        .queued-edit-badge {
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            z-index: 1;
+            max-width: calc(100% - 16px);
+            padding: 5px 8px;
+            border-radius: 5px;
+            background: rgba(33, 37, 41, 0.85);
+            color: white;
+            font-size: 0.8rem;
+            pointer-events: none;
+            display: none;
+        }
+
+        .queued-edits {
+            margin: 0 0 14px;
+            color: #495057;
+            font-size: 0.9rem;
+        }
+
+        .queued-edits button {
+            margin: 3px 4px 3px 0;
+            padding: 5px 8px;
+            border: 1px solid #adb5bd;
+            border-radius: 5px;
+            background: #f8f9fa;
+            cursor: pointer;
+        }
+
         .video-tools {
             display: flex;
             flex-wrap: wrap;
@@ -797,7 +833,7 @@
                 <label>Crop</label>
                 <div class="btn-group">
                     <button class="btn" id="enableCropBtn" onclick="enableCropMode()">Crop Image</button>
-                    <button class="btn" id="applyCropBtn" onclick="applyCrop()" style="display: none;">Set Crop</button>
+                    <button class="btn" id="applyCropBtn" onclick="applyCrop()" style="display: none;">Queue Crop</button>
                     <button class="btn" id="cancelCropBtn" onclick="cancelCrop()" style="display: none;">Cancel</button>
                 </div>
                 <div id="cropInfo" class="crop-info" style="display: none;">
@@ -809,7 +845,7 @@
                 <label>White Rectangle</label>
                 <div class="btn-group">
                     <button class="btn" id="enableWhiteRectBtn" onclick="enableWhiteRectMode()">Draw White Rect</button>
-                    <button class="btn" id="applyWhiteRectBtn" onclick="applyWhiteRect()" style="display: none;">Set White Rect</button>
+                    <button class="btn" id="applyWhiteRectBtn" onclick="applyWhiteRect()" style="display: none;">Queue White Rect</button>
                     <button class="btn" id="cancelWhiteRectBtn" onclick="cancelWhiteRect()" style="display: none;">Cancel</button>
                 </div>
                 <div id="whiteRectInfo" class="crop-info" style="display: none;">
@@ -834,6 +870,8 @@
 
         <div class="image-container">
             <img id="currentImage" src="{{ file }}" alt="" />
+            <canvas id="queuedPreviewCanvas"></canvas>
+            <div id="queuedEditBadge" class="queued-edit-badge"></div>
             <canvas id="cropCanvas"></canvas>
             <canvas id="whiteRectCanvas"></canvas>
         </div>
@@ -855,7 +893,7 @@
                 <label>Crop</label>
                 <div class="btn-group">
                     <button class="btn" id="enableVideoCropBtn" onclick="enableVideoCropMode()">Crop Video</button>
-                    <button class="btn" id="applyVideoCropBtn" onclick="applyVideoCrop()" style="display: none;">Set Crop</button>
+                    <button class="btn" id="applyVideoCropBtn" onclick="applyVideoCrop()" style="display: none;">Queue Crop</button>
                     <button class="btn" id="cancelVideoCropBtn" onclick="cancelVideoCrop()" style="display: none;">Cancel</button>
                 </div>
                 <div id="videoCropInfo" class="crop-info" style="display: none;">
@@ -894,6 +932,8 @@
             <video id="currentVideo" controls loop preload="auto" playsinline>
                 <source src="{{ file }}#t=0.001" type="{% if file.split('?')[0].lower().endswith('.mov') %}video/quicktime{% else %}video/mp4{% endif %}" />
             </video>
+            <canvas id="queuedPreviewCanvas"></canvas>
+            <div id="queuedEditBadge" class="queued-edit-badge"></div>
             <canvas id="videoCropCanvas"></canvas>
         </div>
 
@@ -943,10 +983,10 @@
         <form id="stampForm" action="{{ urlroot }}{{ root }}" method="POST">
             <textarea id="text" name="text" placeholder="Enter stamp text here..."></textarea>
             <input type="hidden" id="editsInput" name="edits" value="">
-            <p id="stagedEditsSummary" class="upload-hint" style="display:none;"></p>
+            <div id="stagedEditsSummary" class="queued-edits" style="display:none;"></div>
             {% if ftype in ('PNG', 'JPG', 'WEBP', 'HEIC', 'MP4') %}
             <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
-                <input type="checkbox" id="preserve_originals" name="preserve_originals" {% if ftype == 'MP4' %}checked{% endif %} style="width:auto; margin:0; cursor:pointer;">
+                <input type="checkbox" id="preserve_originals" name="preserve_originals" style="width:auto; margin:0; cursor:pointer;">
                 <label for="preserve_originals" style="margin:0; font-weight:500; color:#495057; cursor:pointer;">Keep original (save a separate copy)</label>
             </div>
             {% endif %}
@@ -1311,7 +1351,11 @@
         function updateCanvasSize() {
             const img = document.getElementById('currentImage');
             const canvas = document.getElementById('cropCanvas');
-            if (img && canvas) { canvas.width = img.offsetWidth; canvas.height = img.offsetHeight; }
+            if (img && canvas) {
+                canvas.width = img.offsetWidth; canvas.height = img.offsetHeight;
+                canvas.style.left = img.offsetLeft + 'px';
+                canvas.style.top = img.offsetTop + 'px';
+            }
         }
 
         function enableCropMode() {
@@ -1325,11 +1369,17 @@
             document.getElementById('cancelCropBtn').style.display = 'inline-block';
             updateCanvasSize();
             const margin = Math.min(canvas.width, canvas.height) * 0.1;
-            cropRect = { left: margin, top: margin, right: canvas.width - margin, bottom: canvas.height - margin };
+            const img = document.getElementById('currentImage');
+            cropRect = stagedCrop && img.naturalWidth && img.naturalHeight
+                ? { left: stagedCrop.x / img.naturalWidth * canvas.width,
+                    top: stagedCrop.y / img.naturalHeight * canvas.height,
+                    right: (stagedCrop.x + stagedCrop.width) / img.naturalWidth * canvas.width,
+                    bottom: (stagedCrop.y + stagedCrop.height) / img.naturalHeight * canvas.height }
+                : { left: margin, top: margin, right: canvas.width - margin, bottom: canvas.height - margin };
             setupCropHandlers();
             drawCropOverlay();
-            showFloatingActions(applyCrop, cancelCrop, 'Set Crop');
-            const img = document.getElementById('currentImage');
+            showFloatingActions(applyCrop, cancelCrop, 'Queue Crop');
+            renderQueuedPreview();
             if (img && typeof ResizeObserver !== 'undefined') {
                 resizeObserver = new ResizeObserver(() => {
                     if (!cropMode) return;
@@ -1344,7 +1394,6 @@
         }
 
         function cancelCrop() {
-            stagedCrop = null;
             cropMode = false; dragState = null;
             const canvas = document.getElementById('cropCanvas');
             canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
@@ -1550,7 +1599,11 @@
         function updateWhiteRectCanvasSize() {
             const img = document.getElementById('currentImage');
             const canvas = document.getElementById('whiteRectCanvas');
-            if (img && canvas) { canvas.width = img.offsetWidth; canvas.height = img.offsetHeight; }
+            if (img && canvas) {
+                canvas.width = img.offsetWidth; canvas.height = img.offsetHeight;
+                canvas.style.left = img.offsetLeft + 'px';
+                canvas.style.top = img.offsetTop + 'px';
+            }
         }
 
         function enableWhiteRectMode() {
@@ -1564,11 +1617,17 @@
             document.getElementById('cancelWhiteRectBtn').style.display = 'inline-block';
             updateWhiteRectCanvasSize();
             const margin = Math.min(canvas.width, canvas.height) * 0.1;
-            whiteRect = { left: margin, top: margin, right: canvas.width - margin, bottom: canvas.height - margin };
+            const img = document.getElementById('currentImage');
+            whiteRect = stagedWhiteout && img.naturalWidth && img.naturalHeight
+                ? { left: stagedWhiteout.x / img.naturalWidth * canvas.width,
+                    top: stagedWhiteout.y / img.naturalHeight * canvas.height,
+                    right: (stagedWhiteout.x + stagedWhiteout.width) / img.naturalWidth * canvas.width,
+                    bottom: (stagedWhiteout.y + stagedWhiteout.height) / img.naturalHeight * canvas.height }
+                : { left: margin, top: margin, right: canvas.width - margin, bottom: canvas.height - margin };
             makeCropHandlers(canvas, () => whiteRect, r => { whiteRect = r; drawWhiteRectOverlay(); });
             drawWhiteRectOverlay();
-            showFloatingActions(applyWhiteRect, cancelWhiteRect, 'Set White Rect');
-            const img = document.getElementById('currentImage');
+            showFloatingActions(applyWhiteRect, cancelWhiteRect, 'Queue White Rect');
+            renderQueuedPreview();
             if (img && typeof ResizeObserver !== 'undefined') {
                 whiteRectResizeObserver = new ResizeObserver(() => {
                     if (!whiteRectMode) return;
@@ -1583,7 +1642,6 @@
         }
 
         function cancelWhiteRect() {
-            stagedWhiteout = null;
             whiteRectMode = false;
             const canvas = document.getElementById('whiteRectCanvas');
             canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
@@ -1686,11 +1744,17 @@
             document.getElementById('cancelVideoCropBtn').style.display = 'inline-block';
             updateVideoCropCanvasSize();
             const margin = Math.min(canvas.width, canvas.height) * 0.1;
-            videoCropRect = { left: margin, top: margin, right: canvas.width-margin, bottom: canvas.height-margin };
+            const video = document.getElementById('currentVideo');
+            videoCropRect = stagedVideoCrop && video.videoWidth && video.videoHeight
+                ? { left: stagedVideoCrop.x / video.videoWidth * canvas.width,
+                    top: stagedVideoCrop.y / video.videoHeight * canvas.height,
+                    right: (stagedVideoCrop.x + stagedVideoCrop.width) / video.videoWidth * canvas.width,
+                    bottom: (stagedVideoCrop.y + stagedVideoCrop.height) / video.videoHeight * canvas.height }
+                : { left: margin, top: margin, right: canvas.width-margin, bottom: canvas.height-margin };
             makeCropHandlers(canvas, () => videoCropRect, r => { videoCropRect = r; drawVideoCropOverlay(); });
             drawVideoCropOverlay();
-            showFloatingActions(applyVideoCrop, cancelVideoCrop, 'Set Crop');
-            const video = document.getElementById('currentVideo');
+            showFloatingActions(applyVideoCrop, cancelVideoCrop, 'Queue Crop');
+            renderQueuedPreview();
             if (video && typeof ResizeObserver !== 'undefined') {
                 videoResizeObserver = new ResizeObserver(() => {
                     if (!videoCropMode) return;
@@ -1705,7 +1769,6 @@
         }
 
         function cancelVideoCrop() {
-            stagedVideoCrop = null;
             videoCropMode = false;
             const canvas = document.getElementById('videoCropCanvas');
             if (!canvas) return;
@@ -1803,10 +1866,86 @@
         function updateStagedSummary() {
             const summary = document.getElementById('stagedEditsSummary');
             if (!summary) return;
-            const names = collectEdits().map(edit => edit.type);
-            summary.textContent = names.length ? 'Queued edits: ' + names.join(', ') + '. Apply them with the stamp form.' : '';
-            summary.style.display = names.length ? 'block' : 'none';
+            const edits = collectEdits();
+            summary.style.display = edits.length ? 'block' : 'none';
+            summary.textContent = edits.length ? 'Queued for save (in order): ' : '';
+            const labels = { crop: 'Crop', whiteout: 'White rectangle', rotate: 'Rotate', pad: 'Whitespace', trim: 'Trim' };
+            edits.forEach(edit => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.textContent = (edit.type === 'rotate' ? `Rotate ${edit.degrees}°` : labels[edit.type]) + ' ×';
+                button.setAttribute('aria-label', 'Remove queued ' + labels[edit.type]);
+                button.onclick = () => clearStagedEdit(edit.type);
+                summary.appendChild(button);
+            });
+            if (edits.length) summary.append('Not saved yet; submit the stamp form. Selections are shown on the original media.');
+            renderQueuedPreview();
         }
+
+        function clearStagedEdit(type) {
+            if (type === 'crop') {
+                if (document.getElementById('currentImage')) stagedCrop = null;
+                else stagedVideoCrop = null;
+            } else if (type === 'whiteout') stagedWhiteout = null;
+            else if (type === 'rotate') stagedRotation = 0;
+            else if (type === 'pad') { resetWhitespace(); return; }
+            else if (type === 'trim') { editPoints = []; renderEditPoints(); return; }
+            updateStagedSummary();
+        }
+
+        function renderQueuedPreview() {
+            const canvas = document.getElementById('queuedPreviewCanvas');
+            const badge = document.getElementById('queuedEditBadge');
+            const media = document.getElementById('currentImage') || document.getElementById('currentVideo');
+            if (!canvas || !badge || !media) return;
+            const edits = collectEdits();
+            const activeSelection = cropMode || whiteRectMode || videoCropMode;
+            const width = media.offsetWidth, height = media.offsetHeight;
+            canvas.style.display = edits.length && !activeSelection && width && height ? 'block' : 'none';
+            badge.style.display = edits.length && !activeSelection ? 'block' : 'none';
+            if (!edits.length || activeSelection || !width || !height) return;
+            canvas.width = width;
+            canvas.height = height;
+            canvas.style.left = media.offsetLeft + 'px';
+            canvas.style.top = media.offsetTop + 'px';
+            const ctx = canvas.getContext('2d');
+            const sourceWidth = media.naturalWidth || media.videoWidth;
+            const sourceHeight = media.naturalHeight || media.videoHeight;
+            const crop = stagedCrop || stagedVideoCrop;
+            if (sourceWidth && sourceHeight) {
+                if (stagedWhiteout) {
+                    ctx.fillStyle = 'white';
+                    ctx.fillRect(stagedWhiteout.x / sourceWidth * width, stagedWhiteout.y / sourceHeight * height,
+                        stagedWhiteout.width / sourceWidth * width, stagedWhiteout.height / sourceHeight * height);
+                }
+                if (crop) {
+                    const left = crop.x / sourceWidth * width, top = crop.y / sourceHeight * height;
+                    const right = (crop.x + crop.width) / sourceWidth * width;
+                    const bottom = (crop.y + crop.height) / sourceHeight * height;
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+                    ctx.fillRect(0, 0, width, top);
+                    ctx.fillRect(0, top, left, bottom - top);
+                    ctx.fillRect(right, top, width - right, bottom - top);
+                    ctx.fillRect(0, bottom, width, height - bottom);
+                    ctx.strokeStyle = '#00e676';
+                    ctx.lineWidth = 3;
+                    ctx.strokeRect(left, top, right - left, bottom - top);
+                }
+            }
+            badge.textContent = 'Queued: ' + edits.map(edit =>
+                edit.type === 'rotate' ? `rotate ${edit.degrees}°` : edit.type).join(' + ');
+        }
+
+        function initQueuedPreview() {
+            const media = document.getElementById('currentImage') || document.getElementById('currentVideo');
+            if (!media) return;
+            media.addEventListener('load', renderQueuedPreview);
+            media.addEventListener('loadedmetadata', renderQueuedPreview);
+            window.addEventListener('resize', renderQueuedPreview);
+            if (typeof ResizeObserver !== 'undefined') new ResizeObserver(renderQueuedPreview).observe(media);
+            updateStagedSummary();
+        }
+        initQueuedPreview();
         // ===== RESTAMP AUTO-PLAY =====
 
         {% if root.startswith('restamp/') %}
