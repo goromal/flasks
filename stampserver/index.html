@@ -246,6 +246,58 @@
             max-height: max(280px, calc(100dvh - 220px));
         }
 
+        #queuedPreviewCanvas {
+            position: absolute;
+            pointer-events: none;
+            display: none;
+        }
+
+        .queued-edit-badge {
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            z-index: 1;
+            max-width: calc(100% - 16px);
+            padding: 5px 8px;
+            border-radius: 5px;
+            background: rgba(33, 37, 41, 0.85);
+            color: white;
+            font-size: 0.8rem;
+            pointer-events: none;
+            display: none;
+        }
+
+        .queued-edits {
+            margin: 0 0 14px;
+            color: #495057;
+            font-size: 0.9rem;
+        }
+
+        .queued-edits button {
+            margin: 3px 4px 3px 0;
+            padding: 5px 8px;
+            border: 1px solid #adb5bd;
+            border-radius: 5px;
+            background: #f8f9fa;
+            cursor: pointer;
+        }
+
+        .video-tools {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            padding-top: 10px;
+            border-top: 1px solid #e9ecef;
+            font-size: 0.9rem;
+        }
+
+        .video-tools input { width: 72px; }
+        .video-tools input[type="range"] { flex: 1; min-width: 120px; width: auto; }
+        .video-tools button, .video-tools input { min-height: 36px; }
+        .video-tools button { cursor: pointer; }
+        .video-tools .video-time { font-variant-numeric: tabular-nums; }
+
         #cropCanvas,
         #videoCropCanvas,
         #whiteRectCanvas {
@@ -781,7 +833,7 @@
                 <label>Crop</label>
                 <div class="btn-group">
                     <button class="btn" id="enableCropBtn" onclick="enableCropMode()">Crop Image</button>
-                    <button class="btn btn-danger" id="applyCropBtn" onclick="applyCrop()" style="display: none;">Apply Crop</button>
+                    <button class="btn" id="applyCropBtn" onclick="applyCrop()" style="display: none;">Queue Crop</button>
                     <button class="btn" id="cancelCropBtn" onclick="cancelCrop()" style="display: none;">Cancel</button>
                 </div>
                 <div id="cropInfo" class="crop-info" style="display: none;">
@@ -793,7 +845,7 @@
                 <label>White Rectangle</label>
                 <div class="btn-group">
                     <button class="btn" id="enableWhiteRectBtn" onclick="enableWhiteRectMode()">Draw White Rect</button>
-                    <button class="btn btn-danger" id="applyWhiteRectBtn" onclick="applyWhiteRect()" style="display: none;">Apply White Rect</button>
+                    <button class="btn" id="applyWhiteRectBtn" onclick="applyWhiteRect()" style="display: none;">Queue White Rect</button>
                     <button class="btn" id="cancelWhiteRectBtn" onclick="cancelWhiteRect()" style="display: none;">Cancel</button>
                 </div>
                 <div id="whiteRectInfo" class="crop-info" style="display: none;">
@@ -804,27 +856,22 @@
             <div class="control-group">
                 <label>Add Whitespace</label>
                 <div class="whitespace-inputs">
-                    <label class="ws-field">Top<input type="number" id="wsTop" class="ws-input" min="0" value="0" oninput="updateWhitespacePreview()"></label>
-                    <label class="ws-field">Bottom<input type="number" id="wsBottom" class="ws-input" min="0" value="0" oninput="updateWhitespacePreview()"></label>
-                    <label class="ws-field">Left<input type="number" id="wsLeft" class="ws-input" min="0" value="0" oninput="updateWhitespacePreview()"></label>
-                    <label class="ws-field">Right<input type="number" id="wsRight" class="ws-input" min="0" value="0" oninput="updateWhitespacePreview()"></label>
+                    <label class="ws-field">Top<input type="number" id="wsTop" class="ws-input" min="0" value="0" oninput="updateWhitespacePreview(); updateStagedSummary()"></label>
+                    <label class="ws-field">Bottom<input type="number" id="wsBottom" class="ws-input" min="0" value="0" oninput="updateWhitespacePreview(); updateStagedSummary()"></label>
+                    <label class="ws-field">Left<input type="number" id="wsLeft" class="ws-input" min="0" value="0" oninput="updateWhitespacePreview(); updateStagedSummary()"></label>
+                    <label class="ws-field">Right<input type="number" id="wsRight" class="ws-input" min="0" value="0" oninput="updateWhitespacePreview(); updateStagedSummary()"></label>
                 </div>
                 <div class="btn-group">
-                    <button class="btn" onclick="applyWhitespace()">Apply Whitespace</button>
                     <button class="btn" onclick="resetWhitespace()">Reset</button>
                 </div>
             </div>
 
-            <div class="control-group">
-                <label>File Actions</label>
-                <div class="btn-group">
-                    <button class="btn" onclick="duplicateImage()">Duplicate Image</button>
-                </div>
-            </div>
         </details>
 
         <div class="image-container">
             <img id="currentImage" src="{{ file }}" alt="" />
+            <canvas id="queuedPreviewCanvas"></canvas>
+            <div id="queuedEditBadge" class="queued-edit-badge"></div>
             <canvas id="cropCanvas"></canvas>
             <canvas id="whiteRectCanvas"></canvas>
         </div>
@@ -846,7 +893,7 @@
                 <label>Crop</label>
                 <div class="btn-group">
                     <button class="btn" id="enableVideoCropBtn" onclick="enableVideoCropMode()">Crop Video</button>
-                    <button class="btn btn-danger" id="applyVideoCropBtn" onclick="applyVideoCrop()" style="display: none;">Apply Crop</button>
+                    <button class="btn" id="applyVideoCropBtn" onclick="applyVideoCrop()" style="display: none;">Queue Crop</button>
                     <button class="btn" id="cancelVideoCropBtn" onclick="cancelVideoCrop()" style="display: none;">Cancel</button>
                 </div>
                 <div id="videoCropInfo" class="crop-info" style="display: none;">
@@ -870,28 +917,23 @@
             </div>
 
             <div class="control-group">
-                <label>File Actions</label>
-                <div class="btn-group">
-                    <button class="btn" onclick="duplicateVideo()">Duplicate Video</button>
-                </div>
+                <label>Playback</label>
+                <div id="videoTools"></div>
             </div>
         </details>
 
         <div class="edit-points-section" id="editPointsSection">
             <h4>Edit Points (sorted by time)</h4>
             <ol class="edit-points-list" id="editPointsList"></ol>
-            <div style="display:flex; align-items:center; gap:10px; margin:10px 0;">
-                <input type="checkbox" id="preserveTrimOriginal" checked style="width:auto; margin:0; cursor:pointer;">
-                <label for="preserveTrimOriginal" style="margin:0; font-weight:500; color:#495057; cursor:pointer;">Preserve original (save trimmed clip as a new file)</label>
-            </div>
-            <button class="btn btn-danger" id="applyEditsBtn" onclick="applyEdits()"
-                    style="display: none; flex: none; min-width: 180px; width: auto;">Apply Edits</button>
+            <p class="upload-hint">Use the stamp form below to save this clip. Leave the stamp text empty to trim without changing its stamp.</p>
         </div>
 
         <div class="image-container">
-            <video id="currentVideo" controls loop preload="metadata" playsinline>
-                <source src="{{ file }}#t=0.001" type="{% if file.lower().endswith('.mov') %}video/quicktime{% else %}video/mp4{% endif %}" />
+            <video id="currentVideo" controls loop preload="auto" playsinline>
+                <source src="{{ file }}#t=0.001" type="{% if file.split('?')[0].lower().endswith('.mov') %}video/quicktime{% else %}video/mp4{% endif %}" />
             </video>
+            <canvas id="queuedPreviewCanvas"></canvas>
+            <div id="queuedEditBadge" class="queued-edit-badge"></div>
             <canvas id="videoCropCanvas"></canvas>
         </div>
 
@@ -904,10 +946,14 @@
                     <button class="btn" onclick="saveScreenshot()">Save Screenshot at Current Time</button>
                 </div>
             </div>
+            <div class="control-group">
+                <label>Playback</label>
+                <div id="videoTools"></div>
+            </div>
         </details>
 
         <div class="image-container">
-            <video id="currentVideo" controls loop preload="metadata" playsinline>
+            <video id="currentVideo" controls loop preload="auto" playsinline>
                 <source src="{{ file }}#t=0.001" type="video/webm" />
             </video>
         </div>
@@ -921,10 +967,14 @@
                     <button class="btn" onclick="saveScreenshot()">Save Screenshot at Current Time</button>
                 </div>
             </div>
+            <div class="control-group">
+                <label>Playback</label>
+                <div id="videoTools"></div>
+            </div>
         </details>
 
         <div class="image-container">
-            <video id="currentVideo" controls loop preload="metadata" playsinline>
+            <video id="currentVideo" controls loop preload="auto" playsinline>
                 <source src="{{ file }}#t=0.001" type="video/mp4" />
             </video>
         </div>
@@ -932,20 +982,22 @@
 
         <form id="stampForm" action="{{ urlroot }}{{ root }}" method="POST">
             <textarea id="text" name="text" placeholder="Enter stamp text here..."></textarea>
+            <input type="hidden" id="editsInput" name="edits" value="">
+            <div id="stagedEditsSummary" class="queued-edits" style="display:none;"></div>
+            {% if ftype in ('PNG', 'JPG', 'WEBP', 'HEIC', 'MP4') %}
+            <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
+                <input type="checkbox" id="preserve_originals" name="preserve_originals" style="width:auto; margin:0; cursor:pointer;">
+                <label for="preserve_originals" style="margin:0; font-weight:500; color:#495057; cursor:pointer;">Keep original (save a separate copy)</label>
+            </div>
+            {% endif %}
             {% if root.startswith('restamp/') %}
             <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
                 <input type="checkbox" id="apply_all" name="apply_all" style="width:auto; margin:0; cursor:pointer;">
                 <label for="apply_all" style="margin:0; font-weight:500; color:#495057; cursor:pointer;">Restamp every file under this stamp (sub-stamps included)</label>
             </div>
-            {% if stamp_path | length == 1 %}
-            <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
-                <input type="checkbox" id="preserve_originals" name="preserve_originals" style="width:auto; margin:0; cursor:pointer;">
-                <label for="preserve_originals" style="margin:0; font-weight:500; color:#495057; cursor:pointer;">Preserve originals (copy instead of rename)</label>
-            </div>
-            {% endif %}
-            <p class="upload-hint">Restamp replaces &ldquo;{{ stamp_path[-1] }}&rdquo;; Add Sub-stamp files this item one level deeper. Leave the text empty to skip.</p>
+            <p class="upload-hint">Restamp replaces &ldquo;{{ stamp_path[-1] }}&rdquo;; Add Sub-stamp files this item one level deeper. Leave the text empty to apply staged edits only, or duplicate with Keep original and no edits. Otherwise, an empty submit skips this file.</p>
             <div class="btn-group">
-                <button type="submit" class="btn" name="action" value="restamp">Restamp</button>
+                <button type="submit" class="btn" name="action" value="restamp">Apply / Restamp</button>
                 {% if '' not in stamp_path %}
                 <button type="submit" class="btn" name="action" value="substamp">Add Sub-stamp</button>
                 {% endif %}
@@ -954,7 +1006,8 @@
                 {% endif %}
             </div>
             {% else %}
-            <input type="submit" value="Submit!">
+            <p class="upload-hint">Leave the text empty to apply staged edits without stamping, or duplicate with Keep original and no edits.</p>
+            <input type="submit" value="Apply / Stamp">
             {% endif %}
         </form>
         {% endif %}
@@ -1029,6 +1082,84 @@
     </div>
 
     <script>
+        function initVideoTools(video) {
+            if (!video) return;
+            const tools = document.createElement('div');
+            tools.className = 'video-tools';
+            tools.innerHTML = '<label>Step <input type="number" min="0.01" max="60" step="0.01" value="0.1" aria-label="Seek step in seconds"> s</label>' +
+                '<button type="button" class="video-back">− Step</button>' +
+                '<button type="button" class="video-forward">+ Step</button>' +
+                '<input type="range" min="0" max="1" step="0.01" value="0" disabled aria-label="Seek through video">' +
+                '<label>Time <input type="number" min="0" step="0.01" aria-label="Video time in seconds"> s</label>' +
+                '<span class="video-time"></span>' +
+                '<label>Speed <input type="number" min="0.1" max="4" step="0.05" value="1" aria-label="Playback speed"> ×</label>' +
+                '<button type="button" class="video-reload" title="Reload the video at the current time if playback stalls">Retry</button>';
+            document.getElementById('videoTools').appendChild(tools);
+            const inputs = tools.querySelectorAll('input');
+            const step = inputs[0], scrub = inputs[1], time = inputs[2], speed = inputs[3];
+            const display = tools.querySelector('.video-time');
+            function seek(target) {
+                if (video.readyState === 0 || !Number.isFinite(target)) return;
+                video.currentTime = Math.max(0, Math.min(target, Number.isFinite(video.duration) ? video.duration : target));
+            }
+            let pendingSeek = null, seekTimer = null;
+            function stepSeek(direction) {
+                const amount = Number(step.value);
+                if (!(amount >= 0.01 && amount <= 60)) return;
+                pendingSeek = (pendingSeek === null ? video.currentTime : pendingSeek) + direction * amount;
+                clearTimeout(seekTimer);
+                seekTimer = setTimeout(() => { seek(pendingSeek); pendingSeek = null; }, 80);
+            }
+            tools.querySelector('.video-back').onclick = () => stepSeek(-1);
+            tools.querySelector('.video-forward').onclick = () => stepSeek(1);
+            time.onchange = () => {
+                clearTimeout(seekTimer);
+                pendingSeek = null;
+                seek(Number(time.value));
+            };
+            let scrubbing = false;
+            scrub.onpointerdown = () => { scrubbing = true; };
+            scrub.onpointerup = scrub.onpointercancel = () => { scrubbing = false; };
+            scrub.oninput = () => { time.value = Number(scrub.value).toFixed(2); };
+            scrub.onchange = () => {
+                clearTimeout(seekTimer);
+                pendingSeek = null;
+                seek(Number(scrub.value));
+            };
+            speed.onchange = () => {
+                const value = Number(speed.value);
+                if (value >= 0.1 && value <= 4) video.playbackRate = value;
+                speed.value = video.playbackRate;
+            };
+            tools.querySelector('.video-reload').onclick = () => {
+                const position = video.currentTime, playing = !video.paused, rate = video.playbackRate;
+                const autoplay = video.autoplay;
+                video.autoplay = false;
+                video.addEventListener('loadedmetadata', () => {
+                    seek(position);
+                    video.playbackRate = rate;
+                    video.autoplay = autoplay;
+                    if (playing) video.play().catch(() => {});
+                    else video.pause();
+                }, { once: true });
+                video.load();
+            };
+            function update() {
+                scrub.disabled = !Number.isFinite(video.duration);
+                if (!scrub.disabled) scrub.max = video.duration;
+                if (!scrubbing) scrub.value = video.currentTime;
+                if (document.activeElement !== time && !scrubbing) time.value = video.currentTime.toFixed(2);
+                display.textContent = '/ ' + (Number.isFinite(video.duration) ? video.duration.toFixed(2) : '—') + ' s';
+            }
+            video.addEventListener('timeupdate', update);
+            video.addEventListener('seeked', update);
+            video.addEventListener('loadedmetadata', update);
+            video.addEventListener('ratechange', () => { speed.value = video.playbackRate; });
+            update();
+        }
+
+        initVideoTools(document.getElementById('currentVideo'));
+
         // ===== STATUS =====
 
         function showStatus(message, isError = false) {
@@ -1115,41 +1246,34 @@
             const form = document.getElementById('stampForm');
             if (!form) return;
             form.addEventListener('submit', function(e) {
-                // Remove Sub-stamp ignores the text field entirely.
                 if (e.submitter && e.submitter.value === 'unsubstamp') return;
                 const ta = document.getElementById('text');
                 if (!ta) return;
                 const val = ta.value.trim();
-                if (val === '') return;
                 if (val.indexOf('.') !== -1 || val.indexOf('/') !== -1) {
                     e.preventDefault();
                     showStatus("Stamp names may not contain '.' or '/'.", true);
+                    return;
                 }
+                const edits = collectEdits();
+                if (edits.length && document.getElementById('apply_all')?.checked) {
+                    e.preventDefault();
+                    showStatus('Apply edits to this file, or restamp all files without edits.', true);
+                    return;
+                }
+                document.getElementById('editsInput').value = JSON.stringify(edits);
+                if (edits.length) showLoading('Applying edits...');
             });
         })();
 
         // ===== IMAGE ROTATE =====
 
+        let stagedRotation = 0, stagedCrop = null, stagedWhiteout = null, stagedVideoCrop = null;
+
         function rotateImage(degrees) {
-            const filename = getCurrentFilename();
-            if (!filename) { showStatus('Error: Could not determine filename', true); return; }
-            const normalizedDegrees = ((degrees % 360) + 360) % 360;
-            fetch('{{ urlroot }}api/rotate-image', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename, degrees: normalizedDegrees })
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) {
-                    showStatus('Image rotated successfully!');
-                    const img = document.getElementById('currentImage');
-                    img.src = img.src.split('?')[0] + '?t=' + Date.now();
-                } else {
-                    showStatus('Error: ' + (data.error || 'Unknown error'), true);
-                }
-            })
-            .catch(err => showStatus('Error: ' + err.message, true));
+            stagedRotation = (stagedRotation + degrees + 360) % 360;
+            showStatus(stagedRotation ? `Rotation queued: ${stagedRotation}°` : 'Rotation cleared');
+            updateStagedSummary();
         }
 
         // ===== IMAGE WHITESPACE =====
@@ -1185,33 +1309,7 @@
                 document.getElementById(id).value = 0;
             });
             clearWhitespacePreview();
-        }
-
-        function applyWhitespace() {
-            const filename = getCurrentFilename();
-            if (!filename) { showStatus('Error: Could not determine filename', true); return; }
-            const vals = readWhitespaceValues();
-            if (vals.top + vals.bottom + vals.left + vals.right === 0) {
-                showStatus('Error: Enter at least one whitespace value', true);
-                return;
-            }
-            fetch('{{ urlroot }}api/pad-image', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename, top: vals.top, bottom: vals.bottom, left: vals.left, right: vals.right })
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) {
-                    showStatus('Whitespace added successfully!');
-                    resetWhitespace();
-                    const img = document.getElementById('currentImage');
-                    img.src = img.src.split('?')[0] + '?t=' + Date.now();
-                } else {
-                    showStatus('Error: ' + (data.error || 'Unknown error'), true);
-                }
-            })
-            .catch(err => showStatus('Error: ' + err.message, true));
+            updateStagedSummary();
         }
 
         // ===== FLOATING ACTION BAR (mobile) =====
@@ -1253,7 +1351,11 @@
         function updateCanvasSize() {
             const img = document.getElementById('currentImage');
             const canvas = document.getElementById('cropCanvas');
-            if (img && canvas) { canvas.width = img.offsetWidth; canvas.height = img.offsetHeight; }
+            if (img && canvas) {
+                canvas.width = img.offsetWidth; canvas.height = img.offsetHeight;
+                canvas.style.left = img.offsetLeft + 'px';
+                canvas.style.top = img.offsetTop + 'px';
+            }
         }
 
         function enableCropMode() {
@@ -1267,11 +1369,17 @@
             document.getElementById('cancelCropBtn').style.display = 'inline-block';
             updateCanvasSize();
             const margin = Math.min(canvas.width, canvas.height) * 0.1;
-            cropRect = { left: margin, top: margin, right: canvas.width - margin, bottom: canvas.height - margin };
+            const img = document.getElementById('currentImage');
+            cropRect = stagedCrop && img.naturalWidth && img.naturalHeight
+                ? { left: stagedCrop.x / img.naturalWidth * canvas.width,
+                    top: stagedCrop.y / img.naturalHeight * canvas.height,
+                    right: (stagedCrop.x + stagedCrop.width) / img.naturalWidth * canvas.width,
+                    bottom: (stagedCrop.y + stagedCrop.height) / img.naturalHeight * canvas.height }
+                : { left: margin, top: margin, right: canvas.width - margin, bottom: canvas.height - margin };
             setupCropHandlers();
             drawCropOverlay();
-            showFloatingActions(applyCrop, cancelCrop, 'Apply Crop');
-            const img = document.getElementById('currentImage');
+            showFloatingActions(applyCrop, cancelCrop, 'Queue Crop');
+            renderQueuedPreview();
             if (img && typeof ResizeObserver !== 'undefined') {
                 resizeObserver = new ResizeObserver(() => {
                     if (!cropMode) return;
@@ -1296,6 +1404,7 @@
             document.getElementById('cancelCropBtn').style.display = 'none';
             hideFloatingActions();
             if (resizeObserver) { resizeObserver.disconnect(); resizeObserver = null; }
+            updateStagedSummary();
         }
 
         // Guard against accumulating duplicate listeners when crop mode is toggled
@@ -1465,8 +1574,6 @@
         }
 
         function applyCrop() {
-            const filename = getCurrentFilename();
-            if (!filename) { showStatus('Error: Could not determine filename', true); return; }
             const img = document.getElementById('currentImage');
             const scaleX = img.naturalWidth/img.offsetWidth, scaleY = img.naturalHeight/img.offsetHeight;
             const w = cropRect.right-cropRect.left, h = cropRect.bottom-cropRect.top;
@@ -1475,19 +1582,10 @@
             const aw=Math.floor(cropRect.right*scaleX)-ax, ah=Math.floor(cropRect.bottom*scaleY)-ay;
             const sx=Math.max(0,Math.min(ax,img.naturalWidth-1)), sy=Math.max(0,Math.min(ay,img.naturalHeight-1));
             const sw=Math.max(1,Math.min(aw,img.naturalWidth-sx)), sh=Math.max(1,Math.min(ah,img.naturalHeight-sy));
-            fetch('{{ urlroot }}api/crop-image', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename, x: sx, y: sy, width: sw, height: sh })
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) {
-                    showStatus('Image cropped successfully!'); cancelCrop();
-                    const img = document.getElementById('currentImage');
-                    img.src = img.src.split('?')[0] + '?t=' + Date.now();
-                } else { showStatus('Error: ' + (data.error || 'Unknown error'), true); }
-            })
-            .catch(err => showStatus('Error: ' + err.message, true));
+            cancelCrop();
+            stagedCrop = { type: 'crop', x: sx, y: sy, width: sw, height: sh };
+            updateStagedSummary();
+            showStatus('Crop queued; use the stamp form to apply it.');
         }
 
         // ===== WHITE RECTANGLE =====
@@ -1501,7 +1599,11 @@
         function updateWhiteRectCanvasSize() {
             const img = document.getElementById('currentImage');
             const canvas = document.getElementById('whiteRectCanvas');
-            if (img && canvas) { canvas.width = img.offsetWidth; canvas.height = img.offsetHeight; }
+            if (img && canvas) {
+                canvas.width = img.offsetWidth; canvas.height = img.offsetHeight;
+                canvas.style.left = img.offsetLeft + 'px';
+                canvas.style.top = img.offsetTop + 'px';
+            }
         }
 
         function enableWhiteRectMode() {
@@ -1515,11 +1617,17 @@
             document.getElementById('cancelWhiteRectBtn').style.display = 'inline-block';
             updateWhiteRectCanvasSize();
             const margin = Math.min(canvas.width, canvas.height) * 0.1;
-            whiteRect = { left: margin, top: margin, right: canvas.width - margin, bottom: canvas.height - margin };
+            const img = document.getElementById('currentImage');
+            whiteRect = stagedWhiteout && img.naturalWidth && img.naturalHeight
+                ? { left: stagedWhiteout.x / img.naturalWidth * canvas.width,
+                    top: stagedWhiteout.y / img.naturalHeight * canvas.height,
+                    right: (stagedWhiteout.x + stagedWhiteout.width) / img.naturalWidth * canvas.width,
+                    bottom: (stagedWhiteout.y + stagedWhiteout.height) / img.naturalHeight * canvas.height }
+                : { left: margin, top: margin, right: canvas.width - margin, bottom: canvas.height - margin };
             makeCropHandlers(canvas, () => whiteRect, r => { whiteRect = r; drawWhiteRectOverlay(); });
             drawWhiteRectOverlay();
-            showFloatingActions(applyWhiteRect, cancelWhiteRect, 'Apply White Rect');
-            const img = document.getElementById('currentImage');
+            showFloatingActions(applyWhiteRect, cancelWhiteRect, 'Queue White Rect');
+            renderQueuedPreview();
             if (img && typeof ResizeObserver !== 'undefined') {
                 whiteRectResizeObserver = new ResizeObserver(() => {
                     if (!whiteRectMode) return;
@@ -1544,6 +1652,7 @@
             document.getElementById('cancelWhiteRectBtn').style.display = 'none';
             hideFloatingActions();
             if (whiteRectResizeObserver) { whiteRectResizeObserver.disconnect(); whiteRectResizeObserver = null; }
+            updateStagedSummary();
         }
 
         function drawWhiteRectOverlay() {
@@ -1572,8 +1681,6 @@
         }
 
         function applyWhiteRect() {
-            const filename = getCurrentFilename();
-            if (!filename) { showStatus('Error: Could not determine filename', true); return; }
             const img = document.getElementById('currentImage');
             const scaleX = img.naturalWidth/img.offsetWidth, scaleY = img.naturalHeight/img.offsetHeight;
             const w = whiteRect.right-whiteRect.left, h = whiteRect.bottom-whiteRect.top;
@@ -1582,36 +1689,10 @@
             const aw=Math.floor(whiteRect.right*scaleX)-ax, ah=Math.floor(whiteRect.bottom*scaleY)-ay;
             const sx=Math.max(0,Math.min(ax,img.naturalWidth-1)), sy=Math.max(0,Math.min(ay,img.naturalHeight-1));
             const sw=Math.max(1,Math.min(aw,img.naturalWidth-sx)), sh=Math.max(1,Math.min(ah,img.naturalHeight-sy));
-            fetch('{{ urlroot }}api/whiteout-image', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename, x: sx, y: sy, width: sw, height: sh })
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) {
-                    showStatus('White rectangle applied!'); cancelWhiteRect();
-                    const img = document.getElementById('currentImage');
-                    img.src = img.src.split('?')[0] + '?t=' + Date.now();
-                } else { showStatus('Error: ' + (data.error || 'Unknown error'), true); }
-            })
-            .catch(err => showStatus('Error: ' + err.message, true));
-        }
-
-        // ===== IMAGE DUPLICATE =====
-
-        function duplicateImage() {
-            const filename = getCurrentFilename();
-            if (!filename) { showStatus('Error: Could not determine filename', true); return; }
-            fetch('{{ urlroot }}api/duplicate-image', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename })
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) { showStatus('Image duplicated as: ' + data.new_filename); setTimeout(() => location.reload(), 1500); }
-                else showStatus('Error: ' + (data.error || 'Unknown error'), true);
-            })
-            .catch(err => showStatus('Error: ' + err.message, true));
+            cancelWhiteRect();
+            stagedWhiteout = { type: 'whiteout', x: sx, y: sy, width: sw, height: sh };
+            updateStagedSummary();
+            showStatus('White rectangle queued; use the stamp form to apply it.');
         }
 
         // ===== SCREENSHOT =====
@@ -1636,42 +1717,9 @@
         // ===== VIDEO ROTATE =====
 
         function rotateVideo(degrees) {
-            const filename = getCurrentFilename();
-            if (!filename) { showStatus('Error: Could not determine filename', true); return; }
-            showLoading('Rotating video...');
-            fetch('{{ urlroot }}api/rotate-video', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename, degrees })
-            })
-            .then(r => r.json())
-            .then(data => {
-                hideLoading();
-                if (data.success) {
-                    showStatus('Video rotated successfully!');
-                    const v = document.getElementById('currentVideo');
-                    const source = v.querySelector('source');
-                    source.src = source.src.split('?')[0].split('#')[0] + '?t=' + Date.now() + '#t=0.001';
-                    v.load();
-                } else { showStatus('Error: ' + (data.error || 'Unknown error'), true); }
-            })
-            .catch(err => { hideLoading(); showStatus('Error: ' + err.message, true); });
-        }
-
-        // ===== VIDEO DUPLICATE =====
-
-        function duplicateVideo() {
-            const filename = getCurrentFilename();
-            if (!filename) { showStatus('Error: Could not determine filename', true); return; }
-            fetch('{{ urlroot }}api/duplicate-video', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename })
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) { showStatus('Video duplicated as: ' + data.new_filename); setTimeout(() => location.reload(), 1500); }
-                else showStatus('Error: ' + (data.error || 'Unknown error'), true);
-            })
-            .catch(err => showStatus('Error: ' + err.message, true));
+            stagedRotation = (stagedRotation + degrees + 360) % 360;
+            updateStagedSummary();
+            showStatus(stagedRotation ? `Rotation queued: ${stagedRotation}°` : 'Rotation cleared');
         }
 
         // ===== VIDEO CROP =====
@@ -1696,11 +1744,17 @@
             document.getElementById('cancelVideoCropBtn').style.display = 'inline-block';
             updateVideoCropCanvasSize();
             const margin = Math.min(canvas.width, canvas.height) * 0.1;
-            videoCropRect = { left: margin, top: margin, right: canvas.width-margin, bottom: canvas.height-margin };
+            const video = document.getElementById('currentVideo');
+            videoCropRect = stagedVideoCrop && video.videoWidth && video.videoHeight
+                ? { left: stagedVideoCrop.x / video.videoWidth * canvas.width,
+                    top: stagedVideoCrop.y / video.videoHeight * canvas.height,
+                    right: (stagedVideoCrop.x + stagedVideoCrop.width) / video.videoWidth * canvas.width,
+                    bottom: (stagedVideoCrop.y + stagedVideoCrop.height) / video.videoHeight * canvas.height }
+                : { left: margin, top: margin, right: canvas.width-margin, bottom: canvas.height-margin };
             makeCropHandlers(canvas, () => videoCropRect, r => { videoCropRect = r; drawVideoCropOverlay(); });
             drawVideoCropOverlay();
-            showFloatingActions(applyVideoCrop, cancelVideoCrop, 'Apply Crop');
-            const video = document.getElementById('currentVideo');
+            showFloatingActions(applyVideoCrop, cancelVideoCrop, 'Queue Crop');
+            renderQueuedPreview();
             if (video && typeof ResizeObserver !== 'undefined') {
                 videoResizeObserver = new ResizeObserver(() => {
                     if (!videoCropMode) return;
@@ -1726,6 +1780,7 @@
             document.getElementById('cancelVideoCropBtn').style.display = 'none';
             hideFloatingActions();
             if (videoResizeObserver) { videoResizeObserver.disconnect(); videoResizeObserver = null; }
+            updateStagedSummary();
         }
 
         function drawVideoCropOverlay() {
@@ -1733,8 +1788,6 @@
         }
 
         function applyVideoCrop() {
-            const filename = getCurrentFilename();
-            if (!filename) { showStatus('Error: Could not determine filename', true); return; }
             const video = document.getElementById('currentVideo');
             if (!video.videoWidth || !video.videoHeight) { showStatus('Error: Video dimensions not available yet', true); return; }
             const scaleX = video.videoWidth/video.offsetWidth, scaleY = video.videoHeight/video.offsetHeight;
@@ -1746,23 +1799,9 @@
             const sx=Math.max(0,Math.min(ax,video.videoWidth-1)), sy=Math.max(0,Math.min(ay,video.videoHeight-1));
             const sw=Math.max(2,Math.min(aw,video.videoWidth-sx)), sh=Math.max(2,Math.min(ah,video.videoHeight-sy));
             cancelVideoCrop();
-            showLoading('Cropping video...');
-            fetch('{{ urlroot }}api/crop-video', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename, x: sx, y: sy, width: sw, height: sh })
-            })
-            .then(r => r.json())
-            .then(data => {
-                hideLoading();
-                if (data.success) {
-                    showStatus('Video cropped successfully!');
-                    const v = document.getElementById('currentVideo');
-                    const source = v.querySelector('source');
-                    source.src = source.src.split('?')[0].split('#')[0] + '?t=' + Date.now() + '#t=0.001';
-                    v.load();
-                } else { showStatus('Error: ' + (data.error || 'Unknown error'), true); }
-            })
-            .catch(err => { hideLoading(); showStatus('Error: ' + err.message, true); });
+            stagedVideoCrop = { type: 'crop', x: sx, y: sy, width: sw, height: sh };
+            updateStagedSummary();
+            showStatus('Video crop queued; use the stamp form to apply it.');
         }
 
         // ===== EDIT POINTS =====
@@ -1784,8 +1823,7 @@
         function renderEditPoints() {
             const section = document.getElementById('editPointsSection');
             const list = document.getElementById('editPointsList');
-            const applyBtn = document.getElementById('applyEditsBtn');
-            if (!section || !list || !applyBtn) return;
+            if (!section || !list) return;
             const sorted = [...editPoints].sort((a, b) => a.time - b.time);
             list.innerHTML = '';
             sorted.forEach(pt => {
@@ -1806,37 +1844,108 @@
             });
             const has = editPoints.length > 0;
             section.style.display = has ? 'block' : 'none';
-            applyBtn.style.display = has ? 'inline-block' : 'none';
+            updateStagedSummary();
         }
 
-        function applyEdits() {
-            const filename = getCurrentFilename();
-            if (!filename) { showStatus('Error: Could not determine filename', true); return; }
-            if (!editPoints.length) { showStatus('Error: No edit points defined', true); return; }
-            const preserveOriginal = document.getElementById('preserveTrimOriginal').checked;
-            showLoading('Applying edits...');
-            fetch('{{ urlroot }}api/trim-video', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename, preserve_original: preserveOriginal, edit_points: editPoints.map(p => ({ type: p.type, time: p.time })) })
-            })
-            .then(r => r.json())
-            .then(data => {
-                hideLoading();
-                if (data.success) {
-                    editPoints = []; renderEditPoints();
-                    if (data.new_filename) {
-                        showStatus('Saved trimmed clip as ' + data.new_filename);
-                    } else {
-                        showStatus('Edits applied successfully!');
-                        const v = document.getElementById('currentVideo');
-                        const source = v.querySelector('source');
-                        source.src = source.src.split('?')[0].split('#')[0] + '?t=' + Date.now() + '#t=0.001';
-                        v.load();
-                    }
-                } else { showStatus('Error: ' + (data.error || 'Unknown error'), true); }
-            })
-            .catch(err => { hideLoading(); showStatus('Error: ' + err.message, true); });
+        function collectEdits() {
+            const edits = [];
+            if (document.getElementById('currentImage')) {
+                if (stagedWhiteout) edits.push(stagedWhiteout);
+                if (stagedCrop) edits.push(stagedCrop);
+                if (stagedRotation) edits.push({ type: 'rotate', degrees: stagedRotation });
+                const padding = readWhitespaceValues();
+                if (Object.values(padding).some(Boolean)) edits.push({ type: 'pad', ...padding });
+            } else if (document.getElementById('currentVideo')) {
+                if (stagedVideoCrop) edits.push(stagedVideoCrop);
+                if (stagedRotation) edits.push({ type: 'rotate', degrees: stagedRotation });
+                if (editPoints.length) edits.push({ type: 'trim', points: editPoints.map(({ type, time }) => ({ type, time })) });
+            }
+            return edits;
         }
+
+        function updateStagedSummary() {
+            const summary = document.getElementById('stagedEditsSummary');
+            if (!summary) return;
+            const edits = collectEdits();
+            summary.style.display = edits.length ? 'block' : 'none';
+            summary.textContent = edits.length ? 'Queued for save (in order): ' : '';
+            const labels = { crop: 'Crop', whiteout: 'White rectangle', rotate: 'Rotate', pad: 'Whitespace', trim: 'Trim' };
+            edits.forEach(edit => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.textContent = (edit.type === 'rotate' ? `Rotate ${edit.degrees}°` : labels[edit.type]) + ' ×';
+                button.setAttribute('aria-label', 'Remove queued ' + labels[edit.type]);
+                button.onclick = () => clearStagedEdit(edit.type);
+                summary.appendChild(button);
+            });
+            if (edits.length) summary.append('Not saved yet; submit the stamp form. Selections are shown on the original media.');
+            renderQueuedPreview();
+        }
+
+        function clearStagedEdit(type) {
+            if (type === 'crop') {
+                if (document.getElementById('currentImage')) stagedCrop = null;
+                else stagedVideoCrop = null;
+            } else if (type === 'whiteout') stagedWhiteout = null;
+            else if (type === 'rotate') stagedRotation = 0;
+            else if (type === 'pad') { resetWhitespace(); return; }
+            else if (type === 'trim') { editPoints = []; renderEditPoints(); return; }
+            updateStagedSummary();
+        }
+
+        function renderQueuedPreview() {
+            const canvas = document.getElementById('queuedPreviewCanvas');
+            const badge = document.getElementById('queuedEditBadge');
+            const media = document.getElementById('currentImage') || document.getElementById('currentVideo');
+            if (!canvas || !badge || !media) return;
+            const edits = collectEdits();
+            const activeSelection = cropMode || whiteRectMode || videoCropMode;
+            const width = media.offsetWidth, height = media.offsetHeight;
+            canvas.style.display = edits.length && !activeSelection && width && height ? 'block' : 'none';
+            badge.style.display = edits.length && !activeSelection ? 'block' : 'none';
+            if (!edits.length || activeSelection || !width || !height) return;
+            canvas.width = width;
+            canvas.height = height;
+            canvas.style.left = media.offsetLeft + 'px';
+            canvas.style.top = media.offsetTop + 'px';
+            const ctx = canvas.getContext('2d');
+            const sourceWidth = media.naturalWidth || media.videoWidth;
+            const sourceHeight = media.naturalHeight || media.videoHeight;
+            const crop = stagedCrop || stagedVideoCrop;
+            if (sourceWidth && sourceHeight) {
+                if (stagedWhiteout) {
+                    ctx.fillStyle = 'white';
+                    ctx.fillRect(stagedWhiteout.x / sourceWidth * width, stagedWhiteout.y / sourceHeight * height,
+                        stagedWhiteout.width / sourceWidth * width, stagedWhiteout.height / sourceHeight * height);
+                }
+                if (crop) {
+                    const left = crop.x / sourceWidth * width, top = crop.y / sourceHeight * height;
+                    const right = (crop.x + crop.width) / sourceWidth * width;
+                    const bottom = (crop.y + crop.height) / sourceHeight * height;
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+                    ctx.fillRect(0, 0, width, top);
+                    ctx.fillRect(0, top, left, bottom - top);
+                    ctx.fillRect(right, top, width - right, bottom - top);
+                    ctx.fillRect(0, bottom, width, height - bottom);
+                    ctx.strokeStyle = '#00e676';
+                    ctx.lineWidth = 3;
+                    ctx.strokeRect(left, top, right - left, bottom - top);
+                }
+            }
+            badge.textContent = 'Queued: ' + edits.map(edit =>
+                edit.type === 'rotate' ? `rotate ${edit.degrees}°` : edit.type).join(' + ');
+        }
+
+        function initQueuedPreview() {
+            const media = document.getElementById('currentImage') || document.getElementById('currentVideo');
+            if (!media) return;
+            media.addEventListener('load', renderQueuedPreview);
+            media.addEventListener('loadedmetadata', renderQueuedPreview);
+            window.addEventListener('resize', renderQueuedPreview);
+            if (typeof ResizeObserver !== 'undefined') new ResizeObserver(renderQueuedPreview).observe(media);
+            updateStagedSummary();
+        }
+        initQueuedPreview();
         // ===== RESTAMP AUTO-PLAY =====
 
         {% if root.startswith('restamp/') %}

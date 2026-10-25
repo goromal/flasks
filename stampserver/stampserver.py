@@ -38,6 +38,7 @@ from fileops import (
     unique_suffixed_name,
     validate_stamp_name,
 )
+from mediaops import edit_and_stamp
 
 STAMP_RE = re.compile(r"stamped\.(.*?)\.")
 
@@ -210,11 +211,12 @@ class StampServer:
                 stamps[key] = stamps.get(key, 0) + 1
         return dict(sorted(stamps.items(), key=lambda x: x[1], reverse=True))
 
-    def stamp(self, stamp):
+    def stamp(self, stamp, copy=False):
         if not self.filedeck:
             raise ValueError("The deck was reloaded; please try again.")
-        rename_to_path(RES_DIR, self.filedeck, [stamp])
-        self.filelist = list(filter(lambda t: t[0] != self.filedeck, self.filelist))
+        rename_to_path(RES_DIR, self.filedeck, [stamp], copy=copy)
+        if not copy:
+            self._drop_current()
 
     def _drop_current(self):
         self.filelist = [t for t in self.filelist if t[0] != self.filedeck]
@@ -233,13 +235,34 @@ class StampServer:
     def replace_stamp(self, path, segment, copy=False):
         self._require_current_at(path)
         rename_to_path(RES_DIR, self.filedeck, replace_segment(path, len(path) - 1, segment), copy=copy)
-        self._drop_current()
+        if not copy:
+            self._drop_current()
 
     def replace_stamp_all(self, path, segment, copy=False):
         """Rename the whole subtree under `path`. Returns skipped filenames."""
+        if segment == path[-1]:
+            return []
+        if copy:
+            skipped = []
+            for filename in sorted(os.listdir(RES_DIR)):
+                file_path, _ = parse_stamped(filename)
+                if file_path[:len(path)] != path or not os.path.isfile(os.path.join(RES_DIR, filename)):
+                    continue
+                target_path = replace_segment(file_path, len(path) - 1, segment)
+                try:
+                    edit_and_stamp(RES_DIR, filename, target_path, [], True)
+                except (FileExistsError, FileNotFoundError):
+                    skipped.append(filename)
+            return skipped
         _, skipped = rename_subtree(RES_DIR, os.listdir(RES_DIR), path, segment, copy=copy)
         self.filelist = []
         return skipped
+
+    def edit_current(self, path, target_path, operations, copy=False, advance=False):
+        self._require_current_at(path)
+        edit_and_stamp(RES_DIR, self.filedeck, target_path, operations, copy)
+        if advance and not copy:
+            self._drop_current()
 
     def substamp(self, path, segment):
         self._require_current_at(path)
@@ -262,7 +285,11 @@ def file_url(name, ftype):
     page's JS reads back to name the file in the edit APIs.
     """
     prefix = urlroot + ("preview/" if ftype == "HEIC" else "")
-    return prefix + quote(name)
+    url = prefix + quote(name)
+    try:
+        return f"{url}?v={os.stat(os.path.join(RES_DIR, name)).st_mtime_ns}"
+    except OSError:
+        return url
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -316,20 +343,29 @@ def index():
     global urlroot
     if flask.request.method == "POST":
         text = flask.request.form["text"]
-        if text != "":
-            ok, result = validate_stamp_name(text)
-            if not ok:
-                flask.flash(result)
-            else:
-                try:
-                    stampserver.stamp(result)
-                except IdentityConflictError as e:
-                    flask.flash(_identity_conflict_message(e))
-                except FileExistsError as e:
-                    flask.flash(f"{e.args[0]} already exists; nothing was renamed.")
-                except (ValueError, OSError) as e:
-                    stampserver.reset()
-                    flask.flash(str(e))
+        try:
+            edits = _form_edits(flask.request.form)
+            result = None
+            valid = True
+            if text.strip():
+                ok, result = validate_stamp_name(text)
+                if not ok:
+                    flask.flash(result)
+                    valid = False
+            copy = flask.request.form.get('preserve_originals') == 'on'
+            if valid and (result or edits or copy):
+                if edits:
+                    stampserver.edit_current([], [result] if result else [], edits, copy=copy, advance=bool(result))
+                elif result:
+                    stampserver.stamp(result, copy=copy)
+                elif copy:
+                    stampserver.edit_current([], [], [], copy=True)
+        except IdentityConflictError as e:
+            flask.flash(_identity_conflict_message(e))
+        except FileExistsError as e:
+            flask.flash(f"{e.args[0]} already exists; nothing was renamed.")
+        except (ValueError, OSError, RuntimeError, KeyError, TypeError) as e:
+            flask.flash(str(e))
     res, msg = stampserver.load()
     stamps = stampserver.getstamps()
     if not res:
@@ -349,23 +385,53 @@ def _identity_conflict_message(e):
             "Nothing was renamed.")
 
 
+def _form_edits(form):
+    try:
+        edits = json.loads(form.get('edits') or '[]')
+    except json.JSONDecodeError as error:
+        raise ValueError('Invalid edit list') from error
+    if not isinstance(edits, list):
+        raise ValueError('Invalid edit list')
+    return edits
+
+
 def _handle_restamp_post(path):
     form = flask.request.form
     # Auto-play submits the form without a button, so no action means restamp.
     action = form.get("action", "restamp")
     text = form.get("text", "")
-    copy = len(path) == 1 and form.get("preserve_originals") == "on"
+    copy = form.get("preserve_originals") == "on"
     try:
         if action == "unsubstamp":
             if len(path) > 1:
                 stampserver.unsubstamp(path)
             return
-        if text.strip() == "":
+        edits = _form_edits(form)
+        if text.strip() == "" and not edits:
+            if form.get("action") == "restamp" and copy and form.get("apply_all") != "on":
+                stampserver.edit_current(path, path, [], copy=True)
+                return
             stampserver.skip()
             return
-        ok, segment = validate_stamp_name(text)
-        if not ok:
-            flask.flash(segment)
+        if text.strip():
+            ok, segment = validate_stamp_name(text)
+            if not ok:
+                flask.flash(segment)
+                return
+        else:
+            segment = None
+        if edits:
+            if form.get("apply_all") == "on":
+                flask.flash("Apply edits to the current file, or restamp all files without edits.")
+                return
+            if action == "substamp":
+                if segment is None or "" in path:
+                    flask.flash("A sub-stamp name is required to add a sub-stamp.")
+                    return
+                target_path = path + [segment]
+            else:
+                target_path = replace_segment(path, len(path) - 1, segment) if segment else path
+            stampserver.edit_current(path, target_path, edits, copy=copy, advance=bool(segment))
             return
         if action == "substamp":
             if "" in path:
@@ -377,12 +443,16 @@ def _handle_restamp_post(path):
             if skipped:
                 flask.flash("Skipped (name already taken under the target stamp): " + ", ".join(skipped))
         else:
-            stampserver.replace_stamp(path, segment, copy=copy)
+            if copy:
+                target_path = replace_segment(path, len(path) - 1, segment)
+                stampserver.edit_current(path, target_path, [], copy=True)
+            else:
+                stampserver.replace_stamp(path, segment)
     except IdentityConflictError as e:
         flask.flash(_identity_conflict_message(e))
     except FileExistsError as e:
         flask.flash(f"{e.args[0]} already exists; nothing was renamed.")
-    except (ValueError, OSError) as e:
+    except (ValueError, OSError, RuntimeError, KeyError, TypeError) as e:
         stampserver.reset()
         flask.flash(str(e))
 
