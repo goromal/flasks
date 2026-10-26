@@ -1,7 +1,11 @@
+/* Follow the site theme (anix-theme.css injected by nginx, light/dark toggle);
+   the fallbacks apply when the page is served without it. */
 :root {
-    --bg: #0f141a; --panel: #161d26; --line: #2a3644; --text: #e6edf3; --muted: #8b98a8;
-    --accent: #2f81f7; --ok: #3fb950; --warn: #d29922; --bad: #f85149;
-    color-scheme: dark;
+    --bg: var(--anix-bg, #0f141a); --panel: var(--anix-surface, #161d26);
+    --line: var(--anix-border, #2a3644); --text: var(--anix-text, #e6edf3);
+    --muted: var(--anix-muted, #8b98a8); --link: var(--anix-link, #79b8ff);
+    --accent: #2f81f7; --ok: var(--anix-success, #3fb950);
+    --warn: var(--anix-warning, #d29922); --bad: var(--anix-danger, #f85149);
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
@@ -16,16 +20,16 @@ button { font: inherit; color: inherit; cursor: pointer; }
     padding: calc(env(safe-area-inset-top, 0px) + 8px) 16px 8px;
     background: var(--panel); border-bottom: 1px solid var(--line);
 }
-.top h1 { margin: 0; font-size: 17px; font-weight: 650; flex: 1; }
+.top h1 { margin: 0; font-size: 17px; font-weight: 650; flex: 1; color: var(--text); }
 .home { color: var(--muted); text-decoration: none; font-size: 20px; line-height: 1; }
-.repo {
-    border: 1px solid var(--line); background: transparent; border-radius: 999px;
+.sb-status {
+    border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 999px;
     padding: 4px 12px; font-size: 13px; max-width: 60vw;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.repo.ok { border-color: var(--ok); }
-.repo.warn { border-color: var(--warn); color: var(--warn); }
-.repo.bad { border-color: var(--bad); color: var(--bad); }
+.sb-status.ok { border-color: var(--ok); }
+.sb-status.warn { border-color: var(--warn); color: var(--warn); }
+.sb-status.bad { border-color: var(--bad); color: var(--bad); }
 .app { flex: 1; display: flex; min-height: 0; }
 .side {
     flex: none; width: 260px; display: flex; flex-direction: column; gap: 10px; padding: 12px;
@@ -37,6 +41,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
     flex: 1; padding: 10px 12px; border-radius: 8px; border: 0; background: var(--accent);
     color: #fff; font-weight: 600;
 }
+.new button { white-space: nowrap; }
 .new button:disabled { opacity: .6; }
 .list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .list li {
@@ -48,14 +53,14 @@ button { font: inherit; color: inherit; cursor: pointer; }
     flex: 1; min-width: 0; text-align: left; background: none; border: 0; padding: 4px 0;
     display: flex; flex-direction: column;
 }
-.list .open b { font-weight: 600; }
+.list .open b { font-weight: 600; color: var(--text); }
 .list .open small { color: var(--muted); font-size: 12px; }
 .list .kill {
     flex: none; width: 32px; height: 32px; border-radius: 6px; border: 1px solid var(--line);
     background: transparent; color: var(--muted);
 }
 .list .kill:hover { color: var(--bad); border-color: var(--bad); }
-.list .empty { border: 0; color: var(--muted); padding: 4px 0; background: none; }
+.list .empty { border: 0; color: var(--muted); padding: 4px 0; background: none; box-shadow: none; }
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .msg, .center { margin: auto; padding: 16px; text-align: center; color: var(--muted); }
 .center { display: flex; flex-direction: column; gap: 12px; max-width: 360px; }
@@ -65,7 +70,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
     background: var(--panel); color: var(--text);
 }
 .error { color: var(--bad); }
-.main a { color: #79b8ff; }
+.main a { color: var(--link); }
 .frame { flex: 1; border: 0; width: 100%; background: #000; }
 .keys {
     flex: none; display: flex; gap: 6px; padding: 6px calc(env(safe-area-inset-right, 0px) + 6px) calc(env(safe-area-inset-bottom, 0px) + 6px) 6px;
@@ -93,5 +98,6 @@ body.in-session .anix-page-controls { display: none !important; }  /* theirs is 
     .list li { flex: none; padding: 2px 4px 2px 8px; }
     .list .open small { display: none; }
     .list .kill { width: 28px; height: 28px; }
-    .repo { max-width: 52vw; }
+    .sb-status { max-width: 60vw; }
+    .sb-status .pre { display: none; }
 }

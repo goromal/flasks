@@ -309,11 +309,13 @@
       if (st.behind) { if (cls === 'ok') cls = 'warn'; parts.push(st.behind + ' behind'); }
       if (st.dirty) { if (cls === 'ok') cls = 'warn'; parts.push(st.dirty + ' changed'); }
       if (cls === 'ok') parts.push('synced');
-      text = 'second-brain · ' + parts.join(' · ');
+      text = parts.join(' · ');
       if (st.last) repoChip.title = `Last commit ${st.last.hash} (${st.last.when}): ${st.last.subject}`;
     }
-    repoChip.className = 'repo ' + cls;
-    repoChip.textContent = text;
+    repoChip.className = 'sb-status ' + cls;
+    // The prefix is dropped on narrow screens (CSS) so the state stays visible.
+    repoChip.replaceChildren(el('span', { className: 'pre', textContent: 'second-brain · ' }),
+      text.replace(/^second-brain: /, ''));
   }
   repoChip.addEventListener('click', refreshRepo);
 
