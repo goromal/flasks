@@ -50,9 +50,12 @@ def _download_video(url: str, dest: Path) -> dict:
         except Exception:
             pass
 
-    # Download and merge to mp4
+    # Download and merge to mp4. Prefer H.264/AAC streams: yt-dlp's default
+    # picks VP9/AV1 + Opus, which browsers (notably Safari) often can't play
+    # from an MP4 container. Falls back to the best available if no H.264.
     subprocess.run(
-        base_cmd + ["--merge-output-format", "mp4", "-P", str(dest), "-o", "%(id)s.%(ext)s", url],
+        base_cmd + ["-S", "vcodec:h264,res,acodec:m4a",
+                    "--merge-output-format", "mp4", "-P", str(dest), "-o", "%(id)s.%(ext)s", url],
         timeout=600, check=True,
     )
 
