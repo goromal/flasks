@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Assistant</title>
+    <link rel="stylesheet" href="{{ subdomain }}/static/assistant.css">
+</head>
+
+<body>
+    <header class="top">
+        <a class="home" href="/" title="Home" aria-label="Home">⌂</a>
+        <h1>Assistant</h1>
+        <button id="repo" class="repo" type="button" title="second-brain status (click to refresh)">second-brain …</button>
+    </header>
+    <div id="app" class="app" data-base="{{ subdomain }}/agent">
+        <aside id="side" class="side" aria-label="Sessions" hidden>
+            <div class="new" id="new"></div>
+            <ul id="list" class="list"></ul>
+        </aside>
+        <main id="main" class="main"><p class="msg">Loading…</p></main>
+    </div>
+    <script src="{{ subdomain }}/static/assistant.js"></script>
+</body>
+
+</html>
