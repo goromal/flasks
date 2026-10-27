@@ -63,15 +63,87 @@
         return d && (d.querySelector('.xterm-helper-textarea') || d.querySelector('textarea'));
       } catch { return null; }
     }
-    function sendKey(key, code, ctrl) {
+    function sendKey(key, code, ctrl, shift) {
       const ta = helperTextarea();
       const win = iframe.contentWindow;
       if (!ta || !win) return;
       ta.focus();
-      const event = new win.KeyboardEvent('keydown', { key, ctrlKey: !!ctrl, bubbles: true, cancelable: true });
+      const event = new win.KeyboardEvent('keydown', { key, ctrlKey: !!ctrl, shiftKey: !!shift, bubbles: true, cancelable: true });
       Object.defineProperty(event, 'keyCode', { get: () => code });
       Object.defineProperty(event, 'which', { get: () => code });
       ta.dispatchEvent(event);
+    }
+    // Sticky Ctrl/Shift: the next key is sent with the armed modifiers held.
+    // Ctrl also applies to letters typed on the phone keyboard, which arrive as
+    // input/composition events rather than keydowns, so those are intercepted
+    // ahead of xterm. Shift applies to bar keys (Shift+Tab, Shift+arrows); typed
+    // text clears it, since the phone keyboard has its own shift.
+    const CTRL_CODES = { ' ': 32, '[': 219, '\\': 220, ']': 221 };
+    let ctrlArmed = false;
+    let shiftArmed = false;
+    let swallowComposition = false;
+    const controls = {};
+    function setCtrl(armed) {
+      ctrlArmed = armed;
+      if (controls.onCtrlChange) controls.onCtrlChange(armed);
+    }
+    function setShift(armed) {
+      shiftArmed = armed;
+      if (controls.onShiftChange) controls.onShiftChange(armed);
+    }
+    function ctrlCode(ch) {
+      return /^[a-z]$/i.test(ch) ? ch.toUpperCase().charCodeAt(0) : CTRL_CODES[ch];
+    }
+    function pressKey(key, code, ctrl) {
+      const withCtrl = !!ctrl || ctrlArmed;
+      const withShift = shiftArmed;
+      setCtrl(false);
+      setShift(false);
+      sendKey(key, code, withCtrl, withShift);
+    }
+    function sendCtrlChar(data) {
+      const ch = data.slice(-1);
+      const code = ctrlCode(ch);
+      const withShift = shiftArmed;
+      setCtrl(false);
+      setShift(false);
+      if (code) sendKey(ch.toLowerCase(), code, true, withShift);
+    }
+    function clearHelper() {
+      const ta = helperTextarea();
+      if (ta) ta.value = '';
+    }
+    function onCtrlKeydown(e) {
+      if (shiftArmed && !ctrlArmed && e.isTrusted && e.key.length === 1) setShift(false);
+      // Our own synthetic keydowns pass; 'Unidentified'/'Process' fall to onCtrlInput.
+      if (!ctrlArmed || !e.isTrusted || e.ctrlKey || e.key.length !== 1 || !ctrlCode(e.key)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      sendCtrlChar(e.key);
+    }
+    function onCtrlComposition(e) {
+      if (e.type === 'compositionstart' && ctrlArmed) swallowComposition = true;
+      if (!swallowComposition) return;
+      e.stopImmediatePropagation();
+      if (e.type === 'compositionend') {
+        swallowComposition = false;
+        clearHelper();
+      }
+      if (ctrlArmed && e.data) {
+        sendCtrlChar(e.data);
+        // Blur/refocus makes the IME commit, so its compositionend is swallowed.
+        const ta = helperTextarea();
+        if (ta && swallowComposition) { ta.blur(); ta.focus(); }
+      }
+    }
+    function onCtrlInput(e) {
+      if (shiftArmed && !ctrlArmed && e.data) setShift(false);
+      if (!ctrlArmed && !swallowComposition) return;
+      e.stopImmediatePropagation();
+      if (ctrlArmed && e.data && !e.isComposing) {
+        sendCtrlChar(e.data);
+        clearHelper();
+      }
     }
     function setSelecting(enabled) {
       selecting = enabled;
@@ -155,6 +227,9 @@
       doc.removeEventListener('touchmove', onMove, true);
       doc.removeEventListener('touchend', onEnd, true);
       doc.removeEventListener('touchcancel', onCancel, true);
+      doc.removeEventListener('keydown', onCtrlKeydown, true);
+      doc.removeEventListener('input', onCtrlInput, true);
+      ['compositionstart', 'compositionupdate', 'compositionend'].forEach((t) => doc.removeEventListener(t, onCtrlComposition, true));
       doc = null;
     }
     function attach() {
@@ -168,6 +243,9 @@
         doc.addEventListener('touchmove', onMove, opts);
         doc.addEventListener('touchend', onEnd, opts);
         doc.addEventListener('touchcancel', onCancel, { capture: true });
+        doc.addEventListener('keydown', onCtrlKeydown, true);
+        doc.addEventListener('input', onCtrlInput, true);
+        ['compositionstart', 'compositionupdate', 'compositionend'].forEach((t) => doc.addEventListener(t, onCtrlComposition, true));
       } catch { /* iframe not ready */ }
     }
 
@@ -237,15 +315,17 @@
     iframe.addEventListener('load', attach);
     attach();
     return {
-      controls: {
-        copy, paste, sendKey,
+      controls: Object.assign(controls, {
+        copy, paste, pressKey,
+        toggleCtrl() { setCtrl(!ctrlArmed); },
+        toggleShift() { setShift(!shiftArmed); },
         toggleSelection() {
           const term = terminal();
           if (!term) return;
           term.clearSelection();
           setSelecting(!selecting);
         },
-      },
+      }),
       cleanup() {
         iframe.removeEventListener('load', attach);
         detach();
@@ -272,10 +352,21 @@
     const pasteBtn = btn('Paste', () => flash(pasteBtn, controls.paste, 'Paste'));
     const nav = el('nav', { className: 'keys' }, select, copyBtn, pasteBtn);
     nav.setAttribute('aria-label', 'Terminal keys');
+    const modifier = (label, toggle, aria) => {
+      const b = btn(label, toggle, aria);
+      b.setAttribute('aria-pressed', 'false');
+      nav.append(b);
+      return (on) => {
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-pressed', String(on));
+      };
+    };
+    controls.onCtrlChange = modifier('Ctrl', () => controls.toggleCtrl(), 'Control (applies to next key)');
+    controls.onShiftChange = modifier('Shift', () => controls.toggleShift(), 'Shift (applies to next key)');
     [['Esc', 'Escape', 27], ['Tab', 'Tab', 9], ['↑', 'ArrowUp', 38], ['↓', 'ArrowDown', 40],
       ['←', 'ArrowLeft', 37], ['→', 'ArrowRight', 39], ['↵', 'Enter', 13]]
-      .forEach(([label, key, code]) => nav.append(btn(label, () => controls.sendKey(key, code), key)));
-    nav.append(btn('^C', () => controls.sendKey('c', 67, true), 'Control C'));
+      .forEach(([label, key, code]) => nav.append(btn(label, () => controls.pressKey(key, code), key)));
+    nav.append(btn('^C', () => controls.pressKey('c', 67, true), 'Control C'));
     return { nav, select };
   }
 
