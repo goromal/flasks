@@ -1,29 +1,51 @@
-"""Frame candidates -> deduped, capped set of JPEGs.
+"""Video -> a deduped, capped set of key-frame JPEGs.
 
-ffmpeg proposes candidates (scene changes plus at least one frame per
-``PERIOD_SECONDS``); a dHash pass drops near-duplicates and ``spread`` caps
-the survivors, keeping them evenly distributed over the duration.
+One ffmpeg pass decodes the video into small grayscale samples (``SAMPLE_FPS``)
+and each sample gets a 256-bit dHash. The hash sequence is cut into segments
+at visual changes. Comparing against the segment's first frame as well as the
+previous sample catches dissolves, which ffmpeg's per-frame scene score misses
+(the score is split across the dissolve frames). Then:
+
+* a *hold* (picture essentially unchanged for >= ``HOLD_SECONDS``) is a slide,
+  a text card or a paused diagram, the content that is often never read
+  aloud. Holds are always kept (only exact repeats are dropped) and win the cap;
+* other segments contribute their steadiest sample, plus one sample per
+  ``PERIOD_SECONDS`` inside long segments as a safety net;
+* near-duplicates are dropped, and the non-hold frames are spread over the
+  duration to fill what is left of ``FRAME_CAP``.
+
+Only the chosen frames are extracted at full resolution (one seek each).
 """
 
 import os
-import re
 import subprocess
+from collections import namedtuple
 
 from PIL import Image
 
-SCENE_THRESHOLD = 0.3
-PERIOD_SECONDS = 60
-HAMMING_MAX = 6
+SAMPLE_FPS = 2
+THUMB_W, THUMB_H = 160, 90
+HASH_SIZE = 16  # 256-bit dHash
+# Calibrated on real videos (distances out of 256 bits between samples 0.5 s
+# apart): a still picture scores 0-2, live motion 10-30, hard cuts 70-140.
+CUT = 48  # vs the previous sample: a cut
+DRIFT = 80  # vs the segment's first sample: a dissolve, pan or slow change
+STILL = 6  # vs the previous sample: the picture is not moving
+HOLD_SECONDS = 5.0
+MIN_SEGMENT_SECONDS = 2.0  # shorter segments are transitions (dissolves, flashes)
+PERIOD_SECONDS = 20
+DUP = 24  # near-duplicate among ordinary frames
+HOLD_DUP = 8  # holds are only dropped as exact repeats (a slide shown twice)
 FRAME_CAP = 40
 JPEG_QUALITY = 80
 MAX_HEIGHT = 720
 
-_PTS_TIME = re.compile(r"\bpts_time:\s*([0-9.]+)")
+Candidate = namedtuple("Candidate", "time hash hold")
 
 
-def dhash(image, size=8):
-    """64-bit difference hash: compares horizontally adjacent pixels."""
-    gray = image.convert("L").resize((size + 1, size), Image.Resampling.LANCZOS)
+def dhash(image, size=HASH_SIZE):
+    """``size*size``-bit difference hash: compares horizontally adjacent pixels."""
+    gray = image.convert("L").resize((size + 1, size), Image.Resampling.BILINEAR)
     pixels = gray.tobytes()
     bits = 0
     for row in range(size):
@@ -38,17 +60,76 @@ def hamming(a, b):
     return bin(a ^ b).count("1")
 
 
-def dedupe(candidates, max_distance=HAMMING_MAX):
-    """Keep ``(time, hash)`` candidates whose hash differs from every kept one.
+def segments(hashes):
+    """Split sample indices into ``[(start, end)]`` (end exclusive) at visual changes."""
+    if not hashes:
+        return []
+    out = []
+    start = 0
+    for i in range(1, len(hashes)):
+        if hamming(hashes[i], hashes[i - 1]) > CUT or hamming(hashes[i], hashes[start]) > DRIFT:
+            out.append((start, i))
+            start = i
+    out.append((start, len(hashes)))
+    return out
 
-    Comparing against all kept frames (not only the previous one) also drops a
-    slide the speaker flips back to, which adds nothing new.
+
+def holds(hashes, start, end, step):
+    """``[(a, b)]`` inclusive runs inside a segment where the picture stays still."""
+    runs = []
+    run_start = start
+    for i in range(start + 1, end + 1):
+        if i == end or hamming(hashes[i], hashes[i - 1]) > STILL:
+            if (i - run_start) * step >= HOLD_SECONDS:
+                runs.append((run_start, i - 1))
+            run_start = i
+    return runs
+
+
+def steadiest(hashes, start, end):
+    """Index in ``[start, end)`` that moves least against its neighbours.
+
+    Avoids picking a half-blended frame when a segment begins or ends in a
+    dissolve. Ties go to the sample nearest the middle.
     """
-    kept = []
-    for time, value in sorted(candidates):
-        if all(hamming(value, other) > max_distance for _, other in kept):
-            kept.append((time, value))
-    return kept
+    mid = (start + end - 1) / 2
+
+    def motion(i):
+        prev = hamming(hashes[i], hashes[i - 1]) if i > start else 0
+        nxt = hamming(hashes[i], hashes[i + 1]) if i + 1 < end else 0
+        return (prev + nxt, abs(i - mid))
+
+    return min(range(start, end), key=motion)
+
+
+def candidates(hashes, step=1.0 / SAMPLE_FPS):
+    """Candidate frames from the sample hash sequence (``hashes[i]`` at ``i*step`` s)."""
+    out = []
+    for start, end in segments(hashes):
+        seg_holds = holds(hashes, start, end, step)
+        for a, b in seg_holds:
+            mid = (a + b) // 2
+            out.append(Candidate(mid * step, hashes[mid], True))
+        if not seg_holds and (end - start) * step >= MIN_SEGMENT_SECONDS:
+            best = steadiest(hashes, start, end)
+            out.append(Candidate(best * step, hashes[best], False))
+        every = int(round(PERIOD_SECONDS / step))
+        for i in range(start + every, end, every):
+            out.append(Candidate(i * step, hashes[i], False))
+    return sorted(out)
+
+
+def dedupe(cands):
+    """Drop repeats: holds against holds (strict), others against everything kept."""
+    kept_holds = []
+    for c in sorted(c for c in cands if c.hold):
+        if all(hamming(c.hash, k.hash) > HOLD_DUP for k in kept_holds):
+            kept_holds.append(c)
+    kept = list(kept_holds)
+    for c in sorted(c for c in cands if not c.hold):
+        if all(hamming(c.hash, k.hash) > DUP for k in kept):
+            kept.append(c)
+    return sorted(kept)
 
 
 def spread(times, duration, cap=FRAME_CAP):
@@ -56,6 +137,8 @@ def spread(times, duration, cap=FRAME_CAP):
     times = sorted(times)
     if len(times) <= cap:
         return times
+    if cap <= 0:
+        return []
     if not duration or duration <= 0:
         duration = times[-1] or 1.0
     remaining = list(times)
@@ -68,63 +151,78 @@ def spread(times, duration, cap=FRAME_CAP):
     return sorted(chosen)
 
 
+def choose(cands, duration, cap=FRAME_CAP):
+    """Final frame times: deduped holds first, then other frames spread over the rest."""
+    kept = dedupe(cands)
+    hold_times = [c.time for c in kept if c.hold]
+    if len(hold_times) >= cap:
+        return spread(hold_times, duration, cap)
+    others = [c.time for c in kept if not c.hold]
+    return sorted(hold_times + spread(others, duration, cap - len(hold_times)))
+
+
 def frame_name(seconds, duration):
     width = max(4, len(str(int(duration or 0))))
     return f"{int(seconds):0{width}d}.jpg"
 
 
-def extract_candidates(video_path, work_dir):
-    """Run one ffmpeg pass; return ``[(pts_time, jpeg_path)]`` for each candidate."""
-    os.makedirs(work_dir, exist_ok=True)
-    select = (
-        f"eq(n\\,0)+gt(scene\\,{SCENE_THRESHOLD})"
-        f"+gte(t-prev_selected_t\\,{PERIOD_SECONDS})"
+def sample_hashes(video_path):
+    """Decode once at ``SAMPLE_FPS`` into small grayscale frames; return their dHashes."""
+    frame_bytes = THUMB_W * THUMB_H
+    proc = subprocess.Popen(
+        [
+            "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error",
+            "-i", video_path, "-an", "-sn",
+            "-vf", f"fps={SAMPLE_FPS},scale={THUMB_W}:{THUMB_H}:flags=area,format=gray",
+            "-f", "rawvideo", "-",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
-    vf = f"select='{select}',showinfo,scale=-2:'min({MAX_HEIGHT},ih)'"
-    pattern = os.path.join(work_dir, "cand_%06d.jpg")
+    hashes = []
+    while True:
+        chunk = proc.stdout.read(frame_bytes)
+        if len(chunk) < frame_bytes:
+            break
+        hashes.append(dhash(Image.frombytes("L", (THUMB_W, THUMB_H), chunk)))
+    err = proc.stderr.read().decode(errors="replace")
+    if proc.wait() != 0:
+        tail = "\n".join(err.strip().splitlines()[-5:])
+        raise RuntimeError(f"ffmpeg frame sampling failed:\n{tail}")
+    return hashes
+
+
+def extract_frame(video_path, seconds, dest):
+    """Write the full-resolution (<= ``MAX_HEIGHT``) frame at ``seconds``; True if written."""
     proc = subprocess.run(
         [
-            "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "info",
-            "-i", video_path, "-an", "-sn",
-            "-vf", vf, "-fps_mode", "vfr", "-q:v", "2", pattern,
+            "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+            "-ss", f"{seconds:.3f}", "-i", video_path, "-an", "-sn",
+            "-frames:v", "1", "-vf", f"scale=-2:'min({MAX_HEIGHT},ih)'",
+            "-q:v", "2", dest,
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         text=True,
     )
-    if proc.returncode != 0:
-        tail = "\n".join(proc.stderr.strip().splitlines()[-5:])
-        raise RuntimeError(f"ffmpeg frame extraction failed:\n{tail}")
-    times = [
-        float(m.group(1))
-        for line in proc.stderr.splitlines()
-        if "Parsed_showinfo" in line
-        for m in [_PTS_TIME.search(line)]
-        if m
-    ]
-    files = sorted(f for f in os.listdir(work_dir) if f.startswith("cand_"))
-    return [(t, os.path.join(work_dir, f)) for t, f in zip(times, files)]
+    return proc.returncode == 0 and os.path.isfile(dest)
 
 
 def select_frames(video_path, work_dir, out_dir, duration):
-    """Extract, dedupe, cap and write ``out_dir/<seconds>.jpg``; return count."""
-    candidates = extract_candidates(video_path, work_dir)
-    hashes = []
-    paths = {}
-    for time, path in candidates:
-        with Image.open(path) as image:
-            hashes.append((time, dhash(image)))
-        paths.setdefault(time, path)
-    kept = [t for t, _ in dedupe(hashes)]
+    """Sample, choose and write ``out_dir/<seconds>.jpg``; return the count written."""
+    os.makedirs(work_dir, exist_ok=True)
+    hashes = sample_hashes(video_path)
+    duration = duration or len(hashes) / SAMPLE_FPS
     os.makedirs(out_dir, exist_ok=True)
     written = set()
-    for time in spread(kept, duration):
+    for time in choose(candidates(hashes), duration):
         name = frame_name(time, duration)
         if name in written:
             continue
-        with Image.open(paths[time]) as image:
-            image.convert("RGB").save(
-                os.path.join(out_dir, name), "JPEG", quality=JPEG_QUALITY
-            )
+        raw = os.path.join(work_dir, "raw_" + name)
+        if not extract_frame(video_path, time, raw):
+            continue
+        with Image.open(raw) as image:
+            image.convert("RGB").save(os.path.join(out_dir, name), "JPEG", quality=JPEG_QUALITY)
         written.add(name)
     return len(written)
