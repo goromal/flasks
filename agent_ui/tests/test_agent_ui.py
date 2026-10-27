@@ -500,6 +500,8 @@ def test_terminal_page_has_agents_navigation_and_embeds_ttyd(configured_app):
     assert b'data-action="copy"' in response.data
     assert b'data-action="open-url"' in response.data
     assert b'data-action="paste"' in response.data
+    assert b'data-action="ctrl"' in response.data
+    assert b'data-action="shift"' in response.data
     assert b'term.select(' in response.data
     assert b'"touchstart"' in response.data
     assert b"term.getSelection()" in response.data

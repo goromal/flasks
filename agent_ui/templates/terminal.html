@@ -59,6 +59,8 @@
     <button type="button" data-action="copy" title="Copy selected text, or the visible terminal">Copy</button>
     <button type="button" data-action="open-url" title="Open the selected URL, or the latest URL in the terminal">Open URL</button>
     <button type="button" data-action="paste" title="Paste clipboard text into the terminal">Paste</button>
+    <button type="button" data-action="ctrl" aria-pressed="false" title="Hold Ctrl for the next key">Ctrl</button>
+    <button type="button" data-action="shift" aria-pressed="false" title="Hold Shift for the next key">Shift</button>
     <button type="button" data-key="Escape" data-code="27">Esc</button>
     <button type="button" data-key="Tab" data-code="9">Tab</button>
     <button type="button" data-key="ArrowUp" data-code="38">&uarr;</button>
@@ -72,6 +74,8 @@
     (function () {
       var iframe = document.getElementById("term");
       var selectButton = document.querySelector('[data-action="select"]');
+      var ctrlButton = document.querySelector('[data-action="ctrl"]');
+      var shiftButton = document.querySelector('[data-action="shift"]');
       var selecting = false;
       var selectionStart = null;
       var selectionDocument = null;
@@ -79,6 +83,10 @@
       var scrollMode = false;
       var scrollOffset = 0;
       var SCROLL_STEP = 12;
+      var ctrlArmed = false;
+      var shiftArmed = false;
+      var swallowComposition = false;
+      var CTRL_CODES = { " ": 32, "[": 219, "\\": 220, "]": 221 };
 
       // ttyd renders an xterm.js terminal; its keyboard handler lives on a
       // hidden helper textarea. Dispatching a synthetic keydown there is how we
@@ -285,6 +293,11 @@
           if (selecting) setSelecting(false);
           else endScrollTouch();
         }, { capture: true });
+        doc.addEventListener("keydown", onCtrlKeydown, true);
+        doc.addEventListener("input", onCtrlInput, true);
+        ["compositionstart", "compositionupdate", "compositionend"].forEach(function (type) {
+          doc.addEventListener(type, onCtrlComposition, true);
+        });
       }
 
       iframe.addEventListener("load", installTouchSelection);
@@ -375,7 +388,7 @@
         }
       }
 
-      function sendKey(key, code, ctrl) {
+      function sendKey(key, code, ctrl, shift) {
         var ta = textarea();
         if (!ta) return;
         ta.focus();
@@ -383,6 +396,7 @@
         var event = new view.KeyboardEvent("keydown", {
           key: key,
           ctrlKey: !!ctrl,
+          shiftKey: !!shift,
           bubbles: true,
           cancelable: true,
         });
@@ -391,6 +405,87 @@
         Object.defineProperty(event, "keyCode", { get: function () { return code; } });
         Object.defineProperty(event, "which", { get: function () { return code; } });
         ta.dispatchEvent(event);
+      }
+
+      // Sticky Ctrl/Shift: the next key is sent with the armed modifiers held.
+      // Ctrl also applies to letters typed on the phone keyboard, which arrive as
+      // input/composition events rather than keydowns, so those are intercepted
+      // ahead of xterm. Shift applies to bar keys (Shift+Tab, Shift+arrows); typed
+      // text clears it, since the phone keyboard has its own shift.
+      function showArmed(button, armed) {
+        button.classList.toggle("active", armed);
+        button.setAttribute("aria-pressed", armed ? "true" : "false");
+      }
+
+      function setCtrl(armed) {
+        ctrlArmed = armed;
+        showArmed(ctrlButton, armed);
+      }
+
+      function setShift(armed) {
+        shiftArmed = armed;
+        showArmed(shiftButton, armed);
+      }
+
+      function ctrlCode(ch) {
+        return /^[a-z]$/i.test(ch) ? ch.toUpperCase().charCodeAt(0) : CTRL_CODES[ch];
+      }
+
+      function pressKey(key, code, ctrl) {
+        var withCtrl = !!ctrl || ctrlArmed;
+        var withShift = shiftArmed;
+        setCtrl(false);
+        setShift(false);
+        sendKey(key, code, withCtrl, withShift);
+      }
+
+      function sendCtrlChar(data) {
+        var ch = data.slice(-1);
+        var code = ctrlCode(ch);
+        var withShift = shiftArmed;
+        setCtrl(false);
+        setShift(false);
+        if (code) sendKey(ch.toLowerCase(), code, true, withShift);
+      }
+
+      function clearHelper() {
+        var ta = textarea();
+        if (ta) ta.value = "";
+      }
+
+      function onCtrlKeydown(evt) {
+        if (shiftArmed && !ctrlArmed && evt.isTrusted && evt.key.length === 1) setShift(false);
+        // Our own synthetic keydowns pass; "Unidentified"/"Process" fall to onCtrlInput.
+        if (!ctrlArmed || !evt.isTrusted || evt.ctrlKey || evt.key.length !== 1 || !ctrlCode(evt.key)) return;
+        evt.preventDefault();
+        evt.stopImmediatePropagation();
+        sendCtrlChar(evt.key);
+      }
+
+      function onCtrlComposition(evt) {
+        if (evt.type === "compositionstart" && ctrlArmed) swallowComposition = true;
+        if (!swallowComposition) return;
+        evt.stopImmediatePropagation();
+        if (evt.type === "compositionend") {
+          swallowComposition = false;
+          clearHelper();
+        }
+        if (ctrlArmed && evt.data) {
+          sendCtrlChar(evt.data);
+          // Blur/refocus makes the IME commit, so its compositionend is swallowed.
+          var ta = textarea();
+          if (ta && swallowComposition) { ta.blur(); ta.focus(); }
+        }
+      }
+
+      function onCtrlInput(evt) {
+        if (shiftArmed && !ctrlArmed && evt.data) setShift(false);
+        if (!ctrlArmed && !swallowComposition) return;
+        evt.stopImmediatePropagation();
+        if (ctrlArmed && evt.data && !evt.isComposing) {
+          sendCtrlChar(evt.data);
+          clearHelper();
+        }
       }
 
       selectButton.addEventListener("click", function () {
@@ -415,11 +510,18 @@
         paste(evt.currentTarget);
       });
 
+      ctrlButton.addEventListener("click", function () {
+        setCtrl(!ctrlArmed);
+      });
+      shiftButton.addEventListener("click", function () {
+        setShift(!shiftArmed);
+      });
+
       var buttons = document.querySelectorAll(".keys button[data-key]");
       for (var i = 0; i < buttons.length; i++) {
         buttons[i].addEventListener("click", function (evt) {
           var el = evt.currentTarget;
-          sendKey(el.dataset.key, Number(el.dataset.code), el.dataset.ctrl === "1");
+          pressKey(el.dataset.key, Number(el.dataset.code), el.dataset.ctrl === "1");
         });
       }
     })();
