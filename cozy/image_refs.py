@@ -26,12 +26,18 @@ IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
 HEIF_EXTS = (".heic", ".heif")
 PICKABLE_EXTS = IMAGE_EXTS + HEIF_EXTS
 
+# What the Video tab accepts. These never reach ComfyUI -- ffmpeg reads them
+# -- but they share the picker conventions (the " [output]" suffix, upload
+# naming, containment checks) so one set of helpers serves both tabs, each
+# passing its own extension set.
+VIDEO_EXTS = (".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi")
+
 OUTPUT_SUFFIX = " [output]"
 
 _UNSAFE_NAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
 
-def safe_upload_name(filename):
+def safe_upload_name(filename, exts=PICKABLE_EXTS):
     """Reduce a browser-supplied filename to a bare safe basename, or None.
 
     None means the extension is not one the picker accepts. The result is both
@@ -43,7 +49,7 @@ def safe_upload_name(filename):
     base = os.path.basename(filename.replace("\\", "/")).strip()
     stem, ext = os.path.splitext(base)
     ext = ext.lower()
-    if ext not in PICKABLE_EXTS:
+    if ext not in exts:
         return None
     # Trim leading dots so an upload can never become a hidden file, and cap
     # the length well short of any filesystem limit once suffixes are added.
@@ -51,29 +57,30 @@ def safe_upload_name(filename):
     return (stem or "upload") + ext
 
 
-def list_dir_images(directory):
-    """Sorted relative paths of image files under directory (empty if unset)."""
+def list_dir_images(directory, exts=IMAGE_EXTS):
+    """Sorted relative paths of files under directory with one of ``exts``
+    (images by default; empty if the directory is unset)."""
     out = []
     if not directory:
         return out
     for root, _dirs, files in os.walk(directory):
         for f in files:
-            if f.lower().endswith(IMAGE_EXTS):
+            if f.lower().endswith(exts):
                 out.append(os.path.relpath(os.path.join(root, f), directory))
     return sorted(out)
 
 
-def list_images(input_dir, output_dir):
+def list_images(input_dir, output_dir, exts=IMAGE_EXTS):
     """Picker options spanning the input and output dirs. `label` is the bare
     path for display; `source` groups the two in the UI."""
     items = [{"value": r, "label": r, "source": "input"}
-             for r in list_dir_images(input_dir)]
+             for r in list_dir_images(input_dir, exts)]
     items += [{"value": r + OUTPUT_SUFFIX, "label": r, "source": "output"}
-              for r in list_dir_images(output_dir)]
+              for r in list_dir_images(output_dir, exts)]
     return items
 
 
-def resolve(input_dir, output_dir, value):
+def resolve(input_dir, output_dir, value, exts=IMAGE_EXTS):
     """Map a picker value to an on-disk path, or None if it is not a valid image
     within the directory it names. Output-dir files carry the ' [output]'
     annotation; everything else resolves under the input dir. Rejects traversal
@@ -84,7 +91,7 @@ def resolve(input_dir, output_dir, value):
         base, rel = output_dir, value[:-len(OUTPUT_SUFFIX)]
     else:
         base, rel = input_dir, value
-    if not base or not rel.lower().endswith(IMAGE_EXTS):
+    if not base or not rel.lower().endswith(exts):
         return None
     full = os.path.realpath(os.path.join(base, rel))
     root = os.path.realpath(base)

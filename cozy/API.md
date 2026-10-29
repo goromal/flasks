@@ -133,3 +133,26 @@ small selection out of a huge photo is never shrunk. `/api/input-fit` reports
 what will happen before the job runs, and `fit` — `{scale, from, to}`, or
 `null` when nothing was resized — appears on `/api/status` and on each queue
 result afterwards.
+
+## Video tab
+
+Present only when cozy runs with `--ollama-url` (anixpkgs enables it on hosts
+with `machines.localLlm`). One video job at a time; it holds the same GPU lock
+as image jobs, so analyze/export return 409 while an image job runs and vice
+versa.
+
+| Endpoint | Method | |
+| --- | --- | --- |
+| `/cozy/api/video/list` | GET | `{videos: [{value, label, source}]}` from the input/output dirs |
+| `/cozy/api/video/upload` | POST | multipart `file` → `{value}`; up to `--max-video-bytes` (2 GiB) |
+| `/cozy/api/video/analyze` | POST | `{prompt, video \| remote_video: {host, path}, stride?, precision?, merge_gap?}` → 202 |
+| `/cozy/api/video/status` | GET | `state` (`idle`, `staging`, `probing`, `analyzing`, `review`, `exporting`, `done`, `error`, `cancelled`), `samples`, `segments`, `calls_done`/`calls_est`, `eta_s`, `error`, `output` |
+| `/cozy/api/video/cancel` | POST | stop analysis at the next frame; 404 if nothing is running |
+| `/cozy/api/video/export` | POST | `{keep: [bool per segment], basename?}` → 202; writes `<output-dir>/video/<basename>.mp4` |
+| `/cozy/api/video/result` | GET | the exported MP4 |
+| `/cozy/api/video/file?name=` / `?job=1` | GET | range-capable source video for previews |
+| `/cozy/api/video/frame?ms=` | GET | a sampled frame's JPEG thumbnail |
+
+Times are seconds. `stride` defaults to `clamp(duration/120, 2, 10)`,
+`precision` to 1, `merge_gap` to `precision`. Re-analyzing the same video with
+the same prompt reuses every verdict already made.

@@ -104,6 +104,20 @@
         .q-results img { width:120px; border-radius:6px; cursor:pointer; }
         .q-results .failed { color:#721c24; }
         #q-bar { height:100%; width:0%; background:linear-gradient(135deg,#4e73df,#224abe); transition:width 0.3s; }
+        #video-view video { width:100%; margin-top:12px; border-radius:8px; background:#000; }
+        input#v-basename { width:100%; padding:12px 14px; font-size:1rem; border:2px solid #ced4da; border-radius:8px; font-family:inherit; }
+        .v-hint { font-size:0.85rem; color:#6c757d; margin-top:6px; }
+        .v-status { margin-top:8px; text-align:center; color:#495057; font-size:0.9rem; }
+        #v-timeline { position:relative; height:32px; margin:16px 0 8px; background:#f1f3f5; border-radius:6px; overflow:hidden; cursor:pointer; }
+        #v-timeline .v-seg { position:absolute; top:0; bottom:0; background:rgba(28,200,138,0.35); border-left:2px solid #1cc88a; border-right:2px solid #1cc88a; }
+        #v-timeline .v-seg.dropped { background:rgba(108,117,125,0.2); border-color:#adb5bd; }
+        #v-timeline .v-tick { position:absolute; bottom:0; width:2px; height:10px; margin-left:-1px; }
+        #v-timeline .v-tick.yes { background:#1cc88a; }
+        #v-timeline .v-tick.no { background:#e74a3b; }
+        #v-segments li { cursor:pointer; }
+        #v-segments li img { width:64px; height:40px; object-fit:cover; border-radius:4px; background:#e9ecef; }
+        #v-segments li input { width:auto; margin:0; }
+        .v-total { margin:8px 0; font-weight:600; color:#224abe; text-align:center; }
     </style>
 </head>
 
@@ -114,10 +128,11 @@
             <a class="logout" href="{{ urlroot }}logout">Log out</a>
         </div>
 
-        {% if has_queue %}
+        {% if has_queue or has_video %}
         <div class="tabs">
             <button type="button" class="tab active" id="tab-single">Single</button>
-            <button type="button" class="tab" id="tab-queue">Queue</button>
+            {% if has_queue %}<button type="button" class="tab" id="tab-queue">Queue</button>{% endif %}
+            {% if has_video %}<button type="button" class="tab" id="tab-video">Video</button>{% endif %}
         </div>
         {% endif %}
         <div id="single-view">
@@ -245,6 +260,64 @@
             <label>Results</label>
             <div id="q-results" class="q-results"></div>
             <button type="button" class="secondary" id="q-clear">Clear results</button>
+        </div>
+        {% endif %}
+        {% if has_video %}
+        <div id="video-view" style="display:none;">
+            <label for="v-select">Video</label>
+            <select id="v-select"></select>
+            <div class="prompt-actions">
+                <button type="button" class="secondary" id="v-upload-btn">Upload&hellip;</button>
+                <button type="button" class="secondary" id="v-remote-btn">Remote&hellip;</button>
+            </div>
+            <input type="file" id="v-upload-input" accept="video/*" style="display:none;" />
+            <div class="pdb-path" id="v-source-label" style="display:none;"></div>
+            <video id="v-preview" controls preload="metadata" playsinline style="display:none;"></video>
+
+            <label for="v-prompt">Keep frames showing&hellip;</label>
+            <textarea id="v-prompt" placeholder="a dog swimming in a pool"></textarea>
+
+            <details id="v-advanced" style="margin-top:12px;">
+                <summary style="font-weight:600; color:#495057; cursor:pointer;">Search settings</summary>
+                <div class="dims">
+                    <div>
+                        <label for="v-stride">Coarse stride (s)</label>
+                        <input type="number" id="v-stride" min="0.5" step="0.5" placeholder="auto" />
+                    </div>
+                    <div>
+                        <label for="v-precision">Precision (s)</label>
+                        <input type="number" id="v-precision" min="0.1" step="0.1" placeholder="1" />
+                    </div>
+                    <div>
+                        <label for="v-merge">Merge gap (s)</label>
+                        <input type="number" id="v-merge" min="0" step="0.5" placeholder="= precision" />
+                    </div>
+                </div>
+                <div class="v-hint">Frames are checked every <em>stride</em> seconds, then the
+                    edges of each match are narrowed to <em>precision</em>. Anything shorter than
+                    the stride can slip between samples &mdash; lower it to catch brief moments.</div>
+            </details>
+
+            <button type="button" id="v-analyze">Find matching frames</button>
+            <div class="progress" id="v-progress"><div id="v-bar"></div></div>
+            <div class="v-status" id="v-status"></div>
+            <div class="error" id="v-error"></div>
+            <div class="prompt-actions" style="justify-content:center;">
+                <button type="button" class="secondary" id="v-cancel" style="display:none;">Cancel</button>
+            </div>
+
+            <div id="v-review" style="display:none;">
+                <div id="v-timeline" title="click to seek"></div>
+                <ul id="v-segments" class="q-list"></ul>
+                <div class="v-total" id="v-total"></div>
+                <label for="v-basename">Output name</label>
+                <input type="text" id="v-basename" placeholder="default: &lt;video&gt;-trim" />
+                <button type="button" id="v-export">Export trimmed video</button>
+            </div>
+            <div id="v-result" style="display:none; margin-top:16px; text-align:center;">
+                <video id="v-result-player" controls preload="metadata" playsinline></video>
+                <a id="v-download" class="logout" href="#">Download</a>
+            </div>
         </div>
         {% endif %}
     </div>
@@ -761,10 +834,12 @@
         // mode "dir": pick a directory. mode "img": pick an image file (with preview).
         // onPick receives (host, result, filter) -- the filter so a caller can
         // reopen the browser with it still applied.
-        function openBrowser(host, mode, startPath, onPick, startFilter) {
-            browser = { mode: mode, onPick: onPick, path: "", entries: [], picked: null };
+        function openBrowser(host, mode, startPath, onPick, startFilter, onError) {
+            browser = { mode: mode, onPick: onPick, onError: onError, path: "",
+                        entries: [], picked: null };
             modalHost.value = host || "";
-            modalSelectBtn.textContent = mode === "img" ? "Use this image" : "Select this directory";
+            modalSelectBtn.textContent = mode === "img" ? "Use this image"
+                : mode === "video" ? "Use this video" : "Select this directory";
             modalFilter.value = startFilter || "";
             modalBackdrop.style.display = "flex";
             browseTo(startPath || "");
@@ -773,20 +848,23 @@
         async function browseTo(path) {
             const q = "host=" + encodeURIComponent(modalHost.value.trim()) +
                       "&path=" + encodeURIComponent(path) +
-                      (browser.mode === "img" ? "&files=img" : "");
+                      (browser.mode === "dir" ? "" : "&files=" + browser.mode);
+            // The Video tab passes its own error sink; the Single tab's box
+            // is hidden while another tab is showing.
+            const fail = browser.onError || showError;
             let d;
             try {
                 const r = await fetch(root + "api/browse?" + q);
                 d = await r.json();
-                if (!r.ok) { showError(d.error || "browse failed"); return; }
-            } catch (e) { showError("browse failed: " + e.message); return; }
-            showError("");
+                if (!r.ok) { fail(d.error || "browse failed"); return; }
+            } catch (e) { fail("browse failed: " + e.message); return; }
+            fail("");
             browser.path = d.path;
             browser.picked = null;
             browser.entries = (d.dirs || []).map(n => ({ name: n, dir: true }))
                 .concat((d.files || []).map(n => ({ name: n, dir: false })));
             modalPreviewWrap.style.display = "none";
-            modalSelectBtn.disabled = browser.mode === "img";
+            modalSelectBtn.disabled = browser.mode !== "dir";
             modalPathEl.textContent = d.path;
             renderBrowser();
         }
@@ -805,17 +883,20 @@
                 .filter(e => !f || e.name.toLowerCase().includes(f))
                 .forEach(e => {
                     const li = document.createElement("li");
-                    li.textContent = (e.dir ? "📁 " : "🖼 ") + e.name;
+                    li.textContent = (e.dir ? "📁 " : browser.mode === "video" ? "🎞 " : "🖼 ") + e.name;
                     li.addEventListener("click", () => {
                         if (e.dir) { browseTo(joinPath(browser.path, e.name)); return; }
                         browser.picked = joinPath(browser.path, e.name);
                         [...modalList.children].forEach(c => c.classList.remove("b-picked"));
                         li.classList.add("b-picked");
+                        modalSelectBtn.disabled = false;
+                        // A remote video is not previewed: fetching one would
+                        // copy the whole file just to show a frame.
+                        if (browser.mode !== "img") return;
                         modalPreview.src = root + "api/remote-image?host=" +
                             encodeURIComponent(modalHost.value.trim()) +
                             "&path=" + encodeURIComponent(browser.picked) + "&t=" + Date.now();
                         modalPreviewWrap.style.display = "block";
-                        modalSelectBtn.disabled = false;
                     });
                     modalList.appendChild(li);
                 });
@@ -826,7 +907,7 @@
         document.getElementById("modal-close").addEventListener("click", () => { modalBackdrop.style.display = "none"; });
         modalFilter.addEventListener("input", renderBrowser);
         modalSelectBtn.addEventListener("click", () => {
-            const res = browser.mode === "img" ? browser.picked : browser.path;
+            const res = browser.mode === "dir" ? browser.path : browser.picked;
             modalBackdrop.style.display = "none";
             rememberHost(modalHost.value.trim());
             browser.onPick(modalHost.value.trim(), res, modalFilter.value);
@@ -1222,18 +1303,29 @@
             });
         }
         if (tabSingle) {
+            const TABS = {
+                single: [tabSingle, singleView],
+                queue: [tabQueue, queueView],
+                video: [document.getElementById("tab-video"),
+                        document.getElementById("video-view")],
+            };
             function showTab(which) {
-                const q = which === "queue";
-                singleView.style.display = q ? "none" : "block";
-                queueView.style.display = q ? "block" : "none";
-                tabQueue.classList.toggle("active", q);
-                tabSingle.classList.toggle("active", !q);
-                if (q) startQueuePolling(); else stopQueuePolling();
+                for (const [name, [btn, view]] of Object.entries(TABS)) {
+                    if (!btn) continue;
+                    btn.classList.toggle("active", name === which);
+                    view.style.display = name === which ? "block" : "none";
+                }
+                if (tabQueue) {
+                    if (which === "queue") startQueuePolling(); else stopQueuePolling();
+                }
+                if (window.cozyVideo) window.cozyVideo.shown(which === "video");
             }
-            tabSingle.addEventListener("click", () => showTab("single"));
-            tabQueue.addEventListener("click", () => showTab("queue"));
+            for (const [name, [btn]] of Object.entries(TABS)) {
+                if (btn) btn.addEventListener("click", () => showTab(name));
+            }
         }
     </script>
+    {% if has_video %}<script src="{{ urlroot }}static/video.js"></script>{% endif %}
 </body>
 
 </html>

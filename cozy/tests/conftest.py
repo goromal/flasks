@@ -33,3 +33,49 @@ def _make_heic(w=40, h=20, color=(200, 40, 40), orientation=None):
 @pytest.fixture
 def make_heic():
     return _make_heic
+
+
+def _make_video(path, colors=(("red", 6), ("blue", 7), ("red", 7)),
+                audio=True, size="160x120", rate=10):
+    """Build a test clip of solid-colour stretches with ffmpeg's lavfi.
+
+    ``colors`` is ((name, seconds), ...). Skips the calling test when ffmpeg
+    is unavailable, so the suite still runs on a box without it.
+    """
+    import shutil
+    import subprocess
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg not available")
+    argv = ["ffmpeg", "-v", "error", "-y"]
+    for name, secs in colors:
+        argv += ["-f", "lavfi", "-i",
+                 "color=c=%s:s=%s:r=%d:d=%s" % (name, size, rate, secs)]
+    n = len(colors)
+    total = sum(s for _, s in colors)
+    graph = "".join("[%d:v]" % i for i in range(n)) + "concat=n=%d:v=1:a=0[v]" % n
+    if audio:
+        argv += ["-f", "lavfi", "-i", "sine=f=440:d=%s" % total]
+    argv += ["-filter_complex", graph, "-map", "[v]"]
+    if audio:
+        argv += ["-map", "%d:a" % n, "-c:a", "aac"]
+    argv += ["-c:v", "libx264", "-pix_fmt", "yuv420p", str(path)]
+    subprocess.run(argv, check=True)
+    return str(path)
+
+
+@pytest.fixture
+def make_video():
+    return _make_video
+
+
+def _is_blue(jpeg):
+    """True when a frame is predominantly blue (the fake judge's rule)."""
+    from PIL import ImageStat
+    img = Image.open(io.BytesIO(jpeg)).convert("RGB")
+    r, g, b = ImageStat.Stat(img).mean
+    return b > 128 and r < 100
+
+
+@pytest.fixture
+def is_blue():
+    return _is_blue

@@ -83,3 +83,29 @@ def test_safe_upload_name_accepts_heif_but_rejects_non_images():
 def test_safe_upload_name_caps_length():
     out = image_refs.safe_upload_name("a" * 500 + ".png")
     assert out.endswith(".png") and len(out) <= 110
+
+
+def test_video_exts_list_and_resolve(tmp_path):
+    import image_refs as ir
+    inp, out = tmp_path / "in", tmp_path / "out"
+    (inp / "sub").mkdir(parents=True)
+    out.mkdir()
+    (inp / "sub" / "a.MP4").write_bytes(b"v")
+    (inp / "pic.png").write_bytes(b"i")
+    (out / "b.mov").write_bytes(b"v")
+    items = ir.list_images(str(inp), str(out), exts=ir.VIDEO_EXTS)
+    assert [i["value"] for i in items] == ["sub/a.MP4", "b.mov [output]"]
+    assert ir.resolve(str(inp), str(out), "sub/a.MP4", exts=ir.VIDEO_EXTS)
+    assert ir.resolve(str(inp), str(out), "b.mov [output]", exts=ir.VIDEO_EXTS)
+    # The image default still refuses a video, and vice versa.
+    assert ir.resolve(str(inp), str(out), "sub/a.MP4") is None
+    assert ir.resolve(str(inp), str(out), "pic.png", exts=ir.VIDEO_EXTS) is None
+    assert ir.resolve(str(inp), str(out), "../in/sub/a.MP4 [output]",
+                      exts=ir.VIDEO_EXTS) is None
+
+
+def test_safe_upload_name_video():
+    import image_refs as ir
+    assert ir.safe_upload_name("C:\\x\\My Clip.MOV", ir.VIDEO_EXTS) == "My_Clip.mov"
+    assert ir.safe_upload_name("a.png", ir.VIDEO_EXTS) is None
+    assert ir.safe_upload_name("a.mp4") is None

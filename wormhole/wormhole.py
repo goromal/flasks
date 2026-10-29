@@ -20,13 +20,16 @@ containing newlines are not supported (the listing is parsed line-wise).
 import argparse
 import os
 import pwd
+import select
 import shlex
 import socket
 import subprocess
 import sys
+import tempfile
 
 _SSH_OPTS = ("-o", "BatchMode=yes", "-o", "ConnectTimeout=5")
 _TIMEOUT_SECS = 60
+_CHUNK_BYTES = 1024 * 1024
 
 # mDNS names don't propagate over the VPN, so an "<name>.local" host can be
 # redirected to a direct LAN IP recorded in ~/secrets/<name>/i.txt.
@@ -215,11 +218,14 @@ def _ssh_target(host):
     return (), target
 
 
-def _ssh(host, remote_cmd, input_bytes=None):
+def _ssh_argv(host, remote_cmd):
     alias_opts, target = _ssh_target(host)
+    return ["ssh", *_SSH_OPTS, *alias_opts, "--", target, remote_cmd]
+
+
+def _ssh(host, remote_cmd, input_bytes=None):
     try:
-        return _run(["ssh", *_SSH_OPTS, *alias_opts, "--", target, remote_cmd],
-                    input_bytes)
+        return _run(_ssh_argv(host, remote_cmd), input_bytes)
     except WormholeError as e:
         raise WormholeError(_explain_auth_failure(str(e))) from None
 
@@ -279,6 +285,89 @@ def read_file(host, path, max_bytes=None):
     if max_bytes is not None and len(data) > max_bytes:
         raise WormholeError("file exceeds %d bytes" % max_bytes)
     return data
+
+
+def _copy_stream(fd, out, max_bytes, idle_timeout):
+    """Copy fd to out in chunks; return the byte count.
+
+    Raises WormholeError once more than max_bytes has arrived (checked as the
+    data flows, not after) or when no data arrives for idle_timeout seconds.
+    The timeout bounds a stall, not the whole transfer, so a multi-GB copy
+    that keeps moving is never cut off.
+    """
+    total = 0
+    while True:
+        ready, _, _ = select.select([fd], [], [], idle_timeout)
+        if not ready:
+            raise WormholeError("transfer stalled for %gs" % idle_timeout)
+        chunk = os.read(fd, _CHUNK_BYTES)
+        if not chunk:
+            return total
+        total += len(chunk)
+        if max_bytes is not None and total > max_bytes:
+            raise WormholeError("file exceeds %d bytes" % max_bytes)
+        out.write(chunk)
+
+
+def _fetch_remote(host, path, out, max_bytes, idle_timeout):
+    argv = _ssh_argv(host, "cat -- " + shlex.quote(path))
+    # stderr goes to a file, not a pipe: nothing drains it while stdout is
+    # streaming, and a chatty ssh would otherwise block on a full pipe.
+    with tempfile.TemporaryFile() as err:
+        try:
+            proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=err)
+        except OSError as e:
+            raise WormholeError(str(e))
+        try:
+            total = _copy_stream(proc.stdout.fileno(), out, max_bytes,
+                                 idle_timeout)
+        except BaseException:
+            proc.kill()
+            raise
+        finally:
+            proc.stdout.close()
+            rc = proc.wait()
+        if rc != 0:
+            err.seek(0)
+            msg = err.read().decode("utf-8", errors="replace").strip()
+            # The last stderr line is the operative one (ssh prepends banners).
+            raise WormholeError(_explain_auth_failure(
+                msg.splitlines()[-1] if msg else "command failed"))
+    return total
+
+
+def fetch_to_file(host, path, dest, max_bytes=None, idle_timeout=_TIMEOUT_SECS):
+    """Stream a (possibly huge) file at path to the local file dest.
+
+    The large-file counterpart of read_file, which buffers everything in
+    memory under a 60 s wall-clock limit -- fine for images, not for video.
+    Here data goes straight to disk in chunks, max_bytes is enforced while
+    the bytes arrive, and idle_timeout only fires when the transfer stalls.
+
+    The copy lands in dest + ".part" and is renamed into place on success,
+    so a failed or partial transfer never leaves a truncated dest behind.
+    Parent directories of dest are created. Returns the bytes written.
+    """
+    part = dest + ".part"
+    try:
+        parent = os.path.dirname(dest)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(part, "wb") as out:
+            if _local(host):
+                with open(path, "rb") as src:
+                    total = _copy_stream(src.fileno(), out, max_bytes,
+                                         idle_timeout)
+            else:
+                total = _fetch_remote(host, path, out, max_bytes, idle_timeout)
+        os.replace(part, dest)
+        return total
+    except OSError as e:
+        raise WormholeError(str(e))
+    finally:
+        if os.path.exists(part):
+            os.remove(part)
 
 
 def write_file(host, path, data):
