@@ -19,6 +19,7 @@ modules (`module.nix`) live in anixpkgs under `pkgs/python-packages/flasks/`.
 | `media2notes` | CLI (not a UI): media URL → transcript + key frames folder for note taking |
 | `nexus` | LAN hub: machine status, home-page links and bulk anix-upgrade |
 | `orchestrator_ui` | Web UI for managing orchestrator jobs |
+| `rcrsync_ui` | Web UI for running rcrsync and seeing when each cloud directory was last pushed and pulled |
 | `rankserver` | Webserver for ranking files via binary manual comparisons |
 | `stampserver` | Interface for stamping metadata on PNGs and MP4s |
 | `sunset` | Web UI to show and force-kill the running Dolphin emulator |
