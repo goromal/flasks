@@ -282,7 +282,7 @@ def create_app(ollama, default_model, username, password_hash, secret_key=None,
 
 def run():
     parser = argparse.ArgumentParser(description="Chat UI for local Ollama models")
-    parser.add_argument("--port", type=int, default=4747)
+    parser.add_argument("--port", type=int, default=4848)
     parser.add_argument("--subdomain", type=str, default="/chat")
     parser.add_argument("--ollama-url", type=str, default="http://127.0.0.1:11434")
     parser.add_argument("--default-model", type=str, default="",
