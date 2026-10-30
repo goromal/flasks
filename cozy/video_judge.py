@@ -43,10 +43,44 @@ class OllamaJudge:
         self.timeout = timeout
         self.retries = retries
         self._http = session or requests.Session()
+        # Capabilities never change for a given blob, so they are looked up
+        # once per model digest rather than on every dropdown refresh.
+        self._caps = {}
 
-    def _ask(self, jpeg, prompt):
+    def models(self):
+        """Installed models, sorted, as ``[{name, vision}]`` -- the same set
+        ``anix-llm models`` lists, flagged by whether each accepts images.
+        Raises JudgeError when Ollama is unreachable."""
+        try:
+            resp = self._http.get(self.url + "/api/tags", timeout=10)
+            resp.raise_for_status()
+            entries = resp.json().get("models") or []
+        except requests.ConnectionError:
+            raise JudgeError("vision model unavailable at %s" % self.url)
+        except (requests.RequestException, ValueError) as e:
+            raise JudgeError("cannot list models: %s" % e)
+        out = []
+        for entry in entries:
+            name = entry.get("name") or entry.get("model")
+            if not isinstance(name, str):
+                continue
+            key = entry.get("digest") or name
+            if key not in self._caps:
+                try:
+                    show = self._http.post(self.url + "/api/show",
+                                           json={"model": name}, timeout=10)
+                    show.raise_for_status()
+                    self._caps[key] = "vision" in (show.json().get("capabilities") or [])
+                except (requests.RequestException, ValueError):
+                    # Unknown is not cached: the next refresh asks again.
+                    out.append({"name": name, "vision": False})
+                    continue
+            out.append({"name": name, "vision": self._caps[key]})
+        return sorted(out, key=lambda m: m["name"])
+
+    def _ask(self, jpeg, prompt, model):
         body = {
-            "model": self.model,
+            "model": model,
             "messages": [{
                 "role": "user",
                 "content": _QUESTION % prompt,
@@ -80,22 +114,23 @@ class OllamaJudge:
             raise JudgeError("unparseable vision model reply")
         return verdict
 
-    def judge(self, jpeg, prompt):
-        """True when the frame matches ``prompt``. Raises JudgeError after
+    def judge(self, jpeg, prompt, model=None):
+        """True when the frame matches ``prompt``, asking ``model`` (default:
+        the one this judge was built with). Raises JudgeError after
         ``retries`` failed retries."""
         for attempt in range(self.retries + 1):
             try:
-                return self._ask(jpeg, prompt)
+                return self._ask(jpeg, prompt, model or self.model)
             except JudgeError:
                 if attempt == self.retries:
                     raise
 
-    def unload(self):
-        """Evict the model from memory so ComfyUI gets the GPU back.
-        Best-effort: never raises."""
+    def unload(self, model=None):
+        """Evict ``model`` (default: this judge's) from memory so ComfyUI
+        gets the GPU back. Best-effort: never raises."""
         try:
             self._http.post(self.url + "/api/generate",
-                            json={"model": self.model, "keep_alive": 0},
+                            json={"model": model or self.model, "keep_alive": 0},
                             timeout=30)
         except requests.RequestException:
             pass

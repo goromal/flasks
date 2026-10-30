@@ -51,7 +51,7 @@ def _now():
 def _idle():
     return {"state": "idle", "source": None, "source_label": "",
             "staged_path": None, "prompt": "", "params": None, "probe": None,
-            "memo": {}, "samples": [], "segments": [], "calls_done": 0,
+            "memo": {}, "model": None, "samples": [], "segments": [], "calls_done": 0,
             "calls_est": 0, "avg_call_s": None, "error": None,
             "output": None, "started_at": None, "finished_at": None}
 
@@ -171,32 +171,64 @@ class VideoStore:
 
     # -- speed memory ----------------------------------------------------------
 
-    def _model(self):
+    def default_model(self):
+        """The model a job uses when none is chosen (cozy's --video-model)."""
         return str(getattr(self.judge, "model", "") or "")
 
-    def secs_per_frame(self):
-        """Seconds per judged frame measured on the last run with the current
-        model, or None. Per model because swapping a 35B model for a 3B one
-        changes the answer by an order of magnitude."""
+    def _speeds(self):
         try:
             with open(self.speed_path) as f:
-                return json.load(f).get(self._model())
-        except (OSError, ValueError, AttributeError):
-            return None
+                speeds = json.load(f)
+            return speeds if isinstance(speeds, dict) else {}
+        except (OSError, ValueError):
+            return {}
 
-    def _record_speed(self, secs):
+    def secs_per_frame(self, model=None):
+        """Seconds per judged frame measured on the last run with ``model``
+        (default: the default model), or None. Per model because swapping a
+        35B model for a 3B one changes the answer by an order of magnitude."""
+        return self._speeds().get(model or self.default_model())
+
+    def models(self):
+        """Models a job can be given, for the Video tab's dropdown:
+        ``[{name, vision, default, secs_per_frame}]`` -- every installed model
+        (what ``anix-llm models`` lists), flagged by whether it accepts images.
+        Raises JudgeError when Ollama is unreachable."""
+        speeds = self._speeds()
+        default = self.default_model()
+        return [dict(m, default=m["name"] == default,
+                     secs_per_frame=speeds.get(m["name"]))
+                for m in self.judge.models()]
+
+    def _check_model(self, model):
+        """``model`` if it is installed and accepts images; the default for
+        None. Raises ValueError otherwise -- a text-only model would fail on
+        the first frame, after staging and probing."""
+        if not model or model == self.default_model():
+            return self.default_model()
+        try:
+            found = {m["name"]: m["vision"] for m in self.judge.models()}
+        except Exception as e:  # noqa: BLE001 - JudgeError, or a judge without models()
+            raise ValueError("cannot check model %r: %s" % (model, e))
+        if model not in found:
+            raise ValueError("model %r is not installed" % model)
+        if not found[model]:
+            raise ValueError("model %r cannot read images" % model)
+        return model
+
+    def _record_speed(self, model, secs):
         try:
             with open(self.speed_path) as f:
                 speeds = json.load(f)
         except (OSError, ValueError):
             speeds = {}
-        speeds[self._model()] = secs
+        speeds[model] = secs
         tmp = self.speed_path + ".tmp"
         with open(tmp, "w") as f:
             json.dump(speeds, f)
         os.replace(tmp, self.speed_path)
 
-    def estimate(self, video, stride=None, precision=None):
+    def estimate(self, video, stride=None, precision=None, model=None):
         """What analyzing a local video would cost, before starting it:
         ``{duration, stride, precision, coarse_frames, frames,
         secs_per_frame, eta_s}``. ``frames`` assumes one matching segment;
@@ -213,7 +245,7 @@ class VideoStore:
         stride = params["stride"] or video_search.default_stride(duration)
         precision = params["precision"] or DEFAULT_PRECISION
         coarse, frames = video_search.estimate_calls(duration, stride, precision)
-        spf = self.secs_per_frame()
+        spf = self.secs_per_frame(model)
         return {"duration": duration, "stride": stride, "precision": precision,
                 "coarse_frames": coarse, "frames": frames,
                 "secs_per_frame": spf,
@@ -242,14 +274,16 @@ class VideoStore:
     # -- analyze -------------------------------------------------------------
 
     def analyze(self, prompt, video=None, remote=None, stride=None,
-                precision=None, merge_gap=None, fresh=False):
+                precision=None, merge_gap=None, fresh=False, model=None):
         """Start analysis in the background. Returns None on success or an
         error string; raises ValueError for bad input. A busy store or a held
         RunLock returns "busy".
 
         ``fresh`` discards remembered verdicts so every frame goes to the
         model again -- what a regression check needs, since a memo hit would
-        pass even with the model down."""
+        pass even with the model down. ``model`` picks an installed vision
+        model (default: cozy's --video-model); verdicts are only reused for
+        the same model."""
         prompt = (prompt or "").strip()
         if not prompt:
             raise ValueError("prompt required")
@@ -270,6 +304,7 @@ class VideoStore:
             source = {"value": video}
             label = video
         params = _parse_params(stride, precision, merge_gap)
+        model = self._check_model(model)
         with self._lock:
             if self.busy():
                 return "busy"
@@ -277,14 +312,15 @@ class VideoStore:
                 return "busy"
             prev = self._read()
             same = (not fresh and prev.get("source") == source
-                    and prev.get("prompt") == prompt)
+                    and prev.get("prompt") == prompt
+                    and (prev.get("model") or self.default_model()) == model)
             memo = prev["memo"] if same else {}
             if not same:
                 self._clear_frames()
             job = _idle()
             job.update(state="staging" if remote else "probing", source=source,
                        source_label=label, staged_path=local_path,
-                       prompt=prompt, params=params, memo=memo,
+                       prompt=prompt, params=params, memo=memo, model=model,
                        started_at=_now())
             self._write(job)
             self._cancel.clear()
@@ -313,6 +349,7 @@ class VideoStore:
         # Real model calls only: memo hits cost nothing and would make the
         # model look faster than it is.
         stats = {"calls": 0, "secs": 0.0}
+        model = job.get("model") or self.default_model()
         try:
             if self.client is not None:
                 self.client.free()
@@ -345,7 +382,7 @@ class VideoStore:
                 jpeg = self._grab(path, t)
                 with open(self.frame_path(round(t * 1000)), "wb") as f:
                     f.write(jpeg)
-                verdict = self.judge.judge(jpeg, job["prompt"])
+                verdict = self.judge.judge(jpeg, job["prompt"], model=model)
                 stats["calls"] += 1
                 stats["secs"] += time.monotonic() - t0
                 return verdict
@@ -373,11 +410,11 @@ class VideoStore:
         finally:
             if stats["calls"]:
                 try:
-                    self._record_speed(stats["secs"] / stats["calls"])
+                    self._record_speed(model, stats["secs"] / stats["calls"])
                 except OSError:
                     pass
             if hasattr(self.judge, "unload"):
-                self.judge.unload()
+                self.judge.unload(model)
             self._run_lock.release()
 
     def cancel(self):

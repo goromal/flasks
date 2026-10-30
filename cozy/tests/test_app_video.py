@@ -13,8 +13,14 @@ USERNAME = "someone"
 
 
 class NoJudge:
-    def judge(self, jpeg, prompt):
+    model = "vision-default"
+
+    def judge(self, jpeg, prompt, model=None):
         return False
+
+    def models(self):
+        return [{"name": "text-only", "vision": False},
+                {"name": "vision-default", "vision": True}]
 
 
 class AppStore:
@@ -204,3 +210,28 @@ def test_analyze_passes_fresh_only_when_true(client, monkeypatch):
         client.post("/cozy/api/video/analyze",
                     json=dict(body, prompt="x", video="a.mp4"))
     assert seen == [True, False, False]
+
+
+
+def test_models_route(client):
+    d = client.get("/cozy/api/video/models").get_json()
+    assert d["models"] == [
+        {"name": "text-only", "vision": False, "default": False, "secs_per_frame": None},
+        {"name": "vision-default", "vision": True, "default": True, "secs_per_frame": None}]
+
+
+def test_models_route_502_when_ollama_down(client, monkeypatch):
+    import video_judge
+
+    def down():
+        raise video_judge.JudgeError("vision model unavailable at http://x")
+    monkeypatch.setattr(client._vstore.judge, "models", down)
+    r = client.get("/cozy/api/video/models")
+    assert r.status_code == 502 and "unavailable" in r.get_json()["error"]
+
+
+def test_analyze_rejects_text_only_model(client):
+    (client._in / "a.mp4").write_bytes(b"v")
+    r = client.post("/cozy/api/video/analyze",
+                    json={"prompt": "x", "video": "a.mp4", "model": "text-only"})
+    assert r.status_code == 400 and "cannot read images" in r.get_json()["error"]

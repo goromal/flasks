@@ -884,6 +884,17 @@ def _add_video_routes(bp, vstore, input_dir, output_dir):
             return _err("not found", 404)
         return flask.send_file(path, conditional=True)
 
+    @bp.route("/api/video/models", methods=["GET"])
+    @flask_login.login_required
+    def video_models():
+        """Installed Ollama models for the Video tab's model dropdown -- the
+        set ``anix-llm models`` lists -- with which accept images, which is
+        the default, and each one's measured speed."""
+        try:
+            return flask.jsonify({"models": vstore.models()})
+        except video_judge.JudgeError as e:
+            return _err(str(e), 502)
+
     @bp.route("/api/video/estimate", methods=["GET"])
     @flask_login.login_required
     def video_estimate():
@@ -893,7 +904,7 @@ def _add_video_routes(bp, vstore, input_dir, output_dir):
         try:
             return flask.jsonify(vstore.estimate(
                 args.get("video", ""), stride=args.get("stride"),
-                precision=args.get("precision")))
+                precision=args.get("precision"), model=args.get("model") or None))
         except ValueError as e:
             return _err(str(e))
 
@@ -906,7 +917,8 @@ def _add_video_routes(bp, vstore, input_dir, output_dir):
                 data.get("prompt"), video=data.get("video") or None,
                 remote=data.get("remote_video") or None,
                 stride=data.get("stride"), precision=data.get("precision"),
-                merge_gap=data.get("merge_gap"), fresh=data.get("fresh") is True)
+                merge_gap=data.get("merge_gap"), fresh=data.get("fresh") is True,
+                model=data.get("model") or None)
         except ValueError as e:
             return _err(str(e))
         if busy:

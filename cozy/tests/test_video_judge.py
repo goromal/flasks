@@ -18,14 +18,17 @@ class Stub:
 
         class H(BaseHTTPRequestHandler):
             def do_POST(self):
-                n = int(self.headers["Content-Length"])
-                stub.requests.append((self.path, json.loads(self.rfile.read(n))))
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n)) if n else None
+                stub.requests.append((self.path, body))
                 status, body = stub.replies.pop(0) if stub.replies else (200, {})
                 data = body.encode() if isinstance(body, str) else json.dumps(body).encode()
                 self.send_response(status)
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
+
+            do_GET = do_POST
 
             def log_message(self, *a):
                 pass
@@ -107,3 +110,36 @@ def test_unload_payload_and_never_raises(stub):
     vj.OllamaJudge(s.url, "m").unload()
     assert s.requests == [("/api/generate", {"model": "m", "keep_alive": 0})]
     vj.OllamaJudge("http://127.0.0.1:9", "m").unload()
+
+
+def test_per_call_model_overrides_default(stub):
+    s = stub(ok(True), (200, {}))
+    j = vj.OllamaJudge(s.url, "default-model")
+    j.judge(b"j", "p", model="other-model")
+    j.unload("other-model")
+    assert s.requests[0][1]["model"] == "other-model"
+    assert s.requests[1] == ("/api/generate", {"model": "other-model", "keep_alive": 0})
+
+
+def test_models_lists_installed_with_vision_flag(stub):
+    s = stub((200, {"models": [{"name": "b-text:1b"}, {"name": "a-vision:7b"}]}),
+             (200, {"capabilities": ["completion"]}),
+             (200, {"capabilities": ["completion", "vision"]}))
+    models = vj.OllamaJudge(s.url, "a-vision:7b").models()
+    assert models == [{"name": "a-vision:7b", "vision": True},
+                      {"name": "b-text:1b", "vision": False}]
+    assert [p for p, _ in s.requests] == ["/api/tags", "/api/show", "/api/show"]
+    assert s.requests[1][1] == {"model": "b-text:1b"}
+
+
+def test_models_caches_capabilities_per_digest(stub):
+    tags = (200, {"models": [{"name": "v:1", "digest": "abc"}]})
+    s = stub(tags, (200, {"capabilities": ["vision"]}), tags)
+    j = vj.OllamaJudge(s.url, "v:1")
+    assert j.models() == j.models() == [{"name": "v:1", "vision": True}]
+    assert [p for p, _ in s.requests] == ["/api/tags", "/api/show", "/api/tags"]
+
+
+def test_models_unreachable_raises():
+    with pytest.raises(vj.JudgeError, match="unavailable"):
+        vj.OllamaJudge("http://127.0.0.1:9", "m").models()

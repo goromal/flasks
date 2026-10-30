@@ -16,6 +16,7 @@
     const promptEl = $("v-prompt");
     const analyzeBtn = $("v-analyze");
     const estimateEl = $("v-estimate");
+    const modelSel = $("v-model");
     const cancelBtn = $("v-cancel");
     const progress = $("v-progress");
     const bar = $("v-bar");
@@ -109,6 +110,7 @@
         const precision = $("v-precision").value.trim();
         if (stride) q.set("stride", stride);
         if (precision) q.set("precision", precision);
+        if (modelSel.value) q.set("model", modelSel.value);
         const seq = ++estimateSeq;
         let d;
         try {
@@ -124,6 +126,49 @@
             : " · time unknown until a first run measures this model";
         setEstimate(text + ". Each extra matching segment adds a few frames.");
     }
+
+    // --- model choice ----------------------------------------------------------
+
+    // Every installed Ollama model (what `anix-llm models` lists). Only ones
+    // that accept images can be picked; the rest are shown disabled so a
+    // missing model is visibly "installed but blind", not just absent.
+    let wantModel = null;    // a model to select once the list arrives
+
+    async function loadModels() {
+        let d;
+        try {
+            const r = await fetch(root + "api/video/models");
+            d = await r.json();
+            if (!r.ok) throw new Error(d.error || "HTTP " + r.status);
+        } catch (e) {
+            modelSel.innerHTML = "";
+            const o = document.createElement("option");
+            o.value = "";
+            o.textContent = "default model (list unavailable: " + e.message + ")";
+            modelSel.appendChild(o);
+            return;
+        }
+        const keep = wantModel || modelSel.value;
+        modelSel.innerHTML = "";
+        let fallback = "";
+        for (const m of d.models) {
+            const o = document.createElement("option");
+            o.value = m.name;
+            o.disabled = !m.vision;
+            let label = m.name;
+            if (m.default) { label += " (default)"; fallback = m.name; }
+            if (!m.vision) label += " — no vision";
+            else if (m.secs_per_frame != null) label += " — " + m.secs_per_frame.toFixed(1) + " s/frame";
+            o.textContent = label;
+            modelSel.appendChild(o);
+        }
+        const usable = [...modelSel.options].filter(o => !o.disabled).map(o => o.value);
+        modelSel.value = usable.includes(keep) ? keep
+            : usable.includes(fallback) ? fallback : (usable[0] || "");
+        wantModel = null;
+    }
+
+    modelSel.addEventListener("change", scheduleEstimate);
 
     $("v-stride").addEventListener("input", scheduleEstimate);
     $("v-precision").addEventListener("input", scheduleEstimate);
@@ -241,7 +286,8 @@
         if (!source) { showError("Choose a video first."); return; }
         const prompt = promptEl.value.trim();
         if (!prompt) { showError("Describe the frames to keep."); return; }
-        const body = { prompt: prompt, stride: numOrNull("v-stride"),
+        const body = { prompt: prompt, model: modelSel.value || null,
+                       stride: numOrNull("v-stride"),
                        precision: numOrNull("v-precision"),
                        merge_gap: numOrNull("v-merge") };
         if (source.value) body.video = source.value;
@@ -374,7 +420,9 @@
     function render() {
         const running = RUNNING.includes(job.state);
         // A finished run has just measured the model's speed.
-        if (lastState === "analyzing" && job.state !== "analyzing") scheduleEstimate();
+        if (lastState === "analyzing" && job.state !== "analyzing") {
+            loadModels().then(scheduleEstimate);
+        }
         lastState = job.state;
         analyzeBtn.disabled = running;
         cancelBtn.style.display = ["staging", "probing", "analyzing"].includes(job.state)
@@ -385,7 +433,8 @@
         if (job.state === "analyzing" && job.calls_est) {
             bar.style.width = (100 * job.calls_done / job.calls_est) + "%";
             statusEl.textContent = "Checked " + job.calls_done + " of ~" + job.calls_est +
-                " frames" + (job.eta_s != null ? " · about " + fmtEta(job.eta_s) + " left" : "");
+                " frames" + (job.model ? " with " + job.model : "") +
+                (job.eta_s != null ? " · about " + fmtEta(job.eta_s) + " left" : "");
         } else {
             bar.style.width = running ? "100%" : "0%";
             statusEl.textContent = STATE_TEXT[job.state] || "";
@@ -440,6 +489,8 @@
     // Restore the last job's inputs so a reload lands where the user left off.
     async function init() {
         await refresh();
+        if (job && job.model) wantModel = job.model;
+        await loadModels();
         const src = job && job.source;
         if (src && src.value) await loadList(src.value);
         else await loadList();
@@ -452,7 +503,7 @@
     window.cozyVideo = {
         shown(on) {
             tabShown = on;
-            if (on) { refresh(); startPolling(); }
+            if (on) { refresh(); startPolling(); loadModels(); }
             else if (!job || !RUNNING.includes(job.state)) stopPolling();
         },
     };

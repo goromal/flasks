@@ -19,17 +19,27 @@ class BlueJudge:
         self.unloads = 0
         self.fail_at = fail_at
         self.gate = gate
+        self.models_used = []
+        self.unloaded = []
+        self.model = "vision-default"
+        # What models() reports: name -> accepts images.
+        self.installed = {"vision-default": True, "vision-b": True, "text-only": False}
 
-    def judge(self, jpeg, prompt):
+    def models(self):
+        return [{"name": n, "vision": v} for n, v in sorted(self.installed.items())]
+
+    def judge(self, jpeg, prompt, model=None):
         self.calls += 1
+        self.models_used.append(model)
         if self.gate is not None:
             self.gate.wait(5)
         if self.fail_at is not None and self.calls >= self.fail_at:
             raise RuntimeError("model fell over")
         return self.is_blue(jpeg)
 
-    def unload(self):
+    def unload(self, model=None):
         self.unloads += 1
+        self.unloaded.append(model)
 
 
 class FakeClient:
@@ -276,19 +286,15 @@ def test_estimate_honours_overrides(dirs, make_video, is_blue):
 
 def test_speed_remembered_per_model_after_a_run(dirs, make_video, is_blue):
     make_video(dirs["in"] / "clip.mp4")
-    judge = BlueJudge(is_blue)
-    judge.model = "vision-a"
-    store = make_store(dirs, judge)
-    run_analysis(store, prompt="b", video="clip.mp4", stride=4)
-    est = store.estimate(video="clip.mp4", stride=4)
+    store = make_store(dirs, BlueJudge(is_blue))
+    run_analysis(store, prompt="b", video="clip.mp4", stride=4, model="vision-b")
+    est = store.estimate(video="clip.mp4", stride=4, model="vision-b")
     assert est["secs_per_frame"] > 0
     assert est["eta_s"] == pytest.approx(est["frames"] * est["secs_per_frame"])
-    # Survives a restart; ignored once the model changes.
-    other = BlueJudge(is_blue)
-    other.model = "vision-a"
-    assert make_store(dirs, other).estimate(video="clip.mp4")["secs_per_frame"]
-    other.model = "vision-b"
-    assert make_store(dirs, other).estimate(video="clip.mp4")["secs_per_frame"] is None
+    # Survives a restart; another model has no measurement yet.
+    other = make_store(dirs, BlueJudge(is_blue))
+    assert other.estimate(video="clip.mp4", model="vision-b")["secs_per_frame"]
+    assert other.estimate(video="clip.mp4")["secs_per_frame"] is None
 
 
 def test_memo_hits_do_not_skew_speed(dirs, make_video, is_blue):
@@ -321,3 +327,49 @@ def test_fresh_rejudges_every_frame(dirs, make_video, is_blue):
     job = run_analysis(store, prompt="b", video="clip.mp4", stride=4, fresh=True)
     assert judge.calls == 2 * first
     assert job["state"] == "review" and len(job["segments"]) == 1
+
+
+
+def test_job_uses_and_records_the_chosen_model(dirs, make_video, is_blue):
+    make_video(dirs["in"] / "clip.mp4")
+    judge = BlueJudge(is_blue)
+    store = make_store(dirs, judge)
+    job = run_analysis(store, prompt="b", video="clip.mp4", stride=4, model="vision-b")
+    assert job["model"] == "vision-b"
+    assert set(judge.models_used) == {"vision-b"}
+    assert judge.unloaded == ["vision-b"]
+    job = run_analysis(store, prompt="b", video="clip.mp4", stride=4)
+    assert job["model"] == "vision-default"
+
+
+def test_memo_is_per_model(dirs, make_video, is_blue):
+    make_video(dirs["in"] / "clip.mp4")
+    judge = BlueJudge(is_blue)
+    store = make_store(dirs, judge)
+    run_analysis(store, prompt="b", video="clip.mp4", stride=4)
+    first = judge.calls
+    run_analysis(store, prompt="b", video="clip.mp4", stride=4, model="vision-b")
+    assert judge.calls == 2 * first        # another model's verdicts don't count
+    run_analysis(store, prompt="b", video="clip.mp4", stride=4, model="vision-b")
+    assert judge.calls == 2 * first        # same model again: all reused
+
+
+@pytest.mark.parametrize("model", ["text-only", "not-installed"])
+def test_analyze_rejects_models_that_cannot_judge(dirs, make_video, is_blue, model):
+    make_video(dirs["in"] / "clip.mp4")
+    store = make_store(dirs, BlueJudge(is_blue))
+    with pytest.raises(ValueError, match="model"):
+        store.analyze(prompt="b", video="clip.mp4", model=model)
+    assert store.read()["state"] == "idle"
+
+
+def test_models_lists_vision_flag_default_and_speed(dirs, make_video, is_blue):
+    make_video(dirs["in"] / "clip.mp4")
+    store = make_store(dirs, BlueJudge(is_blue))
+    run_analysis(store, prompt="b", video="clip.mp4", stride=4, model="vision-b")
+    models = {m["name"]: m for m in store.models()}
+    assert models["vision-default"]["default"] is True
+    assert models["vision-b"]["default"] is False
+    assert models["text-only"]["vision"] is False
+    assert models["vision-b"]["secs_per_frame"] > 0
+    assert models["vision-default"]["secs_per_frame"] is None
