@@ -183,7 +183,10 @@ class Stub:
                 n = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(n)) if n else None
                 stub.requests.append((self.path, body))
-                status, payload = routes[self.path]
+                if routes.get(self.path, 0) is None:
+                    status, payload = stub.dynamic.pop(0)   # scripted, in order
+                else:
+                    status, payload = routes[self.path]
                 if self.path == "/api/show":
                     thinks = body["model"] == "a:2"
                     payload = {"capabilities": ["completion"] + (["thinking"] if thinks else [])}
@@ -242,3 +245,49 @@ def test_client_stream_errors(payload, status, err):
 def test_client_unreachable():
     with pytest.raises(chat_ui.ChatError, match="unavailable"):
         chat_ui.OllamaChat("http://127.0.0.1:9").models()
+
+
+# -- CPU fallback when the GPU is full (e.g. ComfyUI is generating) -----------
+
+GPU_FULL = {"error": "llama-server startup failed: ggml_backend_cuda_device_get_memory: "
+                     "cudaMemGetInfo failed (out of memory), returning 0/0"}
+
+
+def test_gpu_full_retries_on_cpu_and_stays_there(monkeypatch):
+    replies = [(500, GPU_FULL), (200, ndjson({"message": {"content": "ok"}, "done": True})),
+               (200, ndjson({"message": {"content": "again"}, "done": True}))]
+    s = Stub({"/api/chat": None})
+    s.dynamic = replies
+    clock = [1000.0]
+    monkeypatch.setattr(chat_ui.time, "monotonic", lambda: clock[0])
+    ch = chat_ui.OllamaChat(s.url)
+    msgs = [{"role": "user", "content": "q"}]
+    assert list(ch.stream("m", msgs)) == [("content", "ok")]
+    assert list(ch.stream("m", msgs)) == [("content", "again")]
+    sent = [b for p, b in s.requests if p == "/api/chat"]
+    assert "options" not in sent[0]                      # GPU first
+    assert sent[1]["options"] == {"num_gpu": 0}          # then the CPU retry
+    assert sent[2]["options"] == {"num_gpu": 0}          # and it sticks
+    # After the cool-off the GPU is tried again.
+    clock[0] += chat_ui.CPU_FALLBACK_S + 1
+    s.dynamic.append((200, ndjson({"message": {"content": "gpu"}, "done": True})))
+    assert list(ch.stream("m", msgs)) == [("content", "gpu")]
+    assert "options" not in [b for p, b in s.requests if p == "/api/chat"][-1]
+    s.server.shutdown()
+
+
+def test_gpu_full_on_cpu_too_says_so():
+    s = Stub({"/api/chat": None})
+    s.dynamic = [(500, GPU_FULL), (500, {"error": "out of memory"})]
+    with pytest.raises(chat_ui.ChatError, match="GPU is busy"):
+        list(chat_ui.OllamaChat(s.url).stream("m", [{"role": "user", "content": "q"}]))
+    s.server.shutdown()
+
+
+def test_other_errors_are_not_retried():
+    s = Stub({"/api/chat": None})
+    s.dynamic = [(404, {"error": "model 'm' not found"})]
+    with pytest.raises(chat_ui.ChatError, match="not found"):
+        list(chat_ui.OllamaChat(s.url).stream("m", [{"role": "user", "content": "q"}]))
+    assert len([p for p, _ in s.requests if p == "/api/chat"]) == 1
+    s.server.shutdown()

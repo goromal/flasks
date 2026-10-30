@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import timedelta
 
 import flask
@@ -28,6 +29,18 @@ log = logging.getLogger("chat_ui")
 MAX_MESSAGES = 400
 MAX_CHARS = 400_000
 ROLES = ("user", "assistant")
+# After the GPU turns out to be full, stay on the CPU this long before trying
+# the GPU again: every failed GPU load costs 8-25 s and a reload.
+CPU_FALLBACK_S = 300
+# What llama.cpp says when another process (ComfyUI) holds the GPU's memory.
+_GPU_FULL = ("out of memory", "cudamalloc failed", "cudamemgetinfo failed",
+             "unable to allocate cuda")
+
+
+def gpu_full(message):
+    """True when an Ollama error means the GPU had no memory to give."""
+    text = (message or "").lower()
+    return any(marker in text for marker in _GPU_FULL)
 
 
 class ChatError(Exception):
@@ -43,6 +56,7 @@ class OllamaChat:
         self._http = session or requests.Session()
         # Capabilities never change for a given blob: look each up once.
         self._thinks = {}
+        self._cpu_until = 0.0
 
     def models(self):
         """Installed models, sorted (what `anix-llm models` lists), as
@@ -79,25 +93,24 @@ class OllamaChat:
         """Yield ``(kind, text)`` pieces of the reply, kind being "thinking"
         or "content". ``think`` is sent explicitly, so a reasoning model
         answers directly unless asked to think. Raises ChatError on any
-        failure, including midway."""
-        try:
-            resp = self._http.post(
-                self.url + "/api/chat",
-                json={"model": model, "messages": messages, "stream": True,
-                      "think": bool(think)},
-                stream=True, timeout=(10, self.timeout))
-        except requests.ConnectionError:
-            raise ChatError("Ollama is unavailable at %s" % self.url)
-        except requests.RequestException as e:
-            raise ChatError("request failed: %s" % e)
+        failure, including midway.
+
+        When the GPU is full -- ComfyUI generating an image holds nearly all
+        of a small card -- Ollama cannot load the model and fails outright.
+        The request is then retried on the CPU alone (``num_gpu: 0``), and
+        later requests stay there for CPU_FALLBACK_S."""
+        cpu = time.monotonic() < self._cpu_until
+        resp, detail = self._open(model, messages, think, cpu)
+        if resp is None and not cpu and gpu_full(detail):
+            self._cpu_until = time.monotonic() + CPU_FALLBACK_S
+            cpu = True
+            resp, detail = self._open(model, messages, think, cpu)
+        if resp is None:
+            if gpu_full(detail):
+                raise ChatError("the GPU is busy (probably ComfyUI generating an "
+                                "image) and the CPU fallback failed too: %s" % detail)
+            raise ChatError(detail)
         with resp:
-            if resp.status_code != 200:
-                try:
-                    detail = resp.json().get("error") or resp.text
-                except ValueError:
-                    detail = resp.text
-                raise ChatError("Ollama error (HTTP %d): %s"
-                                % (resp.status_code, detail.strip()[:200]))
             try:
                 for line in resp.iter_lines():
                     if not line:
@@ -114,6 +127,29 @@ class OllamaChat:
             except (requests.RequestException, ValueError) as e:
                 raise ChatError("stream interrupted: %s" % e)
         raise ChatError("stream ended early")
+
+    def _open(self, model, messages, think, cpu):
+        """Start a streaming chat. Returns ``(response, None)``, or
+        ``(None, message)`` when Ollama refused it."""
+        body = {"model": model, "messages": messages, "stream": True,
+                "think": bool(think)}
+        if cpu:
+            body["options"] = {"num_gpu": 0}
+        try:
+            resp = self._http.post(self.url + "/api/chat", json=body, stream=True,
+                                   timeout=(10, self.timeout))
+        except requests.ConnectionError:
+            raise ChatError("Ollama is unavailable at %s" % self.url)
+        except requests.RequestException as e:
+            raise ChatError("request failed: %s" % e)
+        if resp.status_code == 200:
+            return resp, None
+        with resp:
+            try:
+                detail = resp.json().get("error") or resp.text
+            except ValueError:
+                detail = resp.text
+        return None, "Ollama error (HTTP %d): %s" % (resp.status_code, detail.strip()[:300])
 
 
 def _load_secrets(path):

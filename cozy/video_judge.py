@@ -31,6 +31,18 @@ _QUESTION = (
 )
 
 
+# What llama.cpp says when another process (ComfyUI running a job that cozy
+# did not schedule) holds the GPU's memory.
+_GPU_FULL = ("out of memory", "cudamalloc failed", "cudamemgetinfo failed",
+             "unable to allocate cuda")
+
+
+def gpu_full(message):
+    """True when an Ollama error means the GPU had no memory to give."""
+    text = (message or "").lower()
+    return any(marker in text for marker in _GPU_FULL)
+
+
 class JudgeError(Exception):
     """The vision model could not give a verdict; str() is user-presentable."""
 
@@ -46,6 +58,9 @@ class OllamaJudge:
         # Capabilities never change for a given blob, so they are looked up
         # once per model digest rather than on every dropdown refresh.
         self._caps = {}
+        # Set when the GPU turned out to be full: the rest of the job runs on
+        # the CPU rather than failing a GPU load (8-25 s) on every frame.
+        self._cpu = False
 
     def models(self):
         """Installed models, sorted, as ``[{name, vision}]`` -- the same set
@@ -91,6 +106,8 @@ class OllamaJudge:
             "format": _SCHEMA,
             "options": {"temperature": 0},
         }
+        if self._cpu:
+            body["options"]["num_gpu"] = 0
         try:
             resp = self._http.post(self.url + "/api/chat", json=body,
                                    timeout=self.timeout)
@@ -103,6 +120,14 @@ class OllamaJudge:
                 detail = resp.json().get("error") or resp.text
             except ValueError:
                 detail = resp.text
+            if gpu_full(detail) and not self._cpu:
+                # Another process (ComfyUI) holds the GPU. On atorgesen-dell
+                # ~90% of the model runs on the CPU anyway, so this is cheap.
+                self._cpu = True
+                return self._ask(jpeg, prompt, model)
+            if gpu_full(detail):
+                raise JudgeError("the GPU is busy (probably ComfyUI) and the CPU "
+                                 "fallback failed too: %s" % detail.strip()[:200])
             raise JudgeError("vision model error (HTTP %d): %s"
                              % (resp.status_code, detail.strip()[:200]))
         try:
@@ -127,7 +152,9 @@ class OllamaJudge:
 
     def unload(self, model=None):
         """Evict ``model`` (default: this judge's) from memory so ComfyUI
-        gets the GPU back. Best-effort: never raises."""
+        gets the GPU back, and lets the next job try the GPU again.
+        Best-effort: never raises."""
+        self._cpu = False
         try:
             self._http.post(self.url + "/api/generate",
                             json={"model": model or self.model, "keep_alive": 0},

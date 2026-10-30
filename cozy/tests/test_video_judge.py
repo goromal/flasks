@@ -143,3 +143,27 @@ def test_models_caches_capabilities_per_digest(stub):
 def test_models_unreachable_raises():
     with pytest.raises(vj.JudgeError, match="unavailable"):
         vj.OllamaJudge("http://127.0.0.1:9", "m").models()
+
+
+GPU_FULL = (500, {"error": "llama-server startup failed: cudaMemGetInfo failed "
+                           "(out of memory), returning 0/0"})
+
+
+def test_gpu_full_falls_back_to_cpu_for_the_rest_of_the_job(stub):
+    s = stub(GPU_FULL, ok(True), ok(False), (200, {}), ok(True))
+    j = vj.OllamaJudge(s.url, "m")
+    assert j.judge(b"j", "p") is True
+    assert j.judge(b"j", "p") is False
+    chats = [b for p, b in s.requests if p == "/api/chat"]
+    assert "num_gpu" not in chats[0]["options"]
+    assert chats[1]["options"] == {"temperature": 0, "num_gpu": 0}
+    assert chats[2]["options"] == {"temperature": 0, "num_gpu": 0}   # sticky
+    j.unload()                   # end of the job: the next one tries the GPU again
+    j.judge(b"j", "p")
+    assert "num_gpu" not in [b for p, b in s.requests if p == "/api/chat"][-1]["options"]
+
+
+def test_gpu_full_on_cpu_too_names_the_gpu(stub):
+    s = stub(GPU_FULL, (500, {"error": "out of memory"}), (500, {"error": "out of memory"}))
+    with pytest.raises(vj.JudgeError, match="GPU is busy"):
+        vj.OllamaJudge(s.url, "m").judge(b"j", "p")
