@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RCRSync UI</title>
+  <link rel="icon" type="image/svg+xml" href="{{ subdomain }}/favicon.svg">
+  <style>
+    :root {
+      --bg: #f5f6f8; --card: #fff; --ink: #1d2330; --muted: #6b7385; --line: #e2e5eb;
+      --push: #2563eb; --pull: #0f9d6b; --warn: #b7791f; --bad: #c53030; --code: #11151c;
+    }
+    :root[data-anix-theme="dark"] {
+      --bg: #11141a; --card: #1a1f28; --ink: #e6e9ef; --muted: #8b93a5; --line: #2a303c;
+      --push: #6aa0ff; --pull: #3ccf97; --warn: #e5b04a; --bad: #ff6b6b; --code: #0b0e13;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-anix-theme]) {
+        --bg: #11141a; --card: #1a1f28; --ink: #e6e9ef; --muted: #8b93a5; --line: #2a303c;
+        --push: #6aa0ff; --pull: #3ccf97; --warn: #e5b04a; --bad: #ff6b6b; --code: #0b0e13;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--ink); }
+    main { max-width: 980px; margin: 0 auto; padding: 20px 16px 40px; }
+    header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    h1 { font-size: 1.4rem; margin: 0 0 4px; }
+    .rs-sub { color: var(--muted); font-size: .9rem; }
+    .grid { display: grid; gap: 14px; margin-top: 18px; }
+    .rs-card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+    .rs-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+    .name { font-weight: 650; font-size: 1.1rem; }
+    .path { color: var(--muted); font-family: ui-monospace, monospace; font-size: .8rem; overflow-wrap: anywhere; }
+    .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
+    .stat { border-left: 3px solid var(--line); padding: 2px 10px; }
+    .stat.push { border-color: var(--push); } .stat.pull { border-color: var(--pull); }
+    .stat .label { font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+    .stat .age { font-size: 1.15rem; font-weight: 600; }
+    .stat .age.stale { color: var(--warn); } .stat .age.never { color: var(--muted); font-weight: 400; }
+    .stat .detail { font-size: .8rem; color: var(--muted); }
+    .newer { font-size: .7rem; font-weight: 600; padding: 1px 6px; border-radius: 99px; margin-left: 6px; vertical-align: 2px; }
+    .push .newer { background: color-mix(in srgb, var(--push) 15%, transparent); color: var(--push); }
+    .pull .newer { background: color-mix(in srgb, var(--pull) 15%, transparent); color: var(--pull); }
+    .alert { font-size: .85rem; color: var(--bad); margin: 0 0 10px; }
+    .missing { font-size: .85rem; color: var(--warn); margin: 0 0 10px; }
+    .rs-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .rs-controls input[type=text] { flex: 1 1 140px; min-width: 0; padding: 7px 9px; border: 1px solid var(--line);
+      border-radius: 7px; background: var(--bg); color: var(--ink); font: inherit; font-size: .9rem; }
+    button { font: inherit; font-size: .88rem; padding: 7px 12px; border-radius: 7px; border: 1px solid var(--line);
+      background: var(--bg); color: var(--ink); cursor: pointer; }
+    button:hover:not(:disabled) { border-color: var(--muted); }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    button[hidden], input[hidden] { display: none; }
+    button.push { color: var(--push); } button.pull { color: var(--pull); } button.danger { color: var(--bad); }
+    details { margin-top: 10px; font-size: .85rem; }
+    summary { cursor: pointer; color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+    td, th { text-align: left; padding: 4px 6px; border-top: 1px solid var(--line); font-weight: 400; }
+    th { color: var(--muted); font-size: .75rem; text-transform: uppercase; }
+    #job { margin-top: 18px; }
+    #job .rs-head .state { font-size: .85rem; }
+    .rs-ok { color: var(--pull); } .fail { color: var(--bad); } .running { color: var(--warn); }
+    pre { background: var(--code) !important; color: #d6dbe4 !important; padding: 10px; border-radius: 7px; max-height: 340px;
+      overflow: auto; font-size: .78rem; white-space: pre-wrap; overflow-wrap: anywhere; margin: 10px 0 0; }
+    label.verbose { font-size: .85rem; color: var(--muted); display: flex; gap: 5px; align-items: center; }
+    @media (max-width: 520px) { .stats { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>RCRSync UI</h1>
+      <div class="rs-sub">Last push (local → cloud) and pull (cloud → local) per rcrsync directory. A sync counts as both.</div>
+    </div>
+    <label class="verbose"><input type="checkbox" id="verbose"> verbose output</label>
+  </header>
+  <div id="error" class="alert" hidden></div>
+  <section id="job" hidden></section>
+  <section class="grid" id="dirs"><div class="rs-sub">Loading…</div></section>
+</main>
+<script>
+  const sub = {{ subdomain | tojson }};
+  const dirsEl = document.getElementById("dirs");
+  const jobEl = document.getElementById("job");
+  const errEl = document.getElementById("error");
+  const STALE_S = 7 * 86400;
+  const OP_LABEL = { sync: "sync", copy: "pull (copy)", init: "init", override: "push (override)", mirror: "mirror" };
+  let running = false, built = false, serverSkew = 0, lastJobId = null, timer = null;
+
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  function ago(ts) {
+    const s = Math.max(0, Date.now() / 1000 + serverSkew - ts);
+    if (s < 60) return "just now";
+    const units = [["d", 86400], ["h", 3600], ["m", 60]];
+    const parts = [];
+    let rest = s;
+    for (const [u, n] of units) {
+      const v = Math.floor(rest / n);
+      if (v || parts.length) { parts.push(v + u); rest -= v * n; }
+      if (parts.length === 2) break;
+    }
+    return parts.join(" ") + " ago";
+  }
+
+  function stat(kind, e, other) {
+    const label = kind === "push" ? "Last pushed ↑" : "Last pulled ↓";
+    if (!e) return `<div class="stat ${kind}"><div class="label">${label}</div><div class="age never">never recorded</div></div>`;
+    const stale = Date.now() / 1000 + serverSkew - e.ts > STALE_S;
+    const newer = other && e.ts > other.ts ? `<span class="newer">newer</span>` : "";
+    const what = [OP_LABEL[e.op] || e.op, e.subdir ? "of " + e.subdir + "/" : "whole directory"]
+      .concat(e.source === "bisync-cache" ? ["from rclone bisync cache"] : []).join(" · ");
+    return `<div class="stat ${kind}"><div class="label">${label}</div>
+      <div class="age ${stale ? "stale" : ""}" title="${esc(new Date(e.ts * 1000).toLocaleString())}">${ago(e.ts)}${newer}</div>
+      <div class="detail">${esc(what)}</div></div>`;
+  }
+
+  function subdirTable(rows) {
+    if (!rows.length) return "";
+    const cell = e => e ? `<span title="${esc(new Date(e.ts * 1000).toLocaleString())}">${ago(e.ts)}</span>` : "—";
+    return `<details><summary>${rows.length} subdirector${rows.length === 1 ? "y" : "ies"} with their own history</summary>
+      <table><tr><th>Subdirectory</th><th>Pushed</th><th>Pulled</th></tr>
+      ${rows.map(r => `<tr><td>${esc(r.subdir)}/</td><td>${cell(r.last_push)}</td><td>${cell(r.last_pull)}</td></tr>`).join("")}
+      </table></details>`;
+  }
+
+  function card(d) {
+    const fail = d.last_failure
+      ? `<p class="alert">Last attempt failed: ${esc(OP_LABEL[d.last_failure.op] || d.last_failure.op)}${d.last_failure.subdir ? " of " + esc(d.last_failure.subdir) + "/" : ""}, ${ago(d.last_failure.ts)}</p>` : "";
+    const missing = d.local_exists ? "" : `<p class="missing">~/${esc(d.dirname)} is not present locally. Run init to download it.</p>`;
+    return `<article class="rs-card rs-dir" data-dir="${esc(d.name)}">
+      <div class="rs-head"><span class="name">${esc(d.name)}</span>
+        <span class="path">${esc(d.cloudname)} ⇄ ~/${esc(d.dirname)}</span></div>
+      <div class="stats" data-stats>${stat("push", d.last_push, d.last_pull)}${stat("pull", d.last_pull, d.last_push)}</div>
+      <div data-notes>${fail}${missing}</div>
+      <div class="rs-controls">
+        <input type="text" placeholder="subdirectory (optional)" list="sd-${esc(d.name)}" data-subdir>
+        <datalist id="sd-${esc(d.name)}"></datalist>
+        <button data-op="sync" title="rclone bisync: both directions">⇅ Sync</button>
+        <button data-op="copy" class="pull" title="Copy cloud → local (no deletions)">↓ Pull</button>
+        <button data-op="override" class="push" title="Copy local → cloud (no deletions)">↑ Push</button>
+        <button data-op="mirror" class="danger" title="Make cloud match local, deleting extra cloud files">Mirror</button>
+        <button data-op="init" title="Fresh download of a missing directory">Init</button>
+      </div>
+      <div data-subdirs>${subdirTable(d.subdirs)}</div>
+    </article>`;
+  }
+
+  function updateCard(el, d) {
+    // Update in place so typed subdirectories and open details survive refreshes.
+    el.querySelector("[data-stats]").innerHTML = stat("push", d.last_push, d.last_pull) + stat("pull", d.last_pull, d.last_push);
+    const fail = d.last_failure
+      ? `<p class="alert">Last attempt failed: ${esc(OP_LABEL[d.last_failure.op] || d.last_failure.op)}${d.last_failure.subdir ? " of " + esc(d.last_failure.subdir) + "/" : ""}, ${ago(d.last_failure.ts)}</p>` : "";
+    const missing = d.local_exists ? "" : `<p class="missing">~/${esc(d.dirname)} is not present locally. Run init to download it.</p>`;
+    el.querySelector("[data-notes]").innerHTML = fail + missing;
+    const box = el.querySelector("[data-subdirs]");
+    const open = box.querySelector("details")?.open;
+    box.innerHTML = subdirTable(d.subdirs);
+    if (open && box.querySelector("details")) box.querySelector("details").open = true;
+    el.dataset.exists = d.local_exists ? "1" : "";
+  }
+
+  function setButtons() {
+    document.querySelectorAll(".rs-dir").forEach(c => {
+      const exists = !!c.dataset.exists;
+      const input = c.querySelector("[data-subdir]");
+      input.hidden = !exists;
+      const hasSub = exists && input.value.trim() !== "";
+      c.querySelectorAll("button[data-op]").forEach(b => {
+        // Init only applies to a missing directory; everything else needs it present.
+        b.hidden = (b.dataset.op === "init") === exists;
+        b.disabled = running || (b.dataset.op === "init" && hasSub);
+      });
+    });
+  }
+
+  function renderJob(j) {
+    if (!j) { jobEl.hidden = true; return; }
+    jobEl.hidden = false;
+    const state = j.running ? `<span class="running">running…</span>`
+      : j.rc === 0 ? `<span class="rs-ok">succeeded</span>` : `<span class="fail">failed (exit ${j.rc})</span>`;
+    const pre = jobEl.querySelector("pre");
+    const pinned = pre && pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 4;
+    jobEl.innerHTML = `<div class="rs-card"><div class="rs-head">
+      <span class="name">rcrsync ${esc(j.op)} ${esc(j.dir)}${j.subdir ? " " + esc(j.subdir) : ""}</span>
+      <span class="state">${state}</span></div><pre>${esc(j.log || "(no output yet)")}</pre></div>`;
+    const np = jobEl.querySelector("pre");
+    if (pinned || !pre || j.id !== lastJobId) np.scrollTop = np.scrollHeight;
+    lastJobId = j.id;
+  }
+
+  async function refresh() {
+    clearTimeout(timer);
+    try {
+      const r = await fetch(sub + "/api/status");
+      const d = await r.json();
+      serverSkew = d.now - Date.now() / 1000;
+      running = !!(d.job && d.job.running);
+      if (!built) {
+        dirsEl.innerHTML = d.dirs.map(card).join("") || `<div class="rs-sub">No rcrsync directories configured.</div>`;
+        built = true;
+        d.dirs.forEach(x => loadSubdirs(x.name));
+      }
+      d.dirs.forEach(x => {
+        const el = dirsEl.querySelector(`.rs-dir[data-dir="${CSS.escape(x.name)}"]`);
+        if (el) updateCard(el, x);
+      });
+      renderJob(d.job);
+      errEl.hidden = true;
+    } catch (e) {
+      errEl.textContent = "Error contacting server: " + e;
+      errEl.hidden = false;
+    }
+    setButtons();
+    timer = setTimeout(refresh, running ? 1500 : 15000);
+  }
+
+  async function loadSubdirs(name) {
+    try {
+      const r = await fetch(sub + "/api/subdirs/" + encodeURIComponent(name));
+      const d = await r.json();
+      const dl = document.getElementById("sd-" + name);
+      if (dl) dl.innerHTML = (d.subdirs || []).map(s => `<option value="${esc(s)}">`).join("");
+    } catch (e) { /* the datalist is only a convenience */ }
+  }
+
+  dirsEl.addEventListener("input", e => { if (e.target.matches("[data-subdir]")) setButtons(); });
+  dirsEl.addEventListener("click", async e => {
+    const b = e.target.closest("button[data-op]");
+    if (!b) return;
+    const c = b.closest(".rs-dir");
+    const dir = c.dataset.dir, op = b.dataset.op;
+    const subdir = c.querySelector("[data-subdir]").value.trim();
+    const target = dir + (subdir ? "/" + subdir : "");
+    if (op === "mirror" && !confirm(`Mirror ${target} to the cloud? Cloud files that are not present locally will be DELETED.`)) return;
+    if (op === "override" && !confirm(`Push ${target} to the cloud, overwriting changed cloud files?`)) return;
+    running = true; setButtons();
+    try {
+      const r = await fetch(sub + "/api/run", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ op, dir, subdir, verbose: document.getElementById("verbose").checked }),
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        alert(d.error || "Request failed: " + r.status);
+      }
+    } catch (err) { alert("Request failed: " + err); }
+    refresh();
+  });
+
+  refresh();
+</script>
+</body>
+</html>
