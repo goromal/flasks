@@ -310,3 +310,14 @@ def test_estimate_rejects_bad_input(dirs):
     (dirs["in"] / "ok.mp4").write_bytes(b"")
     with pytest.raises(ValueError):
         store.estimate(video="ok.mp4", stride=0)
+
+
+def test_fresh_rejudges_every_frame(dirs, make_video, is_blue):
+    make_video(dirs["in"] / "clip.mp4")
+    judge = BlueJudge(is_blue)
+    store = make_store(dirs, judge)
+    run_analysis(store, prompt="b", video="clip.mp4", stride=4)
+    first = judge.calls
+    job = run_analysis(store, prompt="b", video="clip.mp4", stride=4, fresh=True)
+    assert judge.calls == 2 * first
+    assert job["state"] == "review" and len(job["segments"]) == 1

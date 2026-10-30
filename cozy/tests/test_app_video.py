@@ -194,3 +194,13 @@ def test_estimate_route(client, make_video):
     assert d["coarse_frames"] == 4 and d["stride"] == 1.0   # 0, 1, 2, 2.95 s
     assert client.get("/cozy/api/video/estimate?video=nope.mp4").status_code == 400
     assert client.get("/cozy/api/video/estimate?video=a.mp4&stride=x").status_code == 400
+
+
+def test_analyze_passes_fresh_only_when_true(client, monkeypatch):
+    seen = []
+    monkeypatch.setattr(client._vstore, "analyze",
+                        lambda *a, **kw: seen.append(kw["fresh"]))
+    for body in ({"fresh": True}, {"fresh": "yes"}, {}):
+        client.post("/cozy/api/video/analyze",
+                    json=dict(body, prompt="x", video="a.mp4"))
+    assert seen == [True, False, False]

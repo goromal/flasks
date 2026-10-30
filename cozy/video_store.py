@@ -242,10 +242,14 @@ class VideoStore:
     # -- analyze -------------------------------------------------------------
 
     def analyze(self, prompt, video=None, remote=None, stride=None,
-                precision=None, merge_gap=None):
+                precision=None, merge_gap=None, fresh=False):
         """Start analysis in the background. Returns None on success or an
         error string; raises ValueError for bad input. A busy store or a held
-        RunLock returns "busy"."""
+        RunLock returns "busy".
+
+        ``fresh`` discards remembered verdicts so every frame goes to the
+        model again -- what a regression check needs, since a memo hit would
+        pass even with the model down."""
         prompt = (prompt or "").strip()
         if not prompt:
             raise ValueError("prompt required")
@@ -272,7 +276,8 @@ class VideoStore:
             if not self._run_lock.try_acquire():
                 return "busy"
             prev = self._read()
-            same = prev.get("source") == source and prev.get("prompt") == prompt
+            same = (not fresh and prev.get("source") == source
+                    and prev.get("prompt") == prompt)
             memo = prev["memo"] if same else {}
             if not same:
                 self._clear_frames()

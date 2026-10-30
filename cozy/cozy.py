@@ -906,7 +906,7 @@ def _add_video_routes(bp, vstore, input_dir, output_dir):
                 data.get("prompt"), video=data.get("video") or None,
                 remote=data.get("remote_video") or None,
                 stride=data.get("stride"), precision=data.get("precision"),
-                merge_gap=data.get("merge_gap"))
+                merge_gap=data.get("merge_gap"), fresh=data.get("fresh") is True)
         except ValueError as e:
             return _err(str(e))
         if busy:

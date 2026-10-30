@@ -146,7 +146,7 @@ versa.
 | `/cozy/api/video/list` | GET | `{videos: [{value, label, source}]}` from the input/output dirs |
 | `/cozy/api/video/upload` | POST | multipart `file` → `{value}`; up to `--max-video-bytes` (2 GiB) |
 | `/cozy/api/video/estimate?video=&stride=&precision=` | GET | before analyzing a local video: `{duration, stride, coarse_frames, frames, secs_per_frame, eta_s}`; `frames` assumes one matching segment, timings are `null` until a run has measured the current model |
-| `/cozy/api/video/analyze` | POST | `{prompt, video \| remote_video: {host, path}, stride?, precision?, merge_gap?}` → 202 |
+| `/cozy/api/video/analyze` | POST | `{prompt, video \| remote_video: {host, path}, stride?, precision?, merge_gap?, fresh?}` → 202; `fresh: true` re-judges every frame instead of reusing earlier verdicts |
 | `/cozy/api/video/status` | GET | `state` (`idle`, `staging`, `probing`, `analyzing`, `review`, `exporting`, `done`, `error`, `cancelled`), `samples`, `segments`, `calls_done`/`calls_est`, `eta_s`, `error`, `output` |
 | `/cozy/api/video/cancel` | POST | stop analysis at the next frame; 404 if nothing is running |
 | `/cozy/api/video/export` | POST | `{keep: [bool per segment], basename?}` → 202; writes `<output-dir>/video/<basename>.mp4` |
