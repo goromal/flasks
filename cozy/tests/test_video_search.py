@@ -159,3 +159,24 @@ def test_rejects_bad_params():
         vs.find_segments(10, ranges_judge(), stride=0)
     with pytest.raises(ValueError):
         vs.find_segments(10, ranges_judge(), stride=2.0, precision=0)
+
+
+def test_estimate_calls_matches_coarse_count_plus_two_edges():
+    # 100 s at 8 s: samples 0, 8, ..., 96 and the end sample -> 14 coarse.
+    coarse, total = vs.estimate_calls(100.0, stride=8.0, precision=1.0)
+    assert coarse == 14
+    assert total == 14 + 2 * 3
+
+
+def test_estimate_calls_is_an_upper_bound_for_one_segment():
+    for lo, hi in ((23.4, 61.7), (0, 12.2), (40.3, 1e9)):
+        j = ranges_judge((lo, hi))
+        vs.find_segments(100.0, j, stride=8.0, precision=1.0)
+        assert len(j.calls) <= vs.estimate_calls(100.0, 8.0, 1.0)[1]
+
+
+def test_estimate_calls_coarse_is_exact():
+    for dur, stride in ((10.0, 4.0), (0.04, 2.0), (7200.0, 10.0)):
+        j = ranges_judge()
+        vs.find_segments(dur, j, stride=stride)
+        assert len(j.calls) == vs.estimate_calls(dur, stride)[0]

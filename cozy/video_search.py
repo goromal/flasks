@@ -58,6 +58,33 @@ def _widen(t, width, duration):
     return start, end
 
 
+def _to_ms(duration, stride, precision):
+    if duration <= 0:
+        raise ValueError("duration must be positive")
+    if stride <= 0 or precision <= 0:
+        raise ValueError("stride and precision must be positive")
+    return (int(round(duration * 1000)), max(1, int(round(stride * 1000))),
+            max(1, int(round(precision * 1000))))
+
+
+def _coarse_times(d, st):
+    """Coarse sample timestamps (ms) for a d-ms video at an st-ms stride."""
+    last = max(0, d - END_BACKOFF_MS)
+    return list(range(0, last, st)) + [last]
+
+
+def estimate_calls(duration, stride, precision=1.0):
+    """``(coarse, total)`` judge calls a search will make before it starts.
+
+    ``coarse`` is exact. ``total`` adds bisection for two edges -- one
+    matching segment -- which is the most that can be said before any frame
+    is seen; every further segment adds two more edges' worth.
+    """
+    d, st, p = _to_ms(duration, stride, precision)
+    coarse = len(_coarse_times(d, st))
+    return coarse, coarse + 2 * _bisect_steps(st, p)
+
+
 def find_segments(duration, judge, stride, precision=1.0, merge_gap=None,
                   memo=None, on_progress=None):
     """Search a ``duration``-second video; return samples and segments.
@@ -73,20 +100,13 @@ def find_segments(duration, judge, stride, precision=1.0, merge_gap=None,
     Returns ``{"samples": [{"t", "match"}], "segments": [{"start", "end"}]}``
     with times in seconds, both lists sorted.
     """
-    if duration <= 0:
-        raise ValueError("duration must be positive")
-    if stride <= 0 or precision <= 0:
-        raise ValueError("stride and precision must be positive")
-    d = int(round(duration * 1000))
-    st = max(1, int(round(stride * 1000)))
-    p = max(1, int(round(precision * 1000)))
+    d, st, p = _to_ms(duration, stride, precision)
     gap = p if merge_gap is None else max(0, int(round(merge_gap * 1000)))
     memo = {} if memo is None else memo
 
-    last = max(0, d - END_BACKOFF_MS)
-    coarse = list(range(0, last, st)) + [last]
+    coarse = _coarse_times(d, st)
     seen = {}
-    state = {"done": 0, "est": len(coarse) + 2 * _bisect_steps(st, p)}
+    state = {"done": 0, "est": estimate_calls(duration, stride, precision)[1]}
 
     def look(t):
         if t not in memo:

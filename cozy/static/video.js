@@ -15,6 +15,7 @@
     const preview = $("v-preview");
     const promptEl = $("v-prompt");
     const analyzeBtn = $("v-analyze");
+    const estimateEl = $("v-estimate");
     const cancelBtn = $("v-cancel");
     const progress = $("v-progress");
     const bar = $("v-bar");
@@ -79,6 +80,54 @@
         return m < 60 ? m + " min" : Math.floor(m / 60) + " h " + (m % 60) + " min";
     }
 
+    // --- cost estimate -------------------------------------------------------
+
+    // Shown before Analyze so a long video's cost is a choice, not a
+    // surprise. The server does the arithmetic with the same code the search
+    // uses, plus the per-frame speed it measured on the last run.
+    let estimateTimer = null;
+    let estimateSeq = 0;
+
+    function setEstimate(text) {
+        estimateEl.textContent = text || "";
+        estimateEl.style.display = text ? "block" : "none";
+    }
+
+    function scheduleEstimate() {
+        clearTimeout(estimateTimer);
+        estimateTimer = setTimeout(refreshEstimate, 300);
+    }
+
+    async function refreshEstimate() {
+        if (!source) { setEstimate(""); return; }
+        if (!source.value) {
+            setEstimate("Frame count is known once the remote video has been copied here.");
+            return;
+        }
+        const q = new URLSearchParams({ video: source.value });
+        const stride = $("v-stride").value.trim();
+        const precision = $("v-precision").value.trim();
+        if (stride) q.set("stride", stride);
+        if (precision) q.set("precision", precision);
+        const seq = ++estimateSeq;
+        let d;
+        try {
+            const r = await fetch(root + "api/video/estimate?" + q);
+            d = await r.json();
+            if (seq !== estimateSeq) return;    // a newer request superseded this
+            if (!r.ok) { setEstimate(d.error ? "Cannot estimate: " + d.error : ""); return; }
+        } catch (e) { return; }
+        let text = "~" + d.frames + " frames: every " + d.stride.toFixed(1).replace(/\.0$/, "") +
+            " s, then edges to " + d.precision + " s";
+        text += d.eta_s != null
+            ? " · about " + fmtEta(d.eta_s) + " at " + d.secs_per_frame.toFixed(1) + " s/frame"
+            : " · time unknown until a first run measures this model";
+        setEstimate(text + ". Each extra matching segment adds a few frames.");
+    }
+
+    $("v-stride").addEventListener("input", scheduleEstimate);
+    $("v-precision").addEventListener("input", scheduleEstimate);
+
     // --- source picking ----------------------------------------------------
 
     async function loadList(selectValue) {
@@ -126,6 +175,7 @@
         source = value ? { value: value } : null;
         sourceLabel.style.display = "none";
         setPreview(value ? root + "api/video/file?name=" + encodeURIComponent(value) : null);
+        scheduleEstimate();
     }
 
     function pickRemote(host, path) {
@@ -136,6 +186,7 @@
             " (copied here when analysis starts)";
         sourceLabel.style.display = "block";
         setPreview(null);
+        scheduleEstimate();
     }
 
     sel.addEventListener("change", () => pickLocal(sel.value));
@@ -318,8 +369,13 @@
         cancelled: "Cancelled. Re-running reuses every frame already checked.",
     };
 
+    let lastState = null;
+
     function render() {
         const running = RUNNING.includes(job.state);
+        // A finished run has just measured the model's speed.
+        if (lastState === "analyzing" && job.state !== "analyzing") scheduleEstimate();
+        lastState = job.state;
         analyzeBtn.disabled = running;
         cancelBtn.style.display = ["staging", "probing", "analyzing"].includes(job.state)
             ? "inline-block" : "none";

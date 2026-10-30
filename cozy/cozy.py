@@ -884,6 +884,19 @@ def _add_video_routes(bp, vstore, input_dir, output_dir):
             return _err("not found", 404)
         return flask.send_file(path, conditional=True)
 
+    @bp.route("/api/video/estimate", methods=["GET"])
+    @flask_login.login_required
+    def video_estimate():
+        """Frames and time an analysis would take, shown before starting
+        one. Local videos only: a remote one has no duration until staged."""
+        args = flask.request.args
+        try:
+            return flask.jsonify(vstore.estimate(
+                args.get("video", ""), stride=args.get("stride"),
+                precision=args.get("precision")))
+        except ValueError as e:
+            return _err(str(e))
+
     @bp.route("/api/video/analyze", methods=["POST"])
     @flask_login.login_required
     def video_analyze():

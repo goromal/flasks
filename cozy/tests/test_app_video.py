@@ -184,3 +184,13 @@ def test_browse_lists_videos(client, monkeypatch):
         {"name": "b.png", "is_dir": False}])
     r = client.get("/cozy/api/browse?host=box&path=/x&files=video")
     assert r.get_json()["files"] == ["a.MP4"]
+
+
+def test_estimate_route(client, make_video):
+    make_video(client._in / "a.mp4", colors=(("red", 3),), audio=False)
+    r = client.get("/cozy/api/video/estimate?video=a.mp4&stride=1")
+    assert r.status_code == 200
+    d = r.get_json()
+    assert d["coarse_frames"] == 4 and d["stride"] == 1.0   # 0, 1, 2, 2.95 s
+    assert client.get("/cozy/api/video/estimate?video=nope.mp4").status_code == 400
+    assert client.get("/cozy/api/video/estimate?video=a.mp4&stride=x").status_code == 400

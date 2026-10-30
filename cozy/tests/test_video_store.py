@@ -254,3 +254,59 @@ def test_eta_reported_while_analyzing(dirs):
     store = make_store(dirs, None)
     store._update(state="analyzing", calls_done=4, calls_est=10, avg_call_s=2.5)
     assert store.read()["eta_s"] == 15.0
+
+
+def test_estimate_without_speed_history(dirs, make_video, is_blue):
+    make_video(dirs["in"] / "clip.mp4")          # 20 s
+    store = make_store(dirs, BlueJudge(is_blue))
+    est = store.estimate(video="clip.mp4")
+    assert est["duration"] == pytest.approx(20.0, abs=0.2)
+    assert est["stride"] == 2.0                  # default_stride(20)
+    assert est["coarse_frames"] == 11
+    assert est["frames"] > est["coarse_frames"]
+    assert est["secs_per_frame"] is None and est["eta_s"] is None
+
+
+def test_estimate_honours_overrides(dirs, make_video, is_blue):
+    make_video(dirs["in"] / "clip.mp4")
+    est = make_store(dirs, BlueJudge(is_blue)).estimate(
+        video="clip.mp4", stride=5, precision=0.5)
+    assert est["stride"] == 5.0 and est["coarse_frames"] == 5
+
+
+def test_speed_remembered_per_model_after_a_run(dirs, make_video, is_blue):
+    make_video(dirs["in"] / "clip.mp4")
+    judge = BlueJudge(is_blue)
+    judge.model = "vision-a"
+    store = make_store(dirs, judge)
+    run_analysis(store, prompt="b", video="clip.mp4", stride=4)
+    est = store.estimate(video="clip.mp4", stride=4)
+    assert est["secs_per_frame"] > 0
+    assert est["eta_s"] == pytest.approx(est["frames"] * est["secs_per_frame"])
+    # Survives a restart; ignored once the model changes.
+    other = BlueJudge(is_blue)
+    other.model = "vision-a"
+    assert make_store(dirs, other).estimate(video="clip.mp4")["secs_per_frame"]
+    other.model = "vision-b"
+    assert make_store(dirs, other).estimate(video="clip.mp4")["secs_per_frame"] is None
+
+
+def test_memo_hits_do_not_skew_speed(dirs, make_video, is_blue):
+    make_video(dirs["in"] / "clip.mp4")
+    store = make_store(dirs, BlueJudge(is_blue))
+    run_analysis(store, prompt="b", video="clip.mp4", stride=4)
+    first = store.estimate(video="clip.mp4")["secs_per_frame"]
+    run_analysis(store, prompt="b", video="clip.mp4", stride=4)   # all memo hits
+    assert store.estimate(video="clip.mp4")["secs_per_frame"] == first
+
+
+def test_estimate_rejects_bad_input(dirs):
+    (dirs["in"] / "bad.mp4").write_bytes(b"not a video")
+    store = make_store(dirs, None)
+    with pytest.raises(ValueError):
+        store.estimate(video="missing.mp4")
+    with pytest.raises(ValueError):
+        store.estimate(video="bad.mp4")
+    (dirs["in"] / "ok.mp4").write_bytes(b"")
+    with pytest.raises(ValueError):
+        store.estimate(video="ok.mp4", stride=0)

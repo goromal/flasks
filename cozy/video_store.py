@@ -74,6 +74,26 @@ def remote_stage_path(input_dir, host, rpath):
                         digest + "-" + os.path.basename(rpath))
 
 
+def _parse_params(stride, precision, merge_gap):
+    """Float search params from user input; None/"" means "use the default".
+    Raises ValueError naming the bad field."""
+    params = {}
+    for key, val in (("stride", stride), ("precision", precision),
+                     ("merge_gap", merge_gap)):
+        if val in (None, ""):
+            params[key] = None
+            continue
+        try:
+            val = float(val)
+        except (TypeError, ValueError):
+            raise ValueError("invalid %s" % key)
+        # merge_gap may be 0 (never merge); the others must be positive.
+        if val < 0 or (val == 0 and key != "merge_gap"):
+            raise ValueError("invalid %s" % key)
+        params[key] = val
+    return params
+
+
 class VideoStore:
     def __init__(self, state_dir, judge, input_dir, output_dir, client=None,
                  run_lock=None, max_video_bytes=MAX_VIDEO_BYTES,
@@ -83,6 +103,7 @@ class VideoStore:
         self.frames_dir = os.path.join(self.dir, "frames")
         os.makedirs(self.frames_dir, exist_ok=True)
         self.path = os.path.join(self.dir, "job.json")
+        self.speed_path = os.path.join(self.dir, "speed.json")
         self.judge = judge
         self.input_dir = input_dir
         self.output_dir = output_dir
@@ -148,6 +169,56 @@ class VideoStore:
 
     # -- source resolution ---------------------------------------------------
 
+    # -- speed memory ----------------------------------------------------------
+
+    def _model(self):
+        return str(getattr(self.judge, "model", "") or "")
+
+    def secs_per_frame(self):
+        """Seconds per judged frame measured on the last run with the current
+        model, or None. Per model because swapping a 35B model for a 3B one
+        changes the answer by an order of magnitude."""
+        try:
+            with open(self.speed_path) as f:
+                return json.load(f).get(self._model())
+        except (OSError, ValueError, AttributeError):
+            return None
+
+    def _record_speed(self, secs):
+        try:
+            with open(self.speed_path) as f:
+                speeds = json.load(f)
+        except (OSError, ValueError):
+            speeds = {}
+        speeds[self._model()] = secs
+        tmp = self.speed_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(speeds, f)
+        os.replace(tmp, self.speed_path)
+
+    def estimate(self, video, stride=None, precision=None):
+        """What analyzing a local video would cost, before starting it:
+        ``{duration, stride, precision, coarse_frames, frames,
+        secs_per_frame, eta_s}``. ``frames`` assumes one matching segment;
+        timings are None until a run with this model has been measured.
+        Raises ValueError for an unknown or unreadable video or bad params."""
+        params = _parse_params(stride, precision, None)
+        path = self.resolve_local(video)
+        if not path:
+            raise ValueError("video not found")
+        try:
+            duration = self._media.probe(path)["duration"]
+        except video_media.MediaError as e:
+            raise ValueError(str(e))
+        stride = params["stride"] or video_search.default_stride(duration)
+        precision = params["precision"] or DEFAULT_PRECISION
+        coarse, frames = video_search.estimate_calls(duration, stride, precision)
+        spf = self.secs_per_frame()
+        return {"duration": duration, "stride": stride, "precision": precision,
+                "coarse_frames": coarse, "frames": frames,
+                "secs_per_frame": spf,
+                "eta_s": frames * spf if spf is not None else None}
+
     def resolve_local(self, value):
         return image_refs.resolve(self.input_dir, self.output_dir, value,
                                   exts=image_refs.VIDEO_EXTS)
@@ -194,20 +265,7 @@ class VideoStore:
                 raise ValueError("video not found")
             source = {"value": video}
             label = video
-        params = {}
-        for key, val in (("stride", stride), ("precision", precision),
-                         ("merge_gap", merge_gap)):
-            if val in (None, ""):
-                params[key] = None
-                continue
-            try:
-                val = float(val)
-            except (TypeError, ValueError):
-                raise ValueError("invalid %s" % key)
-            # merge_gap may be 0 (never merge); the others must be positive.
-            if val < 0 or (val == 0 and key != "merge_gap"):
-                raise ValueError("invalid %s" % key)
-            params[key] = val
+        params = _parse_params(stride, precision, merge_gap)
         with self._lock:
             if self.busy():
                 return "busy"
@@ -247,6 +305,9 @@ class VideoStore:
 
     def _analyze_run(self):
         job = self._read()
+        # Real model calls only: memo hits cost nothing and would make the
+        # model look faster than it is.
+        stats = {"calls": 0, "secs": 0.0}
         try:
             if self.client is not None:
                 self.client.free()
@@ -271,7 +332,6 @@ class VideoStore:
             self._update(probe=info, params=params, state="analyzing")
 
             memo = job["memo"]
-            stats = {"calls": 0, "secs": 0.0}
 
             def judge(t):
                 if self._cancel.is_set():
@@ -306,6 +366,11 @@ class VideoStore:
         except Exception as e:  # noqa: BLE001 - surface any failure to the UI
             self._update(state="error", error=str(e), finished_at=_now())
         finally:
+            if stats["calls"]:
+                try:
+                    self._record_speed(stats["secs"] / stats["calls"])
+                except OSError:
+                    pass
             if hasattr(self.judge, "unload"):
                 self.judge.unload()
             self._run_lock.release()
