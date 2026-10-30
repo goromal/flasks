@@ -10,19 +10,25 @@
       --bg: #f5f6f8; --card: #fff; --ink: #1d2330; --muted: #6b7385; --line: #e2e5eb;
       --push: #2563eb; --pull: #0f9d6b; --warn: #b7791f; --bad: #c53030; --code: #11151c;
     }
+    :root[data-anix-theme="dark"] {
+      --bg: #11141a; --card: #1a1f28; --ink: #e6e9ef; --muted: #8b93a5; --line: #2a303c;
+      --push: #6aa0ff; --pull: #3ccf97; --warn: #e5b04a; --bad: #ff6b6b; --code: #0b0e13;
+    }
     @media (prefers-color-scheme: dark) {
-      :root { --bg: #11141a; --card: #1a1f28; --ink: #e6e9ef; --muted: #8b93a5; --line: #2a303c;
-              --push: #6aa0ff; --pull: #3ccf97; --warn: #e5b04a; --bad: #ff6b6b; --code: #0b0e13; }
+      :root:not([data-anix-theme]) {
+        --bg: #11141a; --card: #1a1f28; --ink: #e6e9ef; --muted: #8b93a5; --line: #2a303c;
+        --push: #6aa0ff; --pull: #3ccf97; --warn: #e5b04a; --bad: #ff6b6b; --code: #0b0e13;
+      }
     }
     * { box-sizing: border-box; }
     body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--ink); }
     main { max-width: 980px; margin: 0 auto; padding: 20px 16px 40px; }
     header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
     h1 { font-size: 1.4rem; margin: 0 0 4px; }
-    .sub { color: var(--muted); font-size: .9rem; }
+    .rs-sub { color: var(--muted); font-size: .9rem; }
     .grid { display: grid; gap: 14px; margin-top: 18px; }
-    .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
-    .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+    .rs-card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+    .rs-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
     .name { font-weight: 650; font-size: 1.1rem; }
     .path { color: var(--muted); font-family: ui-monospace, monospace; font-size: .8rem; overflow-wrap: anywhere; }
     .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
@@ -37,13 +43,14 @@
     .pull .newer { background: color-mix(in srgb, var(--pull) 15%, transparent); color: var(--pull); }
     .alert { font-size: .85rem; color: var(--bad); margin: 0 0 10px; }
     .missing { font-size: .85rem; color: var(--warn); margin: 0 0 10px; }
-    .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-    .controls input[type=text] { flex: 1 1 140px; min-width: 0; padding: 7px 9px; border: 1px solid var(--line);
+    .rs-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .rs-controls input[type=text] { flex: 1 1 140px; min-width: 0; padding: 7px 9px; border: 1px solid var(--line);
       border-radius: 7px; background: var(--bg); color: var(--ink); font: inherit; font-size: .9rem; }
     button { font: inherit; font-size: .88rem; padding: 7px 12px; border-radius: 7px; border: 1px solid var(--line);
       background: var(--bg); color: var(--ink); cursor: pointer; }
     button:hover:not(:disabled) { border-color: var(--muted); }
     button:disabled { opacity: .45; cursor: not-allowed; }
+    button[hidden], input[hidden] { display: none; }
     button.push { color: var(--push); } button.pull { color: var(--pull); } button.danger { color: var(--bad); }
     details { margin-top: 10px; font-size: .85rem; }
     summary { cursor: pointer; color: var(--muted); }
@@ -51,9 +58,9 @@
     td, th { text-align: left; padding: 4px 6px; border-top: 1px solid var(--line); font-weight: 400; }
     th { color: var(--muted); font-size: .75rem; text-transform: uppercase; }
     #job { margin-top: 18px; }
-    #job .card-head .state { font-size: .85rem; }
-    .ok { color: var(--pull); } .fail { color: var(--bad); } .running { color: var(--warn); }
-    pre { background: var(--code); color: #d6dbe4; padding: 10px; border-radius: 7px; max-height: 340px;
+    #job .rs-head .state { font-size: .85rem; }
+    .rs-ok { color: var(--pull); } .fail { color: var(--bad); } .running { color: var(--warn); }
+    pre { background: var(--code) !important; color: #d6dbe4 !important; padding: 10px; border-radius: 7px; max-height: 340px;
       overflow: auto; font-size: .78rem; white-space: pre-wrap; overflow-wrap: anywhere; margin: 10px 0 0; }
     label.verbose { font-size: .85rem; color: var(--muted); display: flex; gap: 5px; align-items: center; }
     @media (max-width: 520px) { .stats { grid-template-columns: 1fr; } }
@@ -64,13 +71,13 @@
   <header>
     <div>
       <h1>RCRSync UI</h1>
-      <div class="sub">Last push (local → cloud) and pull (cloud → local) per rcrsync directory. A sync counts as both.</div>
+      <div class="rs-sub">Last push (local → cloud) and pull (cloud → local) per rcrsync directory. A sync counts as both.</div>
     </div>
     <label class="verbose"><input type="checkbox" id="verbose"> verbose output</label>
   </header>
   <div id="error" class="alert" hidden></div>
   <section id="job" hidden></section>
-  <section class="grid" id="dirs"><div class="sub">Loading…</div></section>
+  <section class="grid" id="dirs"><div class="rs-sub">Loading…</div></section>
 </main>
 <script>
   const sub = {{ subdomain | tojson }};
@@ -122,12 +129,12 @@
     const fail = d.last_failure
       ? `<p class="alert">Last attempt failed: ${esc(OP_LABEL[d.last_failure.op] || d.last_failure.op)}${d.last_failure.subdir ? " of " + esc(d.last_failure.subdir) + "/" : ""}, ${ago(d.last_failure.ts)}</p>` : "";
     const missing = d.local_exists ? "" : `<p class="missing">~/${esc(d.dirname)} is not present locally. Run init to download it.</p>`;
-    return `<article class="card" data-dir="${esc(d.name)}">
-      <div class="card-head"><span class="name">${esc(d.name)}</span>
+    return `<article class="rs-card rs-dir" data-dir="${esc(d.name)}">
+      <div class="rs-head"><span class="name">${esc(d.name)}</span>
         <span class="path">${esc(d.cloudname)} ⇄ ~/${esc(d.dirname)}</span></div>
       <div class="stats" data-stats>${stat("push", d.last_push, d.last_pull)}${stat("pull", d.last_pull, d.last_push)}</div>
       <div data-notes>${fail}${missing}</div>
-      <div class="controls">
+      <div class="rs-controls">
         <input type="text" placeholder="subdirectory (optional)" list="sd-${esc(d.name)}" data-subdir>
         <datalist id="sd-${esc(d.name)}"></datalist>
         <button data-op="sync" title="rclone bisync: both directions">⇅ Sync</button>
@@ -155,12 +162,15 @@
   }
 
   function setButtons() {
-    document.querySelectorAll(".card").forEach(c => {
+    document.querySelectorAll(".rs-dir").forEach(c => {
       const exists = !!c.dataset.exists;
-      const hasSub = c.querySelector("[data-subdir]").value.trim() !== "";
+      const input = c.querySelector("[data-subdir]");
+      input.hidden = !exists;
+      const hasSub = exists && input.value.trim() !== "";
       c.querySelectorAll("button[data-op]").forEach(b => {
-        const op = b.dataset.op;
-        b.disabled = running || (op === "init" ? exists || hasSub : !exists);
+        // Init only applies to a missing directory; everything else needs it present.
+        b.hidden = (b.dataset.op === "init") === exists;
+        b.disabled = running || (b.dataset.op === "init" && hasSub);
       });
     });
   }
@@ -169,10 +179,10 @@
     if (!j) { jobEl.hidden = true; return; }
     jobEl.hidden = false;
     const state = j.running ? `<span class="running">running…</span>`
-      : j.rc === 0 ? `<span class="ok">succeeded</span>` : `<span class="fail">failed (exit ${j.rc})</span>`;
+      : j.rc === 0 ? `<span class="rs-ok">succeeded</span>` : `<span class="fail">failed (exit ${j.rc})</span>`;
     const pre = jobEl.querySelector("pre");
     const pinned = pre && pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 4;
-    jobEl.innerHTML = `<div class="card"><div class="card-head">
+    jobEl.innerHTML = `<div class="rs-card"><div class="rs-head">
       <span class="name">rcrsync ${esc(j.op)} ${esc(j.dir)}${j.subdir ? " " + esc(j.subdir) : ""}</span>
       <span class="state">${state}</span></div><pre>${esc(j.log || "(no output yet)")}</pre></div>`;
     const np = jobEl.querySelector("pre");
@@ -188,12 +198,12 @@
       serverSkew = d.now - Date.now() / 1000;
       running = !!(d.job && d.job.running);
       if (!built) {
-        dirsEl.innerHTML = d.dirs.map(card).join("") || `<div class="sub">No rcrsync directories configured.</div>`;
+        dirsEl.innerHTML = d.dirs.map(card).join("") || `<div class="rs-sub">No rcrsync directories configured.</div>`;
         built = true;
         d.dirs.forEach(x => loadSubdirs(x.name));
       }
       d.dirs.forEach(x => {
-        const el = dirsEl.querySelector(`.card[data-dir="${CSS.escape(x.name)}"]`);
+        const el = dirsEl.querySelector(`.rs-dir[data-dir="${CSS.escape(x.name)}"]`);
         if (el) updateCard(el, x);
       });
       renderJob(d.job);
@@ -219,7 +229,7 @@
   dirsEl.addEventListener("click", async e => {
     const b = e.target.closest("button[data-op]");
     if (!b) return;
-    const c = b.closest(".card");
+    const c = b.closest(".rs-dir");
     const dir = c.dataset.dir, op = b.dataset.op;
     const subdir = c.querySelector("[data-subdir]").value.trim();
     const target = dir + (subdir ? "/" + subdir : "");
