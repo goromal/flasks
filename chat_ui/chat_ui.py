@@ -41,9 +41,13 @@ class OllamaChat:
         self.url = url.rstrip("/")
         self.timeout = timeout
         self._http = session or requests.Session()
+        # Capabilities never change for a given blob: look each up once.
+        self._thinks = {}
 
     def models(self):
-        """Installed model names, sorted (what `anix-llm models` lists)."""
+        """Installed models, sorted (what `anix-llm models` lists), as
+        ``[{name, thinking}]`` -- thinking meaning the model accepts
+        ``think: true`` (Ollama rejects it for models that cannot)."""
         try:
             resp = self._http.get(self.url + "/api/tags", timeout=10)
             resp.raise_for_status()
@@ -52,16 +56,35 @@ class OllamaChat:
             raise ChatError("Ollama is unavailable at %s" % self.url)
         except (requests.RequestException, ValueError) as e:
             raise ChatError("cannot list models: %s" % e)
-        names = [m.get("name") or m.get("model") for m in entries]
-        return sorted(n for n in names if isinstance(n, str))
+        out = []
+        for entry in entries:
+            name = entry.get("name") or entry.get("model")
+            if not isinstance(name, str):
+                continue
+            key = entry.get("digest") or name
+            if key not in self._thinks:
+                try:
+                    show = self._http.post(self.url + "/api/show",
+                                           json={"model": name}, timeout=10)
+                    show.raise_for_status()
+                    self._thinks[key] = "thinking" in (show.json().get("capabilities") or [])
+                except (requests.RequestException, ValueError):
+                    # Unknown is not cached; treated as "cannot think" for now.
+                    out.append({"name": name, "thinking": False})
+                    continue
+            out.append({"name": name, "thinking": self._thinks[key]})
+        return sorted(out, key=lambda m: m["name"])
 
-    def stream(self, model, messages):
+    def stream(self, model, messages, think=False):
         """Yield ``(kind, text)`` pieces of the reply, kind being "thinking"
-        or "content". Raises ChatError on any failure, including midway."""
+        or "content". ``think`` is sent explicitly, so a reasoning model
+        answers directly unless asked to think. Raises ChatError on any
+        failure, including midway."""
         try:
             resp = self._http.post(
                 self.url + "/api/chat",
-                json={"model": model, "messages": messages, "stream": True},
+                json={"model": model, "messages": messages, "stream": True,
+                      "think": bool(think)},
                 stream=True, timeout=(10, self.timeout))
         except requests.ConnectionError:
             raise ChatError("Ollama is unavailable at %s" % self.url)
@@ -198,11 +221,12 @@ def create_app(ollama, default_model, username, password_hash, secret_key=None,
     @flask_login.login_required
     def models():
         try:
-            names = ollama.models()
+            listed = ollama.models()
         except ChatError as e:
             return flask.jsonify({"error": str(e)}), 502
+        names = [m["name"] for m in listed]
         default = default_model if default_model in names else (names[0] if names else None)
-        return flask.jsonify({"models": names, "default": default})
+        return flask.jsonify({"models": listed, "default": default})
 
     @bp.route("/api/chat", methods=["POST"])
     @flask_login.login_required
@@ -211,19 +235,21 @@ def create_app(ollama, default_model, username, password_hash, secret_key=None,
         model = data.get("model")
         try:
             messages = _clean_messages(data.get("messages"))
-            installed = ollama.models()
+            installed = {m["name"]: m["thinking"] for m in ollama.models()}
         except ValueError as e:
             return flask.jsonify({"error": str(e)}), 400
         except ChatError as e:
             return flask.jsonify({"error": str(e)}), 502
         if model not in installed:
             return flask.jsonify({"error": "model is not installed"}), 400
+        # Off unless the browser ticked Think (a real true) and the model can.
+        think = data.get("think") is True and installed[model]
 
         def generate():
             log.info("chat run started model=%s", model)
             outcome = "failed"
             try:
-                for kind, text in ollama.stream(model, messages):
+                for kind, text in ollama.stream(model, messages, think=think):
                     yield json.dumps({"t": kind, "d": text}) + "\n"
                 outcome = "finished"
                 yield json.dumps({"done": True}) + "\n"

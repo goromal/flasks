@@ -13,8 +13,10 @@ SECRET_PROMPT = "my private question about 42"
 
 
 class FakeOllama:
-    def __init__(self, models=("small:1b", "default:7b"), chunks=None, fail=None):
+    def __init__(self, models=("small:1b", "default:7b"), chunks=None, fail=None,
+                 thinkers=("default:7b",)):
         self._models = list(models)
+        self.thinkers = set(thinkers)
         self.chunks = chunks or [("thinking", "hmm"), ("content", "Hel"), ("content", "lo")]
         self.fail = fail
         self.calls = []
@@ -22,10 +24,10 @@ class FakeOllama:
     def models(self):
         if self.fail == "models":
             raise chat_ui.ChatError("Ollama is unavailable at http://x")
-        return sorted(self._models)
+        return [{"name": n, "thinking": n in self.thinkers} for n in sorted(self._models)]
 
-    def stream(self, model, messages):
-        self.calls.append((model, messages))
+    def stream(self, model, messages, think=False):
+        self.calls.append((model, messages, think))
         for c in self.chunks:
             yield c
         if self.fail == "midway":
@@ -64,14 +66,18 @@ def test_wrong_password_rejected(make_client):
     assert c.get("/chat/api/models").status_code == 401
 
 
-def test_index_has_dropdown_and_clear(make_client):
+def test_index_has_dropdown_clear_and_unticked_think(make_client):
     page = make_client().get("/chat/").get_data(as_text=True)
     assert 'id="model"' in page and 'id="clear"' in page
+    think = page[page.index('id="think"') - 60:page.index('id="think"') + 60]
+    assert "checkbox" in think and "checked" not in think
 
 
 def test_models_lists_installed_with_default(make_client):
     d = make_client().get("/chat/api/models").get_json()
-    assert d == {"models": ["default:7b", "small:1b"], "default": "default:7b"}
+    assert d == {"models": [{"name": "default:7b", "thinking": True},
+                            {"name": "small:1b", "thinking": False}],
+                 "default": "default:7b"}
 
 
 def test_models_default_falls_back_when_not_installed(make_client):
@@ -92,7 +98,7 @@ def test_chat_streams_thinking_then_content(make_client):
     assert r.mimetype == "application/x-ndjson"
     assert events(r) == [{"t": "thinking", "d": "hmm"}, {"t": "content", "d": "Hel"},
                          {"t": "content", "d": "lo"}, {"done": True}]
-    assert c.ollama.calls == [("small:1b", msgs)]
+    assert c.ollama.calls == [("small:1b", msgs, False)]
 
 
 def test_chat_error_midway_is_reported_in_stream(make_client):
@@ -126,6 +132,22 @@ def test_logs_name_the_run_and_model_only(make_client, caplog):
     lines = [r.getMessage() for r in caplog.records if r.name == "chat_ui"]
     assert lines == ["chat run started model=small:1b", "chat run finished model=small:1b"]
     assert all(SECRET_PROMPT not in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("model,asked,sent", [
+    ("default:7b", True, True),       # a thinking model, ticked
+    ("default:7b", False, False),     # the default: off
+    ("default:7b", None, False),      # absent means off
+    ("small:1b", True, False),        # can't think: never sent, Ollama would 400
+    ("default:7b", "yes", False),     # only a real boolean counts
+])
+def test_think_flag(make_client, model, asked, sent):
+    c = make_client()
+    body = {"model": model, "messages": [{"role": "user", "content": "x"}]}
+    if asked is not None:
+        body["think"] = asked
+    c.post("/chat/api/chat", json=body).get_data()
+    assert c.ollama.calls[0][2] is sent
 
 
 def test_failed_run_logged_without_error_text(make_client, caplog):
@@ -162,6 +184,9 @@ class Stub:
                 body = json.loads(self.rfile.read(n)) if n else None
                 stub.requests.append((self.path, body))
                 status, payload = routes[self.path]
+                if self.path == "/api/show":
+                    thinks = body["model"] == "a:2"
+                    payload = {"capabilities": ["completion"] + (["thinking"] if thinks else [])}
                 data = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
                 self.send_response(status)
                 self.send_header("Content-Length", str(len(data)))
@@ -184,16 +209,20 @@ def ndjson(*chunks):
 
 def test_client_models_and_stream():
     s = Stub({
-        "/api/tags": (200, {"models": [{"name": "b:1"}, {"name": "a:2"}]}),
+        "/api/tags": (200, {"models": [{"name": "b:1", "digest": "d1"},
+                                       {"name": "a:2", "digest": "d2"}]}),
+        "/api/show": (200, None),
         "/api/chat": (200, ndjson({"message": {"thinking": "t"}},
                                   {"message": {"content": "x"}},
                                   {"message": {"content": "y"}, "done": True})),
     })
     ch = chat_ui.OllamaChat(s.url)
-    assert ch.models() == ["a:2", "b:1"]
-    assert list(ch.stream("a:2", [{"role": "user", "content": "q"}])) == [
+    assert ch.models() == [{"name": "a:2", "thinking": True}, {"name": "b:1", "thinking": False}]
+    assert ch.models() == ch.models()         # capabilities cached per digest
+    assert sum(1 for p, _ in s.requests if p == "/api/show") == 2
+    assert list(ch.stream("a:2", [{"role": "user", "content": "q"}], think=True)) == [
         ("thinking", "t"), ("content", "x"), ("content", "y")]
-    assert s.requests[-1] == ("/api/chat", {"model": "a:2", "stream": True,
+    assert s.requests[-1] == ("/api/chat", {"model": "a:2", "stream": True, "think": True,
                                             "messages": [{"role": "user", "content": "q"}]})
     s.server.shutdown()
 
