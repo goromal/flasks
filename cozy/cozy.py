@@ -28,6 +28,8 @@ import image_size
 import queue_store
 from queue_store import stage_remote_image
 import runner
+import video_judge
+import video_store
 
 _PW_HASH = None  # populated from the secrets file at startup; see _load_secrets
 _API_TOKEN_HASH = None  # optional; absent from the secrets file disables API auth
@@ -101,9 +103,15 @@ _MAX_REMOTE_IMAGE_BYTES = 50 * 1024 * 1024
 # also the cap Flask enforces on any request body (see MAX_CONTENT_LENGTH).
 _MAX_UPLOAD_BYTES = _MAX_REMOTE_IMAGE_BYTES
 
+# Where Video tab uploads land under the input dir; Flush deletes it.
+VIDEO_UPLOADS = "video-uploads"
+
 
 def _write_new_file(directory, name, data):
     """Write data into directory as name, or name_2/name_3... if taken.
+
+    ``data`` is bytes or a readable file object; the latter is streamed, so
+    a multi-GB video upload never has to fit in memory.
 
     O_EXCL rather than an exists() check: two uploads of the same filename
     racing must not land on the same file, and an upload must never silently
@@ -118,7 +126,10 @@ def _write_new_file(directory, name, data):
         except FileExistsError:
             continue
         with os.fdopen(fd, "wb") as f:
-            f.write(data)
+            if isinstance(data, (bytes, bytearray)):
+                f.write(data)
+            else:
+                shutil.copyfileobj(data, f, 1024 * 1024)
         return candidate
     raise OSError("too many files named like %s" % name)
 
@@ -141,7 +152,8 @@ def create_app(store, workflows, workflow_dir, username, subdomain="/cozy",
                input_dir=None, output_dir=None, workflow_kinds=None,
                secret_key=None, password_hash=None, restart_cmd=None,
                prompt_db_dir=None, queue_store=None, scheduler=None,
-               api_token_hash=None, max_input_bytes=fit.DEFAULT_MAX_BYTES):
+               api_token_hash=None, max_input_bytes=fit.DEFAULT_MAX_BYTES,
+               video_store=None):
     global _PW_HASH, _API_TOKEN_HASH
     if password_hash is not None:
         _PW_HASH = password_hash
@@ -167,9 +179,11 @@ def create_app(store, workflows, workflow_dir, username, subdomain="/cozy",
 
     @app.errorhandler(413)
     def too_large(e):
-        # Flask's own 413 page is HTML; the uploader parses JSON.
+        # Flask's own 413 page is HTML; the uploader parses JSON. The video
+        # upload route raises its own limit, so quote whichever applied.
+        limit = flask.request.max_content_length or _MAX_UPLOAD_BYTES
         return flask.jsonify({
-            "error": "file is larger than %d MB" % (_MAX_UPLOAD_BYTES // (1024 * 1024))
+            "error": "file is larger than %d MB" % (limit // (1024 * 1024))
         }), 413
 
     login_manager = flask_login.LoginManager()
@@ -232,7 +246,7 @@ def create_app(store, workflows, workflow_dir, username, subdomain="/cozy",
         return flask.render_template(
             "index.html", urlroot=urlroot, workflows=workflows, state=state,
             workflow_kinds=workflow_kinds, can_restart=bool(restart_cmd),
-            has_queue=bool(queue_store))
+            has_queue=bool(queue_store), has_video=bool(video_store))
 
     @bp.route("/api/generate", methods=["POST"])
     @flask_login.login_required
@@ -512,10 +526,11 @@ def create_app(store, workflows, workflow_dir, username, subdomain="/cozy",
             return _pdb_error(e)
         resp = {"path": path,
                 "dirs": [e["name"] for e in entries if e["is_dir"]]}
-        if flask.request.args.get("files") == "img":
+        exts = {"img": image_refs.PICKABLE_EXTS,
+                "video": image_refs.VIDEO_EXTS}.get(flask.request.args.get("files"))
+        if exts:
             resp["files"] = [e["name"] for e in entries
-                             if not e["is_dir"]
-                             and e["name"].lower().endswith(image_refs.PICKABLE_EXTS)]
+                             if not e["is_dir"] and e["name"].lower().endswith(exts)]
         return flask.jsonify(resp)
 
     @bp.route("/api/pdb/select", methods=["POST"])
@@ -786,11 +801,28 @@ def create_app(store, workflows, workflow_dir, username, subdomain="/cozy",
     @bp.route("/api/flush", methods=["POST"])
     @flask_login.login_required
     def flush():
+        # Deleting inputs under a running video job would pull its source out
+        # from under ffmpeg.
+        if video_store is not None and video_store.busy():
+            return flask.jsonify({"error": "a video job is running; cancel it first"}), 409
         # Staged remote images and staged crops are cozy's own artifacts; remove
         # them here rather than assuming the admin .flush.sh scripts recurse into
-        # subdirectories.
-        for sub in ("wormhole", crop.CROP_SUBDIR, fit.SUBDIR):
+        # subdirectories. Staged remote videos live under wormhole/ too.
+        for sub in ("wormhole", crop.CROP_SUBDIR, fit.SUBDIR, VIDEO_UPLOADS):
             shutil.rmtree(os.path.join(input_dir, sub), ignore_errors=True)
+        # Input videos are deleted outright, as the input script does to
+        # images (after uploading them). Only the top level: subdirectories
+        # of the input dir are not cozy's to empty.
+        try:
+            for name in os.listdir(input_dir):
+                full = os.path.join(input_dir, name)
+                if name.lower().endswith(image_refs.VIDEO_EXTS) and os.path.isfile(full):
+                    os.remove(full)
+        except OSError:
+            pass
+        # The video job's source may just have been deleted.
+        if video_store is not None:
+            video_store.clear()
         # Run a .flush.sh (if present) in the input and output dirs. The scripts
         # are placed there out-of-band by the admin; a missing one is a no-op, so
         # the button is always available and simply flushes whatever is wired up.
@@ -810,6 +842,8 @@ def create_app(store, workflows, workflow_dir, username, subdomain="/cozy",
             ran += 1
         return flask.jsonify({"ok": True, "ran": ran})
 
+    if video_store is not None:
+        _add_video_routes(bp, video_store, input_dir, output_dir)
     app.register_blueprint(bp)
     login_manager.init_app(app)
     login_manager.login_view = prefix + "login"
@@ -820,6 +854,153 @@ def create_app(store, workflows, workflow_dir, username, subdomain="/cozy",
         flask.session.modified = True
 
     return app
+
+
+def _add_video_routes(bp, vstore, input_dir, output_dir):
+    """The Video tab's endpoints, registered only when a vision model is
+    configured (--ollama-url). See video_store for the job lifecycle."""
+
+    def _err(msg, code=400):
+        return flask.jsonify({"error": msg}), code
+
+    @bp.route("/api/video/list", methods=["GET"])
+    @flask_login.login_required
+    def video_list():
+        return flask.jsonify({"videos": image_refs.list_images(
+            input_dir, output_dir, exts=image_refs.VIDEO_EXTS)})
+
+    @bp.route("/api/video/upload", methods=["POST"])
+    @flask_login.login_required
+    def video_upload():
+        # Raise the app-wide image cap for this request only; werkzeug spools
+        # large multipart bodies to disk, and _write_new_file streams from
+        # there, so the size of a video never has to fit in memory.
+        flask.request.max_content_length = vstore.max_video_bytes
+        f = flask.request.files.get("file")
+        if f is None or not (f.filename or "").strip():
+            return _err("no file supplied")
+        name = image_refs.safe_upload_name(f.filename, image_refs.VIDEO_EXTS)
+        if name is None:
+            return _err("unsupported video type")
+        sub = VIDEO_UPLOADS
+        try:
+            os.makedirs(os.path.join(input_dir, sub), exist_ok=True)
+            rel = _write_new_file(os.path.join(input_dir, sub), name, f.stream)
+        except OSError as e:
+            return _err(str(e), 500)
+        value = os.path.join(sub, rel)
+        return flask.jsonify({"value": value, "label": value})
+
+    @bp.route("/api/video/file", methods=["GET"])
+    @flask_login.login_required
+    def video_file():
+        """Range-capable stream for the preview player: a picker value, or
+        (job=1) the current job's file, which covers staged remote videos."""
+        if flask.request.args.get("job"):
+            path = vstore.source_file()
+        else:
+            path = vstore.resolve_local(flask.request.args.get("name", ""))
+        if not path:
+            return _err("not found", 404)
+        return flask.send_file(path, conditional=True)
+
+    @bp.route("/api/video/models", methods=["GET"])
+    @flask_login.login_required
+    def video_models():
+        """Installed Ollama models for the Video tab's model dropdown -- the
+        set ``anix-llm models`` lists -- with which accept images, which is
+        the default, and each one's measured speed."""
+        try:
+            return flask.jsonify({"models": vstore.models()})
+        except video_judge.JudgeError as e:
+            return _err(str(e), 502)
+
+    @bp.route("/api/video/estimate", methods=["GET"])
+    @flask_login.login_required
+    def video_estimate():
+        """Frames and time an analysis would take, shown before starting
+        one. Local videos only: a remote one has no duration until staged."""
+        args = flask.request.args
+        try:
+            return flask.jsonify(vstore.estimate(
+                args.get("video", ""), stride=args.get("stride"),
+                precision=args.get("precision"), model=args.get("model") or None))
+        except ValueError as e:
+            return _err(str(e))
+
+    @bp.route("/api/video/analyze", methods=["POST"])
+    @flask_login.login_required
+    def video_analyze():
+        data = flask.request.get_json(force=True, silent=True) or {}
+        try:
+            busy = vstore.analyze(
+                data.get("prompt"), video=data.get("video") or None,
+                remote=data.get("remote_video") or None,
+                stride=data.get("stride"), precision=data.get("precision"),
+                merge_gap=data.get("merge_gap"), fresh=data.get("fresh") is True,
+                model=data.get("model") or None)
+        except ValueError as e:
+            return _err(str(e))
+        if busy:
+            return _err("busy: another job is using the GPU", 409)
+        return flask.jsonify({"ok": True}), 202
+
+    @bp.route("/api/video/status", methods=["GET"])
+    @flask_login.login_required
+    def video_status():
+        return flask.jsonify(vstore.read())
+
+    @bp.route("/api/video/clear", methods=["POST"])
+    @flask_login.login_required
+    def video_clear():
+        if not vstore.clear():
+            return _err("a video job is running; cancel it first", 409)
+        return flask.jsonify({"ok": True})
+
+    @bp.route("/api/video/cancel", methods=["POST"])
+    @flask_login.login_required
+    def video_cancel():
+        if not vstore.cancel():
+            return _err("nothing running", 404)
+        return flask.jsonify({"ok": True})
+
+    @bp.route("/api/video/frame", methods=["GET"])
+    @flask_login.login_required
+    def video_frame():
+        try:
+            ms = int(flask.request.args.get("ms", ""))
+        except ValueError:
+            return _err("invalid ms")
+        path = vstore.frame_path(ms)
+        if not os.path.isfile(path):
+            return _err("no frame", 404)
+        # Immutable per (video, prompt): the memo that owns it is cleared
+        # together with the frames.
+        return flask.send_file(path, mimetype="image/jpeg", max_age=3600)
+
+    @bp.route("/api/video/export", methods=["POST"])
+    @flask_login.login_required
+    def video_export():
+        data = flask.request.get_json(force=True, silent=True) or {}
+        basename, bad = _clean_basename(data)
+        if bad:
+            return bad
+        err = vstore.export(data.get("keep"), basename)
+        if err == "busy":
+            return _err("busy: another job is using the GPU", 409)
+        if err:
+            return _err(err, 409 if err == "nothing to export" else 400)
+        return flask.jsonify({"ok": True}), 202
+
+    @bp.route("/api/video/result", methods=["GET"])
+    @flask_login.login_required
+    def video_result():
+        path = vstore.output_path()
+        if not path:
+            return _err("no result", 404)
+        # Inline, for the tab's preview player: the export itself stays in
+        # the output dir, where the output .flush.sh picks it up.
+        return flask.send_file(path, mimetype="video/mp4", conditional=True)
 
 
 def run():
@@ -854,6 +1035,14 @@ def run():
                         help="Byte ceiling on the image an edit workflow hands "
                              "to ComfyUI; larger inputs are resized down. "
                              "0 disables the ceiling")
+    parser.add_argument("--ollama-url", type=str, default="",
+                        help="Ollama base URL for the Video tab's frame judge; "
+                             "empty hides the Video tab")
+    parser.add_argument("--video-model", type=str, default="qwen3.5:35b-a3b",
+                        help="Ollama vision model that judges video frames")
+    parser.add_argument("--max-video-bytes", type=int,
+                        default=video_store.MAX_VIDEO_BYTES,
+                        help="Largest video accepted by upload or remote staging")
     args = parser.parse_args()
 
     state_dir = args.state_dir or os.path.join(os.getcwd(), "cozy-state")
@@ -875,6 +1064,12 @@ def run():
         input_dir, output_dir, run_lock, rest_gap=args.rest_gap,
         max_input_bytes=args.max_input_bytes)
     scheduler.resume()
+    vstore = None
+    if args.ollama_url:
+        vstore = video_store.VideoStore(
+            state_dir, video_judge.OllamaJudge(args.ollama_url, args.video_model),
+            input_dir, output_dir, client=ComfyUIClient(args.comfyui_url),
+            run_lock=run_lock, max_video_bytes=args.max_video_bytes)
     secrets = _load_secrets(args.secrets_file)
     restart_cmd = shlex.split(args.comfyui_restart_cmd) if args.comfyui_restart_cmd else None
     app = create_app(store=store, workflows=names,
@@ -888,7 +1083,8 @@ def run():
                      prompt_db_dir=args.prompt_db_dir or os.path.join(state_dir, "prompts"),
                      queue_store=qstore, scheduler=scheduler,
                      api_token_hash=secrets.get("api_token_hash"),
-                     max_input_bytes=args.max_input_bytes)
+                     max_input_bytes=args.max_input_bytes,
+                     video_store=vstore)
     app.run(host="0.0.0.0", port=args.port)
 
 

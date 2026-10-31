@@ -113,6 +113,91 @@ class RunHelper(unittest.TestCase):
             wormhole._run(["definitely-not-a-real-binary-xyz"])
 
 
+class FetchToFile(unittest.TestCase):
+    """Streaming large-file copy: capped, stall-timed, atomic."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.d = self._tmp.name
+        self.addCleanup(self._tmp.cleanup)
+        self.src = os.path.join(self.d, "src.bin")
+        self.data = os.urandom(3 * 1024 * 1024 + 17)
+        with open(self.src, "wb") as f:
+            f.write(self.data)
+        self.dest = os.path.join(self.d, "out", "dest.bin")
+
+    def _remote(self, shell_cmd):
+        """Stand a local shell command in for the ssh invocation."""
+        return mock.patch.object(wormhole, "_ssh_argv",
+                                 return_value=["sh", "-c", shell_cmd])
+
+    def _assert_no_leftovers(self):
+        self.assertFalse(os.path.exists(self.dest))
+        self.assertFalse(os.path.exists(self.dest + ".part"))
+
+    def test_local_copy_creates_parents_and_returns_size(self):
+        n = wormhole.fetch_to_file("", self.src, self.dest)
+        self.assertEqual(n, len(self.data))
+        with open(self.dest, "rb") as f:
+            self.assertEqual(f.read(), self.data)
+        self.assertFalse(os.path.exists(self.dest + ".part"))
+
+    def test_local_over_cap_raises_and_leaves_nothing(self):
+        with self.assertRaises(WormholeError) as ctx:
+            wormhole.fetch_to_file("", self.src, self.dest, max_bytes=1024)
+        self.assertIn("exceeds", str(ctx.exception))
+        self._assert_no_leftovers()
+
+    def test_local_missing_source_raises(self):
+        with self.assertRaises(WormholeError):
+            wormhole.fetch_to_file("", os.path.join(self.d, "nope"), self.dest)
+        self._assert_no_leftovers()
+
+    def test_remote_argv_quotes_path(self):
+        self.assertEqual(wormhole._ssh_argv("box", "cat -- '/a b'"),
+                         SSH_PREFIX + ["cat -- '/a b'"])
+
+    def test_remote_streams_to_dest(self):
+        with self._remote("cat " + self.src) as argv:
+            n = wormhole.fetch_to_file("box", "/remote/v.mp4", self.dest)
+        argv.assert_called_once_with("box", "cat -- /remote/v.mp4")
+        self.assertEqual(n, len(self.data))
+        with open(self.dest, "rb") as f:
+            self.assertEqual(f.read(), self.data)
+
+    def test_remote_over_cap_kills_and_cleans_up(self):
+        # An endless source: only the in-flight cap can stop it.
+        with self._remote("cat /dev/zero"):
+            with self.assertRaises(WormholeError) as ctx:
+                wormhole.fetch_to_file("box", "/v.mp4", self.dest,
+                                       max_bytes=2 * 1024 * 1024)
+        self.assertIn("exceeds", str(ctx.exception))
+        self._assert_no_leftovers()
+
+    def test_remote_stall_times_out(self):
+        with self._remote("sleep 30"):
+            with self.assertRaises(WormholeError) as ctx:
+                wormhole.fetch_to_file("box", "/v.mp4", self.dest,
+                                       idle_timeout=0.3)
+        self.assertIn("stalled", str(ctx.exception))
+        self._assert_no_leftovers()
+
+    def test_remote_slow_but_progressing_succeeds(self):
+        # Total time exceeds idle_timeout; no single gap does.
+        cmd = "for i in 1 2 3 4; do printf x; sleep 0.15; done"
+        with self._remote(cmd):
+            n = wormhole.fetch_to_file("box", "/v.mp4", self.dest,
+                                       idle_timeout=0.5)
+        self.assertEqual(n, 4)
+
+    def test_remote_nonzero_exit_raises_stderr_tail(self):
+        with self._remote("echo banner >&2; echo 'cat: /v.mp4: No such file' >&2; exit 1"):
+            with self.assertRaises(WormholeError) as ctx:
+                wormhole.fetch_to_file("box", "/v.mp4", self.dest)
+        self.assertEqual(str(ctx.exception), "cat: /v.mp4: No such file")
+        self._assert_no_leftovers()
+
+
 class ResolveHost(unittest.TestCase):
     """<name>.local is redirected to ~/secrets/<name>/i.txt when present."""
 
