@@ -306,9 +306,13 @@
       } catch { /* iframe not ready */ }
     }
 
+    const URL_START = /^\s*https?:\/\//i;
     function terminalText(term) {
       const selected = term.getSelection();
-      if (selected) return selected;
+      if (selected) {
+        // A URL selected across terminal rows can contain line breaks.
+        return URL_START.test(selected) ? selected.replace(/\s+/g, '') : selected;
+      }
       const buffer = term.buffer.active;
       const lines = [];
       const end = Math.min(buffer.length, buffer.viewportY + term.rows);
@@ -318,6 +322,49 @@
       }
       while (lines.length && !lines[lines.length - 1]) lines.pop();
       return lines.join('\n');
+    }
+    // The selected URL, else the last URL anywhere in the buffer (Agent UI's
+    // latestUrl). tmux redraws a long URL as separate full-width rows whose
+    // isWrapped flag is false, so a URL reaching the row edge is joined too.
+    function latestUrl(term) {
+      const selected = term.getSelection();
+      if (selected && URL_START.test(selected)) return selected.replace(/\s+/g, '');
+      const buffer = term.buffer.active;
+      let latest = null;
+      for (let row = 0; row < buffer.length; row += 1) {
+        const line = buffer.getLine(row);
+        if (!line) continue;
+        const text = line.translateToString(true);
+        const urls = /https?:\/\/[^\s<>"']+/gi;
+        let match;
+        while ((match = urls.exec(text))) {
+          let url = match[0];
+          let part = text;
+          let nextRow = row + 1;
+          const atEnd = match.index + url.length === text.length;
+          while (atEnd && nextRow < buffer.length) {
+            const nextLine = buffer.getLine(nextRow);
+            if (!nextLine) break;
+            const nextText = nextLine.translateToString(true);
+            if (!(nextLine.isWrapped || part.length >= term.cols) ||
+                !/^[^\s<>"']+$/.test(nextText) || URL_START.test(nextText)) break;
+            url += nextText;
+            part = nextText;
+            nextRow += 1;
+          }
+          latest = url.replace(/[.,;:!?)]*$/, '');
+        }
+      }
+      return latest;
+    }
+    // Synchronous so window.open stays inside the click's user activation.
+    function openUrl() {
+      const term = terminal();
+      if (!term) return 'Not ready';
+      const url = latestUrl(term);
+      if (!url) return 'No URL';
+      window.open(url, '_blank', 'noopener,noreferrer');
+      return null;
     }
     function legacyCopy(text) {
       const field = el('textarea', { value: text, readOnly: false });
@@ -373,7 +420,7 @@
     attach();
     return {
       controls: Object.assign(controls, {
-        copy, paste, pressKey,
+        copy, openUrl, paste, pressKey,
         toggleCtrl() { setCtrl(!ctrlArmed); },
         toggleShift() { setShift(!shiftArmed); },
         toggleSelection() {
@@ -406,8 +453,13 @@
     select.title = 'Drag across terminal text to select it';
     select.setAttribute('aria-pressed', 'false');
     const copyBtn = btn('Copy', () => flash(copyBtn, controls.copy, 'Copy'));
+    const openBtn = btn('Open URL', () => {
+      const result = controls.openUrl();
+      if (result) flash(openBtn, () => result, 'Open URL');
+    });
+    openBtn.title = 'Open the selected URL, or the latest URL in the terminal';
     const pasteBtn = btn('Paste', () => flash(pasteBtn, controls.paste, 'Paste'));
-    const nav = el('nav', { className: 'agent-keys' }, select, copyBtn, pasteBtn);
+    const nav = el('nav', { className: 'agent-keys' }, select, copyBtn, openBtn, pasteBtn);
     nav.setAttribute('aria-label', 'Terminal keys');
     const modifier = (label, toggle, aria) => {
       const b = btn(label, toggle, aria);

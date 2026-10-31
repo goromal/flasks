@@ -39,7 +39,11 @@ class AppTest(unittest.TestCase):
         body = page.get_data(as_text=True)
         self.assertIn('data-base="/assistant/agent"', body)
         self.assertIn("/assistant/static/assistant.js", body)
-        self.assertEqual(self.client.get("/assistant/static/assistant.js").status_code, 200)
+        script = self.client.get("/assistant/static/assistant.js")
+        self.assertEqual(script.status_code, 200)
+        # Same terminal key bar as Agent UI, including Open URL.
+        self.assertIn("'Open URL'", script.get_data(as_text=True))
+        script.close()
         self.assertEqual(self.client.get("/assistant/static/assistant.css").status_code, 200)
 
     def test_status_reports_missing_repo(self):
