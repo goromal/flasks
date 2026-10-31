@@ -74,6 +74,14 @@ def test_index_shows_video_tab(client):
     page = client.get("/cozy/").data
     assert b'id="tab-video"' in page
     assert b"video.js" in page
+    # Same prompt tools as the Single tab, prefixed; plus Clear and Flush.
+    for el in (b'id="v-copy-btn"', b'id="v-paste-btn"', b'id="v-clear-text-btn"',
+               b'id="v-pdb"', b'id="v-pdb-browse"', b'id="v-pdb-saveas"',
+               b'id="v-clear"', b'id="v-flush"', b'id="v-cancel"'):
+        assert el in page, el
+    # The Single tab keeps its unprefixed ids.
+    assert b'id="copy-btn"' in page and b'id="pdb"' in page
+    assert b'id="v-download"' not in page
 
 
 def test_requires_login(tmp_path):
@@ -235,3 +243,53 @@ def test_analyze_rejects_text_only_model(client):
     r = client.post("/cozy/api/video/analyze",
                     json={"prompt": "x", "video": "a.mp4", "model": "text-only"})
     assert r.status_code == 400 and "cannot read images" in r.get_json()["error"]
+
+
+def test_clear_route(client, make_video):
+    make_video(client._in / "a.mp4", colors=(("red", 3),), audio=False)
+    client.post("/cozy/api/video/analyze", json={"prompt": "x", "video": "a.mp4", "stride": 1})
+    client._vstore.wait(30)
+    assert client.post("/cozy/api/video/clear").status_code == 200
+    assert client.get("/cozy/api/video/status").get_json()["state"] == "idle"
+    assert (client._in / "a.mp4").exists()
+
+
+def test_clear_and_flush_refused_while_running(client, monkeypatch):
+    monkeypatch.setattr(client._vstore, "busy", lambda: True)
+    assert client.post("/cozy/api/video/clear").status_code == 409
+    r = client.post("/cozy/api/flush")
+    assert r.status_code == 409 and "video" in r.get_json()["error"]
+
+
+def test_flush_deletes_input_videos_and_resets_the_job(client, make_video, monkeypatch):
+    monkeypatch.setattr(cozy.subprocess, "run", lambda *a, **kw: None)
+    make_video(client._in / "top.mp4", colors=(("red", 3),), audio=False)
+    (client._in / "video-uploads").mkdir()
+    (client._in / "video-uploads" / "up.mov").write_bytes(b"v")
+    (client._in / "keep.png").write_bytes(b"i")            # images are the script's job
+    (client._in / "3d").mkdir()
+    (client._in / "3d" / "model.mp4").write_bytes(b"v")     # only top level and uploads
+    exported = client._out / "video" / "clip-trim.mp4"
+    exported.parent.mkdir()
+    exported.write_bytes(b"v")
+    client.post("/cozy/api/video/analyze", json={"prompt": "x", "video": "top.mp4", "stride": 1})
+    client._vstore.wait(30)
+    assert client.post("/cozy/api/flush").status_code == 200
+    assert not (client._in / "top.mp4").exists()
+    assert not (client._in / "video-uploads").exists()
+    assert (client._in / "keep.png").exists()
+    assert (client._in / "3d" / "model.mp4").exists()
+    assert exported.exists()                                 # outputs: the output script's job
+    assert client.get("/cozy/api/video/status").get_json()["state"] == "idle"
+
+
+def test_result_is_served_inline_not_as_a_download(client, make_video):
+    make_video(client._in / "a.mp4", colors=(("blue", 3),), audio=False)
+    client._vstore.judge.judge = lambda jpeg, prompt, model=None: True
+    client.post("/cozy/api/video/analyze", json={"prompt": "x", "video": "a.mp4", "stride": 1})
+    client._vstore.wait(30)
+    assert client.post("/cozy/api/video/export", json={"keep": [True]}).status_code == 202
+    client._vstore.wait(30)
+    r = client.get("/cozy/api/video/result")
+    assert r.status_code == 200 and r.mimetype == "video/mp4"
+    assert "attachment" not in r.headers.get("Content-Disposition", "")

@@ -235,7 +235,7 @@ def test_export_failure_returns_to_review(dirs, make_video, is_blue):
         grab_frame = staticmethod(video_media.grab_frame)
 
         @staticmethod
-        def export(*a):
+        def export(*a, **kw):
             raise video_media.MediaError("disk full")
 
     store = make_store(dirs, BlueJudge(is_blue), media=BrokenMedia)
@@ -373,3 +373,53 @@ def test_models_lists_vision_flag_default_and_speed(dirs, make_video, is_blue):
     assert models["text-only"]["vision"] is False
     assert models["vision-b"]["secs_per_frame"] > 0
     assert models["vision-default"]["secs_per_frame"] is None
+
+
+def test_clear_resets_job_and_thumbnails(dirs, make_video, is_blue):
+    make_video(dirs["in"] / "clip.mp4")
+    store = make_store(dirs, BlueJudge(is_blue))
+    run_analysis(store, prompt="b", video="clip.mp4", stride=4)
+    assert os.listdir(store.frames_dir)
+    assert store.clear() is True
+    job = store.read()
+    assert job["state"] == "idle" and job["segments"] == [] and job["source"] is None
+    assert os.listdir(store.frames_dir) == []
+    # Files are untouched: the source video is still there.
+    assert (dirs["in"] / "clip.mp4").exists()
+
+
+def test_clear_refused_while_running(dirs, make_video, is_blue):
+    make_video(dirs["in"] / "clip.mp4")
+    gate = threading.Event()
+    store = make_store(dirs, BlueJudge(is_blue, gate=gate))
+    assert store.analyze(prompt="b", video="clip.mp4", stride=4) is None
+    assert store.clear() is False
+    store.cancel(); gate.set(); store.wait(30)
+    assert store.clear() is True
+
+
+def test_cancel_stops_an_export(dirs, make_video, is_blue):
+    make_video(dirs["in"] / "clip.mp4")
+    started = threading.Event()
+
+    class SlowMedia:
+        probe = staticmethod(video_media.probe)
+        grab_frame = staticmethod(video_media.grab_frame)
+
+        @staticmethod
+        def export(src, segs, dest, has_audio, should_stop=None):
+            started.set()
+            while not should_stop():
+                pass
+            raise video_media.MediaError("cancelled")
+
+    store = make_store(dirs, BlueJudge(is_blue), media=SlowMedia)
+    run_analysis(store, prompt="b", video="clip.mp4", stride=4)
+    assert store.export([True]) is None
+    assert started.wait(5)
+    assert store.cancel() is True
+    store.wait(10)
+    job = store.read()
+    assert job["state"] == "review" and job["error"] is None
+    assert len(job["segments"]) == 1
+    assert not os.listdir(dirs["out"] / "video")

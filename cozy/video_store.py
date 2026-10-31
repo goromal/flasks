@@ -418,10 +418,22 @@ class VideoStore:
             self._run_lock.release()
 
     def cancel(self):
-        """Ask a running analysis to stop at its next frame. False if idle."""
-        if self._read()["state"] not in ("staging", "probing", "analyzing"):
+        """Stop a running analysis (at its next frame) or export (ffmpeg is
+        killed; the job returns to review). False if nothing is running."""
+        if self._read()["state"] not in RUNNING:
             return False
         self._cancel.set()
+        return True
+
+    def clear(self):
+        """Forget the current job -- source, prompt, segments, thumbnails --
+        and return to idle. Files on disk (the video, any export) are left
+        alone; Flush is what deletes those. False while a job is running."""
+        with self._lock:
+            if self.busy():
+                return False
+            self._clear_frames()
+            self._write(_idle())
         return True
 
     # -- export --------------------------------------------------------------
@@ -444,6 +456,7 @@ class VideoStore:
                 return "no segments selected"
             if not self._run_lock.try_acquire():
                 return "busy"
+            self._cancel.clear()
             if not basename:
                 stem = os.path.splitext(os.path.basename(job["staged_path"]))[0]
                 basename = stem + "-trim"
@@ -463,13 +476,16 @@ class VideoStore:
             out_dir = os.path.join(self.output_dir, VIDEO_SUBDIR)
             os.makedirs(out_dir, exist_ok=True)
             dest = _unique_path(out_dir, basename, ".mp4")
-            self._media.export(src, kept, dest, has_audio)
+            self._media.export(src, kept, dest, has_audio,
+                               should_stop=self._cancel.is_set)
             self._update(state="done",
                          output=os.path.relpath(dest, self.output_dir),
                          finished_at=_now())
         except Exception as e:  # noqa: BLE001
-            # Segments survive, so the user can adjust and retry.
-            self._update(state="review", error="export failed: %s" % e)
+            # Segments survive, so the user can adjust and retry. A cancel
+            # is not an error.
+            self._update(state="review",
+                         error=None if self._cancel.is_set() else "export failed: %s" % e)
         finally:
             self._run_lock.release()
 

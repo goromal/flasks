@@ -70,3 +70,12 @@ def test_export_argv_without_audio():
     argv = vm.export_argv("in.mp4", [{"start": 1, "end": 3}], "o.mp4", False)
     assert "[0:v:0]concat=n=1:v=1:a=0[v]" in argv
     assert "[a]" not in argv
+
+
+def test_export_can_be_stopped_and_leaves_nothing(tmp_path, make_video):
+    path = make_video(tmp_path / "v.mp4")
+    dest = tmp_path / "out.mp4"
+    with pytest.raises(vm.MediaError, match="cancelled"):
+        vm.export(path, [{"start": 0, "end": 20}], str(dest), True,
+                  should_stop=lambda: True)
+    assert not dest.exists() and not (tmp_path / "out.mp4.part").exists()

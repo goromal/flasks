@@ -83,8 +83,8 @@
         #modal-list li { padding:8px 12px; cursor:pointer; border-bottom:1px solid #f1f3f5; }
         #modal-list li:hover { background:#f0f4ff; }
         #modal-list li.b-picked { background:#e2eaff; }
-        details#pdb { margin-top:16px; }
-        details#pdb summary { font-weight:600; color:#495057; cursor:pointer; }
+        details.pdb { margin-top:16px; }
+        details.pdb summary { font-weight:600; color:#495057; cursor:pointer; }
         .pdb-row { display:flex; gap:8px; margin-top:8px; }
         .pdb-row select { flex:1; }
         .pdb-row input[type="text"] { flex:1; padding:8px 10px; font-size:0.95rem; border:2px solid #ced4da; border-radius:6px; }
@@ -122,6 +122,33 @@
 </head>
 
 <body>
+    {#- Copy/Paste/Clear text and the prompt library, shared by the Single and
+        Video tabs. `p` prefixes every id ("" or "v-"); static wiring is
+        wirePromptTools() in the script below. -#}
+    {% macro prompt_tools(p) %}
+            <div class="prompt-actions">
+                <button type="button" class="secondary" id="{{ p }}copy-btn" aria-label="Copy prompt to clipboard">&#128203; Copy</button>
+                <button type="button" class="secondary" id="{{ p }}paste-btn" aria-label="Paste clipboard text into prompt">&#128203; Paste</button>
+                <button type="button" class="secondary" id="{{ p }}clear-text-btn" aria-label="Clear prompt text">&#10006; Clear text</button>
+            </div>
+            <details id="{{ p }}pdb" class="pdb">
+                <summary>Prompt library</summary>
+                <div class="pdb-path" id="{{ p }}pdb-path"></div>
+                <div class="pdb-row">
+                    <select id="{{ p }}pdb-select"></select>
+                    <button type="button" class="secondary" id="{{ p }}pdb-browse">Browse&hellip;</button>
+                </div>
+                <div class="pdb-row">
+                    <input type="text" id="{{ p }}pdb-filter" placeholder="filter prompts" />
+                </div>
+                <div class="prompt-actions">
+                    <button type="button" class="secondary" id="{{ p }}pdb-load">Load</button>
+                    <button type="button" class="secondary" id="{{ p }}pdb-save">Save</button>
+                    <button type="button" class="secondary" id="{{ p }}pdb-saveas">Save as&hellip;</button>
+                    <button type="button" class="secondary" id="{{ p }}pdb-delete">Delete</button>
+                </div>
+            </details>
+    {% endmacro %}
     <div class="card">
         <div class="topbar">
             <h1>cozy</h1>
@@ -171,28 +198,7 @@
             </div>
             <label for="prompt" id="prompt-label">Prompt</label>
             <textarea id="prompt">{{ state.prompt }}</textarea>
-            <div class="prompt-actions">
-                <button type="button" class="secondary" id="copy-btn" aria-label="Copy prompt to clipboard">&#128203; Copy</button>
-                <button type="button" class="secondary" id="paste-btn" aria-label="Paste clipboard text into prompt">&#128203; Paste</button>
-                <button type="button" class="secondary" id="clear-text-btn" aria-label="Clear prompt text">&#10006; Clear text</button>
-            </div>
-            <details id="pdb">
-                <summary>Prompt library</summary>
-                <div class="pdb-path" id="pdb-path"></div>
-                <div class="pdb-row">
-                    <select id="pdb-select"></select>
-                    <button type="button" class="secondary" id="pdb-browse">Browse&hellip;</button>
-                </div>
-                <div class="pdb-row">
-                    <input type="text" id="pdb-filter" placeholder="filter prompts" />
-                </div>
-                <div class="prompt-actions">
-                    <button type="button" class="secondary" id="pdb-load">Load</button>
-                    <button type="button" class="secondary" id="pdb-save">Save</button>
-                    <button type="button" class="secondary" id="pdb-saveas">Save as&hellip;</button>
-                    <button type="button" class="secondary" id="pdb-delete">Delete</button>
-                </div>
-            </details>
+            {{ prompt_tools("") }}
             <label for="basename">Output name</label>
             <input type="text" id="basename" value="{{ state.basename }}"
                    placeholder="(workflow default)" />
@@ -278,6 +284,7 @@
             <select id="v-model"></select>
             <label for="v-prompt">Keep frames showing&hellip;</label>
             <textarea id="v-prompt" placeholder="a dog swimming in a pool"></textarea>
+            {{ prompt_tools("v-") }}
 
             <details id="v-advanced" style="margin-top:12px;">
                 <summary style="font-weight:600; color:#495057; cursor:pointer;">Search settings</summary>
@@ -319,7 +326,11 @@
             </div>
             <div id="v-result" style="display:none; margin-top:16px; text-align:center;">
                 <video id="v-result-player" controls preload="metadata" playsinline></video>
-                <a id="v-download" class="logout" href="#">Download</a>
+                <div class="pdb-path" id="v-saved"></div>
+            </div>
+            <button type="button" class="clear" id="v-clear">Clear</button>
+            <div class="flush-row">
+                <button type="button" class="flush" id="v-flush">Flush</button>
             </div>
         </div>
         {% endif %}
@@ -697,7 +708,7 @@
             output.innerHTML = ""; cropOutput.style.display = "none"; showError(""); showDuration(null); bar.style.width = "0%";
             // The server reset the prompt-DB selection too; re-sync the
             // library panel if it has been opened.
-            if (pdbLoaded) { pdbHost = ""; refreshPdb(); }
+            singlePromptTools.resync();
         });
 
         const restartBtn = document.getElementById("restart");
@@ -737,80 +748,6 @@
                 showError("flush failed: " + e.message);
             } finally {
                 setTimeout(() => { flushBtn.textContent = orig; flushBtn.disabled = false; }, 1500);
-            }
-        });
-
-        // --- Copy / Paste prompt helpers ---
-        const copyBtn = document.getElementById("copy-btn");
-        const pasteBtn = document.getElementById("paste-btn");
-        const promptTA = document.getElementById("prompt");
-
-        function flashCopied() {
-            const orig = copyBtn.innerHTML;
-            copyBtn.innerHTML = "&#10003; Copied!";
-            copyBtn.disabled = true;
-            setTimeout(() => { copyBtn.innerHTML = orig; copyBtn.disabled = false; }, 1200);
-        }
-
-        // Legacy execCommand copy. Must run synchronously inside the click
-        // gesture. iOS Safari ignores textarea.select(), so build an explicit
-        // Range/Selection and setSelectionRange after temporarily clearing
-        // readOnly/enabling contentEditable, or nothing gets selected and the
-        // copy silently no-ops.
-        function legacyCopy(el, text) {
-            const prevReadOnly = el.readOnly, prevCE = el.contentEditable;
-            el.readOnly = false;
-            el.contentEditable = "true";
-            const range = document.createRange();
-            range.selectNodeContents(el);
-            const sel = window.getSelection();
-            sel.removeAllRanges();
-            sel.addRange(range);
-            el.setSelectionRange(0, text.length);
-            let ok = false;
-            try { ok = document.execCommand("copy"); } catch (_) { ok = false; }
-            el.readOnly = prevReadOnly;
-            el.contentEditable = prevCE;
-            sel.removeAllRanges();
-            return ok;
-        }
-
-        copyBtn.addEventListener("click", () => {
-            const text = promptTA.value;
-            // navigator.clipboard exists only in a secure context (HTTPS). cozy
-            // is served over plain HTTP on the LAN, so on iOS Safari it is
-            // undefined and we must take the legacy path synchronously — an
-            // awaited rejection would run the fallback after the user gesture
-            // has expired, which iOS blocks.
-            if (window.isSecureContext && navigator.clipboard) {
-                navigator.clipboard.writeText(text)
-                    .then(flashCopied)
-                    .catch(() => { if (legacyCopy(promptTA, text)) flashCopied(); });
-            } else if (legacyCopy(promptTA, text)) {
-                flashCopied();
-            } else {
-                showError("Copy not supported here — long-press the prompt text and choose Copy.");
-            }
-        });
-
-        document.getElementById("clear-text-btn").addEventListener("click", () => {
-            promptTA.value = "";
-            promptTA.focus();
-        });
-
-        // Paste replaces the entire textarea value with clipboard content.
-        // Replacing is simpler and avoids cursor-position maths; consistent with
-        // how mobile "Select All → Paste" works when starting a new prompt.
-        pasteBtn.addEventListener("click", async () => {
-            try {
-                const text = await navigator.clipboard.readText();
-                promptTA.value = text;
-                promptTA.focus();
-            } catch (_) {
-                // readText() is unavailable (e.g. Firefox without permission, some
-                // mobile browsers). Guide the user to paste manually.
-                promptTA.focus();
-                showError("Clipboard read not supported — please use Ctrl/Cmd+V (desktop) or long-press → Paste (mobile) to paste into the prompt field.");
             }
         });
 
@@ -916,116 +853,204 @@
             browser.onPick(modalHost.value.trim(), res, modalFilter.value);
         });
 
-        // --- Prompt library ---
-        const pdbDetails = document.getElementById("pdb");
-        const pdbPathEl = document.getElementById("pdb-path");
-        const pdbSelect = document.getElementById("pdb-select");
-        const pdbFilter = document.getElementById("pdb-filter");
-        let pdbPrompts = [];
-        let pdbHost = "";
-        let pdbLoaded = false;
+        // --- Prompt tools (Copy / Paste / Clear text + prompt library) ---
+        // One instance per tab: p is the id prefix ("" Single, "v-" Video),
+        // promptTA the tab's prompt box, basenameEl its output-name field
+        // (a loaded prompt names the output), showErr its error sink.
+        // Returns resync(), for after the server reset the DB selection.
+        function wirePromptTools(p, promptTA, basenameEl, showErr) {
+            const $id = (id) => document.getElementById(p + id);
+            // --- Copy / Paste prompt helpers ---
+            const copyBtn = $id("copy-btn");
+            const pasteBtn = $id("paste-btn");
 
-        // `selected` names the entry to leave selected; omitted keeps whatever
-        // is selected now. Rebuilding innerHTML drops the browser's selection,
-        // which would silently drop the list back to whatever sorts first --
-        // so after a save the user would be looking at a different prompt than
-        // the one they just wrote.
-        function renderPdbPrompts(selected) {
-            const f = pdbFilter.value.toLowerCase();
-            const keep = selected != null ? selected : pdbSelect.value;
-            pdbSelect.innerHTML = pdbPrompts
-                .filter(n => !f || n.toLowerCase().includes(f))
-                .map(n => '<option value="' + escAttr(n) + '">' + escHtml(n) + '</option>')
-                .join("");
-            if (!keep) return;
-            pdbSelect.value = keep;
-            // Filtered out or deleted: assigning an absent value leaves the
-            // select showing nothing (value "", selectedIndex -1), so fall back
-            // to the first entry rather than a blank box.
-            if (pdbSelect.value !== keep && pdbSelect.options.length) {
-                pdbSelect.selectedIndex = 0;
+            function flashCopied() {
+                const orig = copyBtn.innerHTML;
+                copyBtn.innerHTML = "&#10003; Copied!";
+                copyBtn.disabled = true;
+                setTimeout(() => { copyBtn.innerHTML = orig; copyBtn.disabled = false; }, 1200);
             }
-        }
 
-        async function refreshPdb(selected) {
-            let d;
-            try {
-                const r = await fetch(root + "api/pdb/prompts");
-                d = await r.json();
-                if (!r.ok) {
-                    pdbPathEl.textContent = "⚠ " + (d.error || "prompt database unavailable");
-                    pdbPrompts = []; renderPdbPrompts(selected); return;
+            // Legacy execCommand copy. Must run synchronously inside the click
+            // gesture. iOS Safari ignores textarea.select(), so build an explicit
+            // Range/Selection and setSelectionRange after temporarily clearing
+            // readOnly/enabling contentEditable, or nothing gets selected and the
+            // copy silently no-ops.
+            function legacyCopy(el, text) {
+                const prevReadOnly = el.readOnly, prevCE = el.contentEditable;
+                el.readOnly = false;
+                el.contentEditable = "true";
+                const range = document.createRange();
+                range.selectNodeContents(el);
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+                el.setSelectionRange(0, text.length);
+                let ok = false;
+                try { ok = document.execCommand("copy"); } catch (_) { ok = false; }
+                el.readOnly = prevReadOnly;
+                el.contentEditable = prevCE;
+                sel.removeAllRanges();
+                return ok;
+            }
+
+            copyBtn.addEventListener("click", () => {
+                const text = promptTA.value;
+                // navigator.clipboard exists only in a secure context (HTTPS). cozy
+                // is served over plain HTTP on the LAN, so on iOS Safari it is
+                // undefined and we must take the legacy path synchronously — an
+                // awaited rejection would run the fallback after the user gesture
+                // has expired, which iOS blocks.
+                if (window.isSecureContext && navigator.clipboard) {
+                    navigator.clipboard.writeText(text)
+                        .then(flashCopied)
+                        .catch(() => { if (legacyCopy(promptTA, text)) flashCopied(); });
+                } else if (legacyCopy(promptTA, text)) {
+                    flashCopied();
+                } else {
+                    showErr("Copy not supported here — long-press the prompt text and choose Copy.");
                 }
-            } catch (e) { pdbPathEl.textContent = "⚠ " + e.message; return; }
-            pdbHost = d.db.host;
-            pdbPathEl.textContent = (d.db.host ? d.db.host + ":" : "") + d.db.path;
-            pdbPrompts = d.prompts;
-            renderPdbPrompts(selected);
-        }
+            });
 
-        pdbDetails.addEventListener("toggle", () => {
-            if (pdbDetails.open && !pdbLoaded) { pdbLoaded = true; refreshPdb(); }
-        });
+            $id("clear-text-btn").addEventListener("click", () => {
+                promptTA.value = "";
+                promptTA.focus();
+            });
 
-        document.getElementById("pdb-browse").addEventListener("click", () => {
-            openBrowser(pdbHost, "dir", "", async (host, path) => {
-                const r = await fetch(root + "api/pdb/select", {
-                    method: "POST", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ host: host, path: path }),
+            // Paste replaces the entire textarea value with clipboard content.
+            // Replacing is simpler and avoids cursor-position maths; consistent with
+            // how mobile "Select All → Paste" works when starting a new prompt.
+            pasteBtn.addEventListener("click", async () => {
+                try {
+                    const text = await navigator.clipboard.readText();
+                    promptTA.value = text;
+                    promptTA.focus();
+                } catch (_) {
+                    // readText() is unavailable (e.g. Firefox without permission, some
+                    // mobile browsers). Guide the user to paste manually.
+                    promptTA.focus();
+                    showErr("Clipboard read not supported — please use Ctrl/Cmd+V (desktop) or long-press → Paste (mobile) to paste into the prompt field.");
+                }
+            });
+
+            // --- Prompt library ---
+            const pdbDetails = $id("pdb");
+            const pdbPathEl = $id("pdb-path");
+            const pdbSelect = $id("pdb-select");
+            const pdbFilter = $id("pdb-filter");
+            let pdbPrompts = [];
+            let pdbHost = "";
+            let pdbLoaded = false;
+
+            // `selected` names the entry to leave selected; omitted keeps whatever
+            // is selected now. Rebuilding innerHTML drops the browser's selection,
+            // which would silently drop the list back to whatever sorts first --
+            // so after a save the user would be looking at a different prompt than
+            // the one they just wrote.
+            function renderPdbPrompts(selected) {
+                const f = pdbFilter.value.toLowerCase();
+                const keep = selected != null ? selected : pdbSelect.value;
+                pdbSelect.innerHTML = pdbPrompts
+                    .filter(n => !f || n.toLowerCase().includes(f))
+                    .map(n => '<option value="' + escAttr(n) + '">' + escHtml(n) + '</option>')
+                    .join("");
+                if (!keep) return;
+                pdbSelect.value = keep;
+                // Filtered out or deleted: assigning an absent value leaves the
+                // select showing nothing (value "", selectedIndex -1), so fall back
+                // to the first entry rather than a blank box.
+                if (pdbSelect.value !== keep && pdbSelect.options.length) {
+                    pdbSelect.selectedIndex = 0;
+                }
+            }
+
+            async function refreshPdb(selected) {
+                let d;
+                try {
+                    const r = await fetch(root + "api/pdb/prompts");
+                    d = await r.json();
+                    if (!r.ok) {
+                        pdbPathEl.textContent = "⚠ " + (d.error || "prompt database unavailable");
+                        pdbPrompts = []; renderPdbPrompts(selected); return;
+                    }
+                } catch (e) { pdbPathEl.textContent = "⚠ " + e.message; return; }
+                pdbHost = d.db.host;
+                pdbPathEl.textContent = (d.db.host ? d.db.host + ":" : "") + d.db.path;
+                pdbPrompts = d.prompts;
+                renderPdbPrompts(selected);
+            }
+
+            // The selected database is server state shared by both tabs, so
+            // re-read it on every open rather than only the first.
+            pdbDetails.addEventListener("toggle", () => {
+                if (pdbDetails.open) { pdbLoaded = true; refreshPdb(); }
+            });
+
+            $id("pdb-browse").addEventListener("click", () => {
+                openBrowser(pdbHost, "dir", "", async (host, path) => {
+                    const r = await fetch(root + "api/pdb/select", {
+                        method: "POST", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ host: host, path: path }),
+                    });
+                    if (!r.ok) { const d = await r.json().catch(() => ({})); showErr(d.error || "select failed"); return; }
+                    refreshPdb();
                 });
-                if (!r.ok) { const d = await r.json().catch(() => ({})); showError(d.error || "select failed"); return; }
+            });
+
+            $id("pdb-load").addEventListener("click", async () => {
+                if (!pdbSelect.value) return;
+                const r = await fetch(root + "api/pdb/prompt?name=" + encodeURIComponent(pdbSelect.value));
+                const d = await r.json();
+                if (!r.ok) { showErr(d.error || "load failed"); return; }
+                promptTA.value = d.text;
+                // The prompt name is the obvious thing to name its output after.
+                // Overwriting rather than only filling a blank field matches how the
+                // prompt text itself is replaced wholesale by a load. Prompt names
+                // satisfy the server's _NAME_RE, so this is always a valid basename.
+                basenameEl.value = d.name;
+            });
+
+            async function savePrompt(name) {
+                const r = await fetch(root + "api/pdb/prompt", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name: name, text: promptTA.value }),
+                });
+                if (!r.ok) { const d = await r.json().catch(() => ({})); showErr(d.error || "save failed"); return; }
+                basenameEl.value = name;
+                // "Save as…" can create a name the active filter excludes, which
+                // would leave it unselectable in the list it was just added to.
+                if (pdbFilter.value && !name.toLowerCase().includes(pdbFilter.value.toLowerCase())) {
+                    pdbFilter.value = "";
+                }
+                await refreshPdb(name);
+            }
+
+            $id("pdb-save").addEventListener("click", () => {
+                if (pdbSelect.value) savePrompt(pdbSelect.value);
+            });
+            $id("pdb-saveas").addEventListener("click", () => {
+                const name = prompt("Prompt name:");
+                if (name && name.trim()) savePrompt(name.trim());
+            });
+            $id("pdb-delete").addEventListener("click", async () => {
+                if (!pdbSelect.value) return;
+                if (!confirm('Delete prompt "' + pdbSelect.value + '"?')) return;
+                const r = await fetch(root + "api/pdb/delete", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name: pdbSelect.value }),
+                });
+                if (!r.ok) { const d = await r.json().catch(() => ({})); showErr(d.error || "delete failed"); return; }
                 refreshPdb();
             });
-        });
+            // Wrapped, not passed directly: the listener's Event argument would be
+            // read as `selected`.
+            pdbFilter.addEventListener("input", () => renderPdbPrompts());
 
-        document.getElementById("pdb-load").addEventListener("click", async () => {
-            if (!pdbSelect.value) return;
-            const r = await fetch(root + "api/pdb/prompt?name=" + encodeURIComponent(pdbSelect.value));
-            const d = await r.json();
-            if (!r.ok) { showError(d.error || "load failed"); return; }
-            promptTA.value = d.text;
-            // The prompt name is the obvious thing to name its output after.
-            // Overwriting rather than only filling a blank field matches how the
-            // prompt text itself is replaced wholesale by a load. Prompt names
-            // satisfy the server's _NAME_RE, so this is always a valid basename.
-            basenameInput.value = d.name;
-        });
-
-        async function savePrompt(name) {
-            const r = await fetch(root + "api/pdb/prompt", {
-                method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ name: name, text: promptTA.value }),
-            });
-            if (!r.ok) { const d = await r.json().catch(() => ({})); showError(d.error || "save failed"); return; }
-            basenameInput.value = name;
-            // "Save as…" can create a name the active filter excludes, which
-            // would leave it unselectable in the list it was just added to.
-            if (pdbFilter.value && !name.toLowerCase().includes(pdbFilter.value.toLowerCase())) {
-                pdbFilter.value = "";
-            }
-            await refreshPdb(name);
+            return { resync() { if (pdbLoaded) { pdbHost = ""; refreshPdb(); } } };
         }
-
-        document.getElementById("pdb-save").addEventListener("click", () => {
-            if (pdbSelect.value) savePrompt(pdbSelect.value);
-        });
-        document.getElementById("pdb-saveas").addEventListener("click", () => {
-            const name = prompt("Prompt name:");
-            if (name && name.trim()) savePrompt(name.trim());
-        });
-        document.getElementById("pdb-delete").addEventListener("click", async () => {
-            if (!pdbSelect.value) return;
-            if (!confirm('Delete prompt "' + pdbSelect.value + '"?')) return;
-            const r = await fetch(root + "api/pdb/delete", {
-                method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ name: pdbSelect.value }),
-            });
-            if (!r.ok) { const d = await r.json().catch(() => ({})); showError(d.error || "delete failed"); return; }
-            refreshPdb();
-        });
-        // Wrapped, not passed directly: the listener's Event argument would be
-        // read as `selected`.
-        pdbFilter.addEventListener("input", () => renderPdbPrompts());
+        const singlePromptTools = wirePromptTools("", document.getElementById("prompt"),
+                                                  basenameInput, showError);
+        window.wirePromptTools = wirePromptTools;
 
         // --- Upload an image into the input dir ---
         const uploadInput = document.getElementById("upload-image-input");

@@ -30,7 +30,9 @@
     const exportBtn = $("v-export");
     const resultWrap = $("v-result");
     const resultPlayer = $("v-result-player");
-    const downloadLink = $("v-download");
+    const savedEl = $("v-saved");
+    const clearBtn = $("v-clear");
+    const flushBtn = $("v-flush");
 
     const RUNNING = ["staging", "probing", "analyzing", "exporting"];
 
@@ -425,8 +427,9 @@
         }
         lastState = job.state;
         analyzeBtn.disabled = running;
-        cancelBtn.style.display = ["staging", "probing", "analyzing"].includes(job.state)
-            ? "inline-block" : "none";
+        cancelBtn.style.display = running ? "inline-block" : "none";
+        clearBtn.disabled = running;
+        flushBtn.disabled = running;
         paintError();
 
         progress.style.display = running ? "block" : "none";
@@ -460,8 +463,10 @@
         if (job.state === "done" && job.output) {
             const url = root + "api/video/result?v=" + encodeURIComponent(job.finished_at || "");
             if (resultPlayer.getAttribute("src") !== url) resultPlayer.src = url;
-            downloadLink.href = url;
-            downloadLink.textContent = "Download " + job.output.split("/").pop();
+            // The export stays where it was written; the output dir's
+            // .flush.sh picks it up with everything else.
+            savedEl.textContent = "Saved to the output folder as " + job.output +
+                " — Flush moves it off this machine with the rest of the output.";
             resultWrap.style.display = "block";
         } else {
             resultWrap.style.display = "none";
@@ -499,6 +504,62 @@
         if (job && job.prompt) promptEl.value = job.prompt;
         if (job && RUNNING.includes(job.state)) startPolling();
     }
+
+    // --- prompt tools, Clear, Flush ----------------------------------------------
+
+    // Same Copy / Paste / Clear text and prompt library (local or remote) as
+    // the Single tab; a loaded prompt names the exported video.
+    window.wirePromptTools("v-", promptEl, basenameEl, showError);
+
+    function resetView() {
+        promptEl.value = "";
+        basenameEl.value = "";
+        keep = []; keepFor = null; renderedFor = null;
+        review.style.display = "none";
+        resultWrap.style.display = "none";
+        resultPlayer.removeAttribute("src");
+        timeline.innerHTML = ""; segList.innerHTML = "";
+        showError("");
+    }
+
+    // Clear forgets the job (and its thumbnails); no file is touched.
+    clearBtn.addEventListener("click", async () => {
+        const r = await fetch(root + "api/video/clear", { method: "POST" });
+        if (!r.ok) {
+            const d = await r.json().catch(() => ({}));
+            showError(d.error || "clear failed");
+            return;
+        }
+        resetView();
+        sel.value = ""; pickLocal("");
+        refresh();
+    });
+
+    // Flush is the same as the Single tab's: the input/output .flush.sh
+    // scripts run, and input videos (uploads, top-level files) are deleted.
+    flushBtn.addEventListener("click", async () => {
+        if (!confirm("Flush the input and output directories? Input videos are deleted.")) return;
+        showError("");
+        const orig = flushBtn.textContent;
+        flushBtn.disabled = true;
+        flushBtn.textContent = "Flushing…";
+        try {
+            const r = await fetch(root + "api/flush", { method: "POST" });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok) showError(d.error || "flush failed");
+            else {
+                flushBtn.textContent = "✓ Flushed";
+                resetView();
+                await loadList("");
+                pickLocal("");
+                refresh();
+            }
+        } catch (e) {
+            showError("flush failed: " + e.message);
+        } finally {
+            setTimeout(() => { flushBtn.textContent = orig; flushBtn.disabled = false; }, 1500);
+        }
+    });
 
     window.cozyVideo = {
         shown(on) {

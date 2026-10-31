@@ -103,6 +103,9 @@ _MAX_REMOTE_IMAGE_BYTES = 50 * 1024 * 1024
 # also the cap Flask enforces on any request body (see MAX_CONTENT_LENGTH).
 _MAX_UPLOAD_BYTES = _MAX_REMOTE_IMAGE_BYTES
 
+# Where Video tab uploads land under the input dir; Flush deletes it.
+VIDEO_UPLOADS = "video-uploads"
+
 
 def _write_new_file(directory, name, data):
     """Write data into directory as name, or name_2/name_3... if taken.
@@ -798,11 +801,28 @@ def create_app(store, workflows, workflow_dir, username, subdomain="/cozy",
     @bp.route("/api/flush", methods=["POST"])
     @flask_login.login_required
     def flush():
+        # Deleting inputs under a running video job would pull its source out
+        # from under ffmpeg.
+        if video_store is not None and video_store.busy():
+            return flask.jsonify({"error": "a video job is running; cancel it first"}), 409
         # Staged remote images and staged crops are cozy's own artifacts; remove
         # them here rather than assuming the admin .flush.sh scripts recurse into
-        # subdirectories.
-        for sub in ("wormhole", crop.CROP_SUBDIR, fit.SUBDIR):
+        # subdirectories. Staged remote videos live under wormhole/ too.
+        for sub in ("wormhole", crop.CROP_SUBDIR, fit.SUBDIR, VIDEO_UPLOADS):
             shutil.rmtree(os.path.join(input_dir, sub), ignore_errors=True)
+        # Input videos are deleted outright, as the input script does to
+        # images (after uploading them). Only the top level: subdirectories
+        # of the input dir are not cozy's to empty.
+        try:
+            for name in os.listdir(input_dir):
+                full = os.path.join(input_dir, name)
+                if name.lower().endswith(image_refs.VIDEO_EXTS) and os.path.isfile(full):
+                    os.remove(full)
+        except OSError:
+            pass
+        # The video job's source may just have been deleted.
+        if video_store is not None:
+            video_store.clear()
         # Run a .flush.sh (if present) in the input and output dirs. The scripts
         # are placed there out-of-band by the admin; a missing one is a no-op, so
         # the button is always available and simply flushes whatever is wired up.
@@ -862,7 +882,7 @@ def _add_video_routes(bp, vstore, input_dir, output_dir):
         name = image_refs.safe_upload_name(f.filename, image_refs.VIDEO_EXTS)
         if name is None:
             return _err("unsupported video type")
-        sub = "video-uploads"
+        sub = VIDEO_UPLOADS
         try:
             os.makedirs(os.path.join(input_dir, sub), exist_ok=True)
             rel = _write_new_file(os.path.join(input_dir, sub), name, f.stream)
@@ -930,6 +950,13 @@ def _add_video_routes(bp, vstore, input_dir, output_dir):
     def video_status():
         return flask.jsonify(vstore.read())
 
+    @bp.route("/api/video/clear", methods=["POST"])
+    @flask_login.login_required
+    def video_clear():
+        if not vstore.clear():
+            return _err("a video job is running; cancel it first", 409)
+        return flask.jsonify({"ok": True})
+
     @bp.route("/api/video/cancel", methods=["POST"])
     @flask_login.login_required
     def video_cancel():
@@ -971,9 +998,9 @@ def _add_video_routes(bp, vstore, input_dir, output_dir):
         path = vstore.output_path()
         if not path:
             return _err("no result", 404)
-        return flask.send_file(path, mimetype="video/mp4", as_attachment=True,
-                               download_name=os.path.basename(path),
-                               conditional=True)
+        # Inline, for the tab's preview player: the export itself stays in
+        # the output dir, where the output .flush.sh picks it up.
+        return flask.send_file(path, mimetype="video/mp4", conditional=True)
 
 
 def run():

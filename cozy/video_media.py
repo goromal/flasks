@@ -33,6 +33,30 @@ def _run(argv, timeout=None):
     return proc.stdout
 
 
+def _run_stoppable(argv, should_stop, poll_s=0.2):
+    """Run argv to completion like _run, killing it once should_stop()."""
+    import tempfile
+    with tempfile.TemporaryFile() as err:
+        try:
+            proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=err)
+        except OSError as e:
+            raise MediaError("cannot run %s: %s" % (argv[0], e))
+        while True:
+            if should_stop():
+                proc.kill()
+                proc.wait()
+                raise MediaError("cancelled")
+            try:
+                rc = proc.wait(timeout=poll_s)
+                break
+            except subprocess.TimeoutExpired:
+                continue
+        if rc != 0:
+            err.seek(0)
+            msg = err.read().decode("utf-8", errors="replace").strip()
+            raise MediaError(msg.splitlines()[-1] if msg else "%s failed" % argv[0])
+
+
 def _fps(rate):
     try:
         num, den = rate.split("/")
@@ -116,15 +140,21 @@ def export_argv(path, segments, dest, has_audio):
     return argv
 
 
-def export(path, segments, dest, has_audio):
+def export(path, segments, dest, has_audio, should_stop=None):
     """Write the concatenation of ``segments`` ([{start, end}] in seconds)
     to ``dest`` as H.264/AAC MP4. Written to a temp name and renamed, so a
-    failed export never leaves a truncated file where the picker sees it."""
+    failed or cancelled export never leaves a truncated file where the
+    picker sees it. ``should_stop()`` is polled while ffmpeg runs; when it
+    turns true, ffmpeg is killed and MediaError("cancelled") raised."""
     if not segments:
         raise MediaError("nothing to export")
     part = dest + ".part"
     try:
-        _run(export_argv(path, segments, part, has_audio))
+        argv = export_argv(path, segments, part, has_audio)
+        if should_stop is None:
+            _run(argv)
+        else:
+            _run_stoppable(argv, should_stop)
         os.replace(part, dest)
     finally:
         if os.path.exists(part):
