@@ -6,7 +6,8 @@ must satisfy (normalize_rect), writing the cropped file ComfyUI's LoadImage
 will read (stage), and pasting the model's result back into the original
 (composite).
 
-Rectangles are dicts -- {"x", "y", "w", "h"} -- in SOURCE-IMAGE pixels. That is
+Rectangles are dicts -- {"x", "y", "w", "h"} -- in SOURCE-IMAGE pixels, of the
+source as displayed (EXIF orientation applied; see fit.upright). That is
 the shape the browser sends, the shape persisted in state.json and queue.json,
 and the shape these functions take, so there is no conversion anywhere.
 
@@ -96,7 +97,7 @@ def plan(src_path, rect, max_bytes):
     """
     x, y = rect["x"], rect["y"]
     with Image.open(src_path) as src:
-        patch = src.convert("RGB").crop((x, y, x + rect["w"], y + rect["h"]))
+        patch = fit.upright(src).convert("RGB").crop((x, y, x + rect["w"], y + rect["h"]))
     return fit.fit(patch, max_bytes)
 
 
@@ -154,7 +155,7 @@ def composite(src_path, rect, edited_bytes, scale=1.0):
     truth, which is what makes JobStore's crash recovery still work.
     """
     with Image.open(src_path) as src:
-        base = src.convert("RGB")
+        base = fit.upright(src).convert("RGB")
         if scale != 1.0:
             base = base.resize((max(int(round(base.width * scale)), 1),
                                 max(int(round(base.height * scale)), 1)),

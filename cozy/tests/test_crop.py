@@ -276,3 +276,47 @@ def test_stage_disabled_budget_still_writes_png(tmp_path):
                           {"x": 0, "y": 0, "w": 512, "h": 512}, 0)
     assert rel.endswith(".png")
     assert res.resized is False
+
+
+def _rotated_jpeg(path):
+    """A 200x100 raster stored sideways: EXIF orientation 6 displays it as
+    100x200, rotated 90 degrees clockwise. The stored left half is red, so
+    once upright the TOP half is red and the bottom half is blue."""
+    img = Image.new("RGB", (200, 100), (0, 0, 255))
+    img.paste((255, 0, 0), (0, 0, 100, 100))
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    img.save(path, "JPEG", quality=95, exif=exif)
+
+
+def _close(px, want):
+    return all(abs(a - b) < 40 for a, b in zip(px, want))
+
+
+def test_plan_crops_the_upright_image_the_browser_shows(tmp_path):
+    src = str(tmp_path / "phone.jpg")
+    _rotated_jpeg(src)
+    # Bottom 64px of the displayed 100x200 image: blue, and portrait-framed.
+    res = crop.plan(src, {"x": 0, "y": 136, "w": 64, "h": 64}, 0)
+    with Image.open(io.BytesIO(res.data)) as patch:
+        assert patch.size == (64, 64)
+        assert _close(patch.convert("RGB").getpixel((32, 32)), (0, 0, 255))
+    res = crop.plan(src, {"x": 0, "y": 0, "w": 96, "h": 64}, 0)
+    with Image.open(io.BytesIO(res.data)) as patch:
+        assert patch.size == (96, 64)
+        assert _close(patch.convert("RGB").getpixel((48, 32)), (255, 0, 0))
+
+
+def test_composite_is_upright(tmp_path):
+    src = str(tmp_path / "phone.jpg")
+    _rotated_jpeg(src)
+    green = io.BytesIO()
+    Image.new("RGB", (64, 64), (0, 255, 0)).save(green, "PNG")
+    out = crop.composite(src, {"x": 0, "y": 136, "w": 64, "h": 64},
+                         green.getvalue())
+    with Image.open(io.BytesIO(out)) as img:
+        img = img.convert("RGB")
+        assert img.size == (100, 200)
+        assert _close(img.getpixel((50, 20)), (255, 0, 0))
+        assert _close(img.getpixel((32, 168)), (0, 255, 0))
+        assert _close(img.getpixel((90, 168)), (0, 0, 255))

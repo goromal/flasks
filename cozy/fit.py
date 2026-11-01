@@ -22,7 +22,7 @@ import os
 import uuid
 from collections import namedtuple
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 # 1 MiB. Also the argparse and NixOS default, so the three cannot drift.
 DEFAULT_MAX_BYTES = 1024 * 1024
@@ -52,6 +52,19 @@ SUBDIR = "fit"
 # is scale != 1.0, i.e. whether dimensions actually changed -- a re-encode at
 # full size is not a resize and must not be reported as one.
 FitResult = namedtuple("FitResult", "data ext size scale resized")
+
+
+def upright(img):
+    """The raster as it is displayed: EXIF orientation applied.
+
+    Browsers rotate a phone JPEG by its orientation tag, so the preview the
+    user drags a crop on is upright. Pillow does not rotate on load, and every
+    encode in cozy drops EXIF, so anything decoded for re-encoding must go
+    through here first -- otherwise the crop is cut from the sideways raster
+    and the model, the composite, and the output dir all receive the photo on
+    its side. A no-op when the tag is absent or 1.
+    """
+    return ImageOps.exif_transpose(img)
 
 
 def _encode(img, fmt):
@@ -162,10 +175,15 @@ def plan(src_path, max_bytes):
     is computed by exactly the code that will run.
     """
     if _fits_file(src_path, max_bytes):
+        # Passed through untouched: LoadImage applies the tag itself, so the
+        # size it ends up with is the upright one.
         with Image.open(src_path) as src:
-            return FitResult(None, "", src.size, 1.0, False)
+            size = src.size
+            if src.getexif().get(0x0112) in (5, 6, 7, 8):
+                size = size[::-1]
+            return FitResult(None, "", size, 1.0, False)
     with Image.open(src_path) as src:
-        return fit(src, max_bytes)
+        return fit(upright(src), max_bytes)
 
 
 def stage_whole(input_dir, src_path, max_bytes):
@@ -182,5 +200,5 @@ def stage_whole(input_dir, src_path, max_bytes):
     if _fits_file(src_path, max_bytes):
         return None, None
     with Image.open(src_path) as src:
-        res = fit(src, max_bytes)
+        res = fit(upright(src), max_bytes)
     return stage(input_dir, res), res
