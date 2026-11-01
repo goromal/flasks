@@ -53,12 +53,13 @@ button { font: inherit; color: inherit; cursor: pointer; }
     flex: 1; min-width: 0; text-align: left; background: none; border: 0; padding: 4px 0;
     display: flex; flex-direction: column;
 }
-.list .open b { font-weight: 600; color: var(--text); }
+.list .open b { font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
 .list .open small { color: var(--muted); font-size: 12px; }
-.list .kill {
+.list .kill, .list .rename {
     flex: none; width: 32px; height: 32px; border-radius: 6px; border: 1px solid var(--line);
     background: transparent; color: var(--muted);
 }
+.list .rename:hover { color: var(--text); border-color: var(--accent); }
 .list .kill:hover { color: var(--bad); border-color: var(--bad); }
 .list .empty { border: 0; color: var(--muted); padding: 4px 0; background: none; box-shadow: none; }
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -97,7 +98,8 @@ body.in-session .anix-page-controls { display: none !important; }  /* theirs is 
     .list { flex-direction: row; }
     .list li { flex: none; padding: 2px 4px 2px 8px; }
     .list .open small { display: none; }
-    .list .kill { width: 28px; height: 28px; }
+    .list .open b { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .list .kill, .list .rename { width: 28px; height: 28px; }
     .sb-status { max-width: 60vw; }
     .sb-status .pre { display: none; }
 }

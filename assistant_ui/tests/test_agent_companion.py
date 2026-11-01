@@ -79,7 +79,7 @@ class RepoSessionsTest(unittest.TestCase):
 
     def test_list_filters_and_parses(self):
         out = (
-            "assistant-agent--claude--0123abcd\t111\t1\n"
+            "assistant-agent--claude--0123abcd\t111\t1\tWeekly\ttriage\n"
             "assistant-agent--codex--89abcdef\t222\t0\n"
             "assistant-agent--gemini--0123abcd\t333\t0\n"
             "budget-agent--claude--0123abcd\t444\t0\n"
@@ -90,7 +90,8 @@ class RepoSessionsTest(unittest.TestCase):
         self.assertEqual([r["name"] for r in rows],
                          ["assistant-agent--codex--89abcdef", "assistant-agent--claude--0123abcd"])
         self.assertEqual(rows[1], {"name": "assistant-agent--claude--0123abcd", "agent": "claude",
-                                   "created": 111, "attached": 1})
+                                   "created": 111, "attached": 1, "title": "Weekly\ttriage"})
+        self.assertEqual(rows[0]["title"], "")
 
     def test_list_returns_empty_on_nonzero_returncode(self):
         subprocess.run = self._fake_run(_Result(returncode=1))
@@ -104,6 +105,24 @@ class RepoSessionsTest(unittest.TestCase):
         self.assertIn(["tmux", "-L", "assistant-agent", "kill-session", "-t", name], self.calls)
         with open(os.path.join(self.repo, "sentinel.md")) as handle:
             self.assertEqual(handle.read(), "keep me\n")
+
+    def test_rename_sets_and_clears_tmux_title(self):
+        subprocess.run = self._fake_run()
+        mgr = self._mgr()
+        name = mgr.spawn("claude")
+        self.assertEqual(mgr.rename(name, "  Weekly\n\ttriage\x07 "), "Weekly triage")
+        self.assertEqual(self.calls[-1], ["tmux", "-L", "assistant-agent", "set-option", "-t",
+                                          name, "@title", "Weekly triage"])
+        self.assertEqual(mgr.rename(name, "   "), "")
+        self.assertEqual(self.calls[-1], ["tmux", "-L", "assistant-agent", "set-option", "-t",
+                                          name, "-u", "@title"])
+        self.assertEqual(len(mgr.rename(name, "x" * 500)), 80)
+
+    def test_rename_rejects_bad_names(self):
+        subprocess.run = self._fake_run()
+        with self.assertRaises(ValueError):
+            self._mgr().rename("budget-agent--claude--0123abcd", "x")
+        self.assertEqual(self.calls, [])
 
     def test_kill_rejects_bad_and_foreign_names(self):
         subprocess.run = self._fake_run()
@@ -173,6 +192,7 @@ class FakeSessions:
         self.agents = ("claude", "codex")
         self.active = []
         self.killed = []
+        self.titles = {}
 
     def list(self):
         return list(self.active)
@@ -183,6 +203,12 @@ class FakeSessions:
         name = f"assistant-agent--{agent}--0123abcd"
         self.active.append({"name": name, "agent": agent, "created": 1, "attached": 0})
         return name
+
+    def rename(self, name, title):
+        if not SESSION_RE.fullmatch(name):
+            raise ValueError("bad name")
+        self.titles[name] = title.strip()
+        return self.titles[name]
 
     def kill(self, name):
         if not SESSION_RE.fullmatch(name):
@@ -240,6 +266,13 @@ class AgentApiTest(unittest.TestCase):
         self.assertEqual(
             client.post("/assistant/agent/sessions", json={"agent": "gemini"},
                         headers=hdr).status_code, 400)
+        title_url = f"/assistant/agent/sessions/{name}/title"
+        self.assertEqual(client.put(title_url, json={"title": "Plan"}).status_code, 403)
+        renamed = client.put(title_url, json={"title": " Plan "}, headers=hdr)
+        self.assertEqual((renamed.status_code, renamed.get_json()), (200, {"title": "Plan"}))
+        self.assertEqual(sessions.titles[name], "Plan")
+        self.assertEqual(client.put("/assistant/agent/sessions/nope/title", json={"title": "x"},
+                                    headers=hdr).status_code, 400)
         self.assertEqual(client.delete(f"/assistant/agent/sessions/{name}").status_code, 403)
         self.assertEqual(
             client.delete(f"/assistant/agent/sessions/{name}", headers=hdr).status_code, 204)

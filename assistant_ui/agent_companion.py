@@ -21,6 +21,7 @@ from werkzeug.security import check_password_hash
 SOCKET = "assistant-agent"
 COOKIE = "assistant_agent_session"
 SAFE_AGENT = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]*$")
+TITLE_MAX = 80
 SESSION_RE = re.compile(
     r"^assistant-agent--(?P<agent>[A-Za-z0-9_][A-Za-z0-9_-]*)--(?P<id>[0-9a-f]{8})$"
 )
@@ -64,7 +65,7 @@ class RepoSessions:
             result = subprocess.run(
                 self._base() + [
                     "list-sessions", "-F",
-                    "#{session_name}\t#{session_created}\t#{session_attached}",
+                    "#{session_name}\t#{session_created}\t#{session_attached}\t#{@title}",
                 ],
                 check=False, capture_output=True, text=True, timeout=10,
             )
@@ -74,16 +75,18 @@ class RepoSessions:
             return []
         rows = []
         for line in result.stdout.splitlines():
+            parts = line.split("\t", 3)
             try:
-                name, created, attached = line.split("\t")
+                name, created, attached = parts[:3]
                 created_i, attached_i = int(created), int(attached)
             except ValueError:
                 continue
+            title = parts[3] if len(parts) > 3 else ""
             match = SESSION_RE.fullmatch(name)
             if not match or match.group("agent") not in self.agents:
                 continue
             rows.append({"name": name, "agent": match.group("agent"),
-                         "created": created_i, "attached": attached_i})
+                         "created": created_i, "attached": attached_i, "title": title})
         return sorted(rows, key=lambda r: r["created"], reverse=True)
 
     def spawn(self, agent):
@@ -97,12 +100,31 @@ class RepoSessions:
         subprocess.run(command, check=True, timeout=10)
         return name
 
-    def kill(self, name):
+    def _check_name(self, name):
         match = SESSION_RE.fullmatch(name)
         if not match or match.group("agent") not in self.agents:
             raise ValueError("invalid session name")
+
+    def rename(self, name, title):
+        """Store a display title as a tmux user option, so it lives exactly as long as
+        the session. An empty title clears it (the UI falls back to agent + id)."""
+        self._check_name(name)
+        title = clean_title(title)
+        command = self._base() + ["set-option", "-t", name]
+        command += ["@title", title] if title else ["-u", "@title"]
+        subprocess.run(command, check=True, timeout=10)
+        return title
+
+    def kill(self, name):
+        self._check_name(name)
         # The checkout is shared and durable: never remove anything here.
         subprocess.run(self._base() + ["kill-session", "-t", name], check=False, timeout=10)
+
+
+def clean_title(title):
+    """Collapse whitespace (tabs/newlines would break list parsing) and drop control chars."""
+    title = "".join(ch for ch in str(title) if ch.isprintable() or ch.isspace())
+    return " ".join(title.split())[:TITLE_MAX]
 
 
 def repo_status(repo_dir, git_bin="git"):
@@ -193,6 +215,19 @@ def create_agent_blueprint(auth, sessions, url_prefix, cookie_path, status,
         except ValueError:
             abort(400)
         return jsonify({"name": name})
+
+    @bp.put("/sessions/<name>/title")
+    def rename_session(name):
+        require_auth()
+        require_csrf()
+        body = request.get_json(silent=True) or {}
+        try:
+            title = sessions.rename(name, body.get("title", ""))
+        except ValueError:
+            abort(400)
+        except (OSError, subprocess.SubprocessError):
+            abort(404)
+        return jsonify({"title": title})
 
     @bp.delete("/sessions/<name>")
     def kill_session(name):
