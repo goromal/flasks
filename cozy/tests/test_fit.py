@@ -154,3 +154,22 @@ def test_stage_whole_never_decodes_a_file_that_fits(tmp_path):
     src.write_bytes(b"\x89PNG\r\n")
     rel, res = fit.stage_whole(str(indir), str(src), 1024 * 1024)
     assert (rel, res) == (None, None)
+
+
+def _rotated_noisy_jpeg(path, size):
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    _noisy(size).save(path, "JPEG", quality=95, exif=exif)
+
+
+def test_plan_reports_and_stages_the_upright_image(tmp_path):
+    # A refit drops EXIF, so the raster it encodes must already be upright or
+    # LoadImage receives the photo on its side.
+    p = tmp_path / "phone.jpg"
+    _rotated_noisy_jpeg(p, (400, 200))
+    res = fit.plan(str(p), 1024 * 1024 * 64)
+    assert res.size == (200, 400)
+    res = fit.plan(str(p), 20 * 1024)
+    assert res.size[0] < res.size[1]
+    with Image.open(io.BytesIO(res.data)) as img:
+        assert img.size == res.size
