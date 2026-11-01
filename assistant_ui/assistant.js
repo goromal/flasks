@@ -487,10 +487,16 @@
       return;
     }
     list.replaceChildren(...sessions.map((s) => {
+      const fallback = label(s.agent) + ' · ' + shortId(s.name);
       const openBtn = el('button', { type: 'button', className: 'open' },
-        el('b', { textContent: label(s.agent) + ' · ' + shortId(s.name) }),
-        el('small', { textContent: age(s.created) + (s.attached ? ' · attached' : '') }));
+        el('b', { textContent: s.title || fallback }),
+        el('small', { textContent: (s.title ? fallback + ' · ' : '') + age(s.created) + (s.attached ? ' · attached' : '') }));
+      openBtn.title = s.title ? s.title + ' (' + fallback + ')' : fallback;
       openBtn.addEventListener('click', () => open(s.name));
+      const renameBtn = el('button', { type: 'button', className: 'rename', textContent: '✎' });
+      renameBtn.title = 'Rename this session';
+      renameBtn.setAttribute('aria-label', 'Rename session ' + (s.title || shortId(s.name)));
+      renameBtn.addEventListener('click', () => rename(s));
       const kill = el('button', { type: 'button', className: 'kill', textContent: '✕' });
       kill.title = 'End this session';
       kill.setAttribute('aria-label', 'End session ' + shortId(s.name));
@@ -503,8 +509,23 @@
         if (!current) idle();
         refreshRepo();
       });
-      return el('li', { className: s.name === current ? 'active' : '' }, openBtn, kill);
+      return el('li', { className: s.name === current ? 'active' : '' }, openBtn, renameBtn, kill);
     }));
+  }
+
+  // window.prompt is the native text dialog on both desktop and phones.
+  async function rename(s) {
+    const title = window.prompt('Session title (leave empty to reset):', s.title || '');
+    if (title === null || title.trim() === (s.title || '')) return;
+    try {
+      const res = await api('/sessions/' + encodeURIComponent(s.name) + '/title',
+        { method: 'PUT', body: JSON.stringify({ title }) });
+      s.title = res.title;
+      renderList();
+    } catch {
+      window.alert('Could not rename the session.');
+    }
+    refreshSessions();
   }
 
   async function refreshSessions() {
