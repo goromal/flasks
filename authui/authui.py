@@ -38,6 +38,13 @@ GENERATOR_CONFIGS = {
         "secrets_file": expanduser_for("andrew", GPD.getKwargsOrDefault("gmail_secrets_json")),
         "refresh_token": expanduser_for("andrew", GPD.getKwargsOrDefault("gmail_refresh_file")),
     },
+    # Separate token so that adding a scope doesn't invalidate the shared one
+    "calendar": {
+        "name": "Calendar",
+        "secrets_file": expanduser_for("andrew", GPD.getKwargsOrDefault("gmail_secrets_json")),
+        "refresh_token": expanduser_for("andrew", "~/secrets/google/calendar_refresh.json"),
+        "scope": ["https://www.googleapis.com/auth/calendar.events"],
+    },
     # "bot": {
     #     "name": "Bot",
     #     "secrets_file": expanduser_for("andrew", GPD.getKwargsOrDefault("gmail_secrets_json")),
@@ -92,7 +99,8 @@ def index():
         for key, cfg in GENERATOR_CONFIGS.items():
             generators[key] = HeadlessCredentialsGenerator(
                 secrets_file=cfg["secrets_file"],
-                refresh_token=cfg["refresh_token"]
+                refresh_token=cfg["refresh_token"],
+                scope=cfg.get("scope"),
             )
         generators_initialized = True
         if args.init_script is not None:
