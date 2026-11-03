@@ -255,8 +255,8 @@ $("cancel-btn").onclick = () => {
 
 // ── Full-screen email viewer ────────────────────────────────────────────────
 function viewUrl(entry) {
-  return subdomain + "/archives/view?label=" + encodeURIComponent(entry.label) +
-         "&id=" + encodeURIComponent(entry.id);
+  return subdomain + "/archives/" + encodeURIComponent(entry.label) + "/" +
+         encodeURIComponent(entry.id) + ".html";
 }
 function openViewer(entry) {
   const url = viewUrl(entry);

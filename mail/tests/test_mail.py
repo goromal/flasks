@@ -146,14 +146,15 @@ def test_archive_view_returns_html(tmp_path):
     client = make_client(tmp_path)
     root = str(tmp_path / "gmail")
     write_archive(root, "News", "m1", body="<p>unique-body-xyz</p>")
-    resp = client.get("/archives/view?label=News&id=m1")
+    resp = client.get("/archives/view?label=News&id=m1", follow_redirects=True)
     assert resp.status_code == 200
     assert b"unique-body-xyz" in resp.data
 
 
 def test_archive_view_missing_returns_404(tmp_path):
     client = make_client(tmp_path)
-    assert client.get("/archives/view?label=News&id=ghost").status_code == 404
+    assert client.get("/archives/view?label=News&id=ghost",
+                      follow_redirects=True).status_code == 404
 
 
 def test_archive_delete_removes_files(tmp_path):
@@ -178,3 +179,61 @@ def test_fuzzy_match_subsequence():
 
 def test_fuzzy_match_is_case_insensitive():
     assert fuzzy_match("WD", "weekly digest") is True
+
+
+def _write_attachment(root, label, id, name, data):
+    directory = os.path.join(root, label, id)
+    os.makedirs(directory, exist_ok=True)
+    with open(os.path.join(directory, name), "wb") as f:
+        f.write(data)
+
+
+def test_archive_view_legacy_url_redirects_to_path_style(tmp_path):
+    client = make_client(tmp_path)
+    resp = client.get("/archives/view?label=News&id=m1")
+    assert resp.status_code in (301, 302)
+    assert resp.headers["Location"].endswith("/archives/News/m1.html")
+
+
+def test_archive_path_style_view_serves_html(tmp_path):
+    client = make_client(tmp_path)
+    write_archive(str(tmp_path / "gmail"), "News", "m1", body="<p>path-style</p>")
+    resp = client.get("/archives/News/m1.html")
+    assert resp.status_code == 200
+    assert resp.mimetype == "text/html"
+    assert b"path-style" in resp.data
+
+
+def test_archive_attachment_pdf_served_inline(tmp_path):
+    client = make_client(tmp_path)
+    root = str(tmp_path / "gmail")
+    write_archive(root, "Grayson", "m1")
+    _write_attachment(root, "Grayson", "m1", "report card.pdf", b"%PDF-1.4")
+    resp = client.get("/archives/Grayson/m1/report%20card.pdf")
+    assert resp.status_code == 200
+    assert resp.mimetype == "application/pdf"
+    assert resp.data == b"%PDF-1.4"
+    assert "attachment" not in resp.headers.get("Content-Disposition", "")
+
+
+def test_archive_attachment_html_forced_to_download(tmp_path):
+    client = make_client(tmp_path)
+    root = str(tmp_path / "gmail")
+    _write_attachment(root, "News", "m1", "page.html", b"<script>alert(1)</script>")
+    resp = client.get("/archives/News/m1/page.html")
+    assert resp.status_code == 200
+    assert resp.headers["Content-Disposition"].startswith("attachment")
+
+
+def test_archive_attachment_missing_returns_404(tmp_path):
+    client = make_client(tmp_path)
+    assert client.get("/archives/News/m1/ghost.pdf").status_code == 404
+
+
+def test_archive_attachment_rejects_path_escape(tmp_path):
+    client = make_client(tmp_path)
+    secret = tmp_path / "secret.txt"
+    secret.write_text("nope")
+    resp = client.get("/archives/News/..%2F..%2Fsecret.txt")
+    assert resp.status_code in (400, 404)
+    assert b"nope" not in resp.data
