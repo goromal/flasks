@@ -1,4 +1,5 @@
 import argparse
+import mimetypes
 import os
 import subprocess
 
@@ -7,9 +8,11 @@ from flask import (
     Flask,
     Response,
     jsonify,
+    redirect,
     render_template,
     request,
     send_file,
+    url_for,
 )
 
 from gmail_parser.rules import Action, Rule, parse_rules, serialize_rules
@@ -41,6 +44,21 @@ def _archive_path(archive_root, label, id):
     root_abs = os.path.abspath(archive_root)
     path = os.path.abspath(os.path.join(root_abs, label, id + ".html"))
     if os.path.commonpath([root_abs, path]) != root_abs:
+        raise ValueError("archive path escapes root")
+    return path
+
+
+# Attachment types safe to render in the browser; anything else (e.g. HTML or
+# SVG that could run script on this origin) is served as a download.
+INLINE_ATTACHMENT_TYPES = {"application/pdf", "text/plain", "image/png", "image/jpeg",
+                           "image/gif", "image/webp"}
+
+
+def _within(root, *parts):
+    """Join parts under root, refusing anything that resolves outside it."""
+    root_abs = os.path.abspath(root)
+    path = os.path.abspath(os.path.join(root_abs, *parts))
+    if os.path.commonpath([root_abs, path]) != root_abs or path == root_abs:
         raise ValueError("archive path escapes root")
     return path
 
@@ -159,15 +177,31 @@ def create_app(subdomain="", gmail_bin="gmail-manager", config_path=DEFAULT_CONF
 
     @bp.route("/archives/view")
     def archive_view():
+        # Legacy query-string URL: redirect to the path-style URL so the
+        # archive's relative attachment links resolve.
         label = request.args.get("label", "")
         id = request.args.get("id", "")
+        return redirect(url_for("mail.archive_file", label=label, rest=id + ".html"))
+
+    @bp.route("/archives/<label>/<path:rest>")
+    def archive_file(label, rest):
         try:
-            path = _archive_path(archive_root, label, id)
+            if "/" not in rest and rest.endswith(".html"):
+                path = _archive_path(archive_root, label, rest[: -len(".html")])
+                mimetype, download = "text/html", False
+            else:
+                id, _, name = rest.partition("/")
+                if not id or not name or "/" in name:
+                    return "not found", 404
+                path = _within(archive_root, label, id, name)
+                mimetype = mimetypes.guess_type(name)[0] or "application/octet-stream"
+                download = mimetype not in INLINE_ATTACHMENT_TYPES
         except ValueError:
             return "invalid path", 400
         if not os.path.isfile(path):
             return "not found", 404
-        return send_file(path, mimetype="text/html")
+        return send_file(path, mimetype=mimetype, as_attachment=download,
+                         download_name=os.path.basename(path))
 
     @bp.route("/archives/delete", methods=["POST"])
     def archive_delete():
