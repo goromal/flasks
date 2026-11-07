@@ -102,9 +102,9 @@ def _render_video(source, output, operations):
             points = operation['points']
         else:
             raise ValueError(f'Unsupported video edit: {kind}')
-    command = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-i', source]
+    command = ['ffmpeg', '-hide_banner', '-loglevel', 'error']
     if points is None:
-        command += ['-vf', ','.join(filters), '-c:a', 'copy']
+        command += ['-i', source, '-vf', ','.join(filters), '-c:a', 'copy']
     else:
         segments = _segments(points, duration)
         probe = subprocess.run(
@@ -112,12 +112,18 @@ def _render_video(source, output, operations):
              '-of', 'default=noprint_wrappers=1', source], capture_output=True, text=True
         )
         has_audio = 'codec_type=audio' in probe.stdout
+        # Open the source once per segment with input seeking, so ffmpeg decodes
+        # only from the keyframe before each start through that segment's end.
+        # Trim filters on a single input instead decode (and crop/rotate) the
+        # whole video once per segment and discard the frames outside it. Input
+        # seeking stays frame-accurate because the output is re-encoded.
         parts = []
         for index, (start, end) in enumerate(segments):
-            video_filters = filters + [f'trim=start={start}:end={end}', 'setpts=PTS-STARTPTS']
-            parts.append(f"[0:v]{','.join(video_filters)}[v{index}]")
+            command += ['-ss', f'{start:.6f}', '-t', f'{end - start:.6f}', '-i', source]
+            video_filters = filters + ['setpts=PTS-STARTPTS']
+            parts.append(f"[{index}:v]{','.join(video_filters)}[v{index}]")
             if has_audio:
-                parts.append(f'[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS[a{index}]')
+                parts.append(f'[{index}:a]asetpts=PTS-STARTPTS[a{index}]')
         streams = ''.join(f'[v{index}]' + (f'[a{index}]' if has_audio else '') for index in range(len(segments)))
         parts.append(f'{streams}concat=n={len(segments)}:v=1:a={int(has_audio)}[vout]' + ('[aout]' if has_audio else ''))
         command += ['-filter_complex', ';'.join(parts), '-map', '[vout]']
