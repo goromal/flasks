@@ -925,6 +925,11 @@
         <div class="edit-points-section" id="editPointsSection">
             <h4>Edit Points (sorted by time)</h4>
             <ol class="edit-points-list" id="editPointsList"></ol>
+            <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
+                <input type="checkbox" id="trimReencode" checked onchange="updateStagedSummary()" style="width:auto; margin:0; cursor:pointer;">
+                <label for="trimReencode" style="margin:0; font-weight:500; color:#495057; cursor:pointer;">Re-encode (frame-accurate cuts)</label>
+            </div>
+            <p class="upload-hint" id="trimReencodeHint">Uncheck for a near-instant cut: no re-encoding, but each segment starts at the nearest earlier keyframe, so cuts can land up to a couple of seconds early.</p>
             <p class="upload-hint">Use the stamp form below to save this clip. Leave the stamp text empty to trim without changing its stamp.</p>
         </div>
 
@@ -1858,7 +1863,11 @@
             } else if (document.getElementById('currentVideo')) {
                 if (stagedVideoCrop) edits.push(stagedVideoCrop);
                 if (stagedRotation) edits.push({ type: 'rotate', degrees: stagedRotation });
-                if (editPoints.length) edits.push({ type: 'trim', points: editPoints.map(({ type, time }) => ({ type, time })) });
+                if (editPoints.length) {
+                    // Crop and rotate change pixels, so they always re-encode.
+                    const reencode = Boolean(stagedVideoCrop || stagedRotation) || document.getElementById('trimReencode').checked;
+                    edits.push({ type: 'trim', points: editPoints.map(({ type, time }) => ({ type, time })), reencode });
+                }
             }
             return edits;
         }
@@ -1866,6 +1875,14 @@
         function updateStagedSummary() {
             const summary = document.getElementById('stagedEditsSummary');
             if (!summary) return;
+            const reencodeBox = document.getElementById('trimReencode');
+            if (reencodeBox) {
+                const forced = Boolean(stagedVideoCrop || stagedRotation);
+                reencodeBox.disabled = forced;
+                const hint = document.getElementById('trimReencodeHint');
+                hint.dataset.idle ??= hint.textContent;
+                hint.textContent = forced ? 'Crop and rotate always re-encode.' : hint.dataset.idle;
+            }
             const edits = collectEdits();
             summary.style.display = edits.length ? 'block' : 'none';
             summary.textContent = edits.length ? 'Queued for save (in order): ' : '';

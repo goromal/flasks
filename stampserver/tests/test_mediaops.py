@@ -67,3 +67,120 @@ def test_video_trim_crop_rotate_and_restamp(tmp_path):
     assert 0.8 <= capture.get(cv2.CAP_PROP_FRAME_COUNT) / capture.get(cv2.CAP_PROP_FPS) <= 1.2
     capture.release()
     assert source.exists()
+
+
+def _frame_lumas(path):
+    capture = cv2.VideoCapture(str(path))
+    lumas = []
+    while True:
+        ok, frame = capture.read()
+        if not ok:
+            break
+        lumas.append(float(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).mean()))
+    capture.release()
+    return lumas
+
+
+def _stream_duration(path, stream):
+    result = subprocess.run([
+        'ffprobe', '-v', 'error', '-select_streams', stream, '-show_entries', 'stream=duration',
+        '-of', 'default=noprint_wrappers=1:nokey=1', str(path),
+    ], capture_output=True, text=True, check=True)
+    return float(result.stdout)
+
+
+def test_video_trim_keeps_exact_segment_frames_in_order(tmp_path):
+    # Frame N has luma 2N, so each output frame identifies its source frame.
+    # A long GOP puts the cut points between keyframes.
+    source = tmp_path / 'clip.mp4'
+    subprocess.run([
+        'ffmpeg', '-hide_banner', '-loglevel', 'error',
+        '-f', 'lavfi', '-i', "color=black:size=64x48:rate=10,format=gray,geq=lum='2*N'",
+        '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000',
+        '-t', '10', '-c:v', 'libx264', '-qp', '0', '-g', '50', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-shortest', str(source),
+    ], check=True)
+    result = edit_and_stamp(str(tmp_path), source.name, [], [
+        {'type': 'trim', 'points': [
+            {'type': 'start', 'time': 6.3}, {'type': 'end', 'time': 6.8},
+            {'type': 'start', 'time': 2.1}, {'type': 'end', 'time': 3.1},
+        ]},
+    ], copy=True)
+    lumas = _frame_lumas(tmp_path / result)
+    expected = [2 * n for n in list(range(21, 31)) + list(range(63, 68))]
+    assert len(lumas) == len(expected)
+    assert all(abs(luma - want) <= 2 for luma, want in zip(lumas, expected)), lumas
+    assert abs(_stream_duration(tmp_path / result, 'a:0') - 1.5) <= 0.05
+    assert abs(_stream_duration(tmp_path / result, 'v:0') - 1.5) <= 0.05
+
+
+def test_video_trim_decodes_only_selected_ranges(tmp_path, monkeypatch):
+    source = tmp_path / 'clip.mp4'
+    subprocess.run([
+        'ffmpeg', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi',
+        '-i', 'testsrc=size=64x48:rate=10', '-t', '4', '-c:v', 'mpeg4', str(source),
+    ], check=True)
+    commands = []
+    run = subprocess.run
+
+    def recording_run(command, *args, **kwargs):
+        commands.append(command)
+        return run(command, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, 'run', recording_run)
+    edit_and_stamp(str(tmp_path), source.name, [], [
+        {'type': 'trim', 'points': [
+            {'type': 'start', 'time': 0.5}, {'type': 'end', 'time': 1.0},
+            {'type': 'start', 'time': 2.5}, {'type': 'end', 'time': 3.0},
+        ]},
+    ], copy=True)
+    ffmpeg = next(command for command in commands if command[0] == 'ffmpeg')
+    inputs = [index for index, arg in enumerate(ffmpeg) if arg == '-i']
+    assert len(inputs) == 2
+    assert [ffmpeg[index - 4:index] for index in inputs] == [
+        ['-ss', '0.500000', '-t', '0.500000'], ['-ss', '2.500000', '-t', '0.500000'],
+    ]
+    assert 'trim=' not in ' '.join(ffmpeg)
+
+
+def test_video_trim_without_reencode_copies_from_prior_keyframe(tmp_path):
+    # Keyframes every 2 s: each segment starts at the keyframe at or before its start.
+    source = tmp_path / 'clip.mp4'
+    subprocess.run([
+        'ffmpeg', '-hide_banner', '-loglevel', 'error',
+        '-f', 'lavfi', '-i', "color=black:size=64x48:rate=10,format=gray,geq=lum='2*N'",
+        '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000',
+        '-t', '10', '-c:v', 'libx264', '-qp', '0', '-g', '20', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-shortest', str(source),
+    ], check=True)
+    result = edit_and_stamp(str(tmp_path), source.name, [], [
+        {'type': 'trim', 'reencode': False, 'points': [
+            {'type': 'start', 'time': 6.3}, {'type': 'end', 'time': 6.8},
+            {'type': 'start', 'time': 2.1}, {'type': 'end', 'time': 3.1},
+        ]},
+    ], copy=True)
+    codec = subprocess.run([
+        'ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=codec_name',
+        '-of', 'default=noprint_wrappers=1:nokey=1', str(tmp_path / result),
+    ], capture_output=True, text=True, check=True).stdout.strip()
+    assert codec == 'h264'
+    lumas = _frame_lumas(tmp_path / result)
+    expected = [2 * n for n in list(range(20, 31)) + list(range(60, 68))]
+    assert len(lumas) == len(expected)
+    assert all(abs(luma - want) <= 2 for luma, want in zip(lumas, expected)), lumas
+    assert abs(_stream_duration(tmp_path / result, 'a:0') - _stream_duration(tmp_path / result, 'v:0')) <= 0.05
+    assert sorted(path.name for path in tmp_path.iterdir()) == sorted([source.name, result])
+
+
+def test_video_trim_without_reencode_rejects_crop(tmp_path):
+    source = tmp_path / 'clip.mp4'
+    subprocess.run([
+        'ffmpeg', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi',
+        '-i', 'testsrc=size=64x48:rate=10', '-t', '2', '-c:v', 'mpeg4', str(source),
+    ], check=True)
+    with pytest.raises(ValueError):
+        edit_and_stamp(str(tmp_path), source.name, [], [
+            {'type': 'crop', 'x': 0, 'y': 0, 'width': 32, 'height': 32},
+            {'type': 'trim', 'reencode': False, 'points': [{'type': 'start', 'time': 0.5}]},
+        ], copy=True)
+    assert sorted(path.name for path in tmp_path.iterdir()) == [source.name]
