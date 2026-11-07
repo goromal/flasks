@@ -70,6 +70,36 @@ def _segments(points, duration):
     return segments
 
 
+def _run_ffmpeg(command):
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode:
+        raise RuntimeError(f'ffmpeg error: {result.stderr[-500:]}')
+
+
+def _copy_segments(source, output, segments):
+    """Cut and join segments without re-encoding.
+
+    Stream copy can only start a segment on a keyframe, so each segment begins
+    at the keyframe at or before its requested start (its end is kept).
+    """
+    extension = os.path.splitext(output)[1]
+    with tempfile.TemporaryDirectory(dir=os.path.dirname(output) or '.') as work:
+        listing = os.path.join(work, 'segments.txt')
+        with open(listing, 'w') as entries:
+            for index, (start, end) in enumerate(segments):
+                piece = os.path.join(work, f'{index}{extension}')
+                _run_ffmpeg([
+                    'ffmpeg', '-hide_banner', '-loglevel', 'error', '-ss', f'{start:.6f}', '-to', f'{end:.6f}',
+                    '-i', source, '-map', '0:v:0', '-map', '0:a:0?', '-c', 'copy',
+                    '-avoid_negative_ts', 'make_zero', piece, '-y',
+                ])
+                entries.write(f"file '{piece}'\n")
+        command = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', listing, '-c', 'copy']
+        if output.lower().endswith(('.mp4', '.mov')):
+            command += ['-movflags', '+faststart']
+        _run_ffmpeg(command + [output, '-y'])
+
+
 def _render_video(source, output, operations):
     capture = cv2.VideoCapture(source)
     if not capture.isOpened():
@@ -100,8 +130,14 @@ def _render_video(source, output, operations):
             if points is not None:
                 raise ValueError('Only one set of edit points is supported')
             points = operation['points']
+            reencode = operation.get('reencode', True)
         else:
             raise ValueError(f'Unsupported video edit: {kind}')
+    if points is not None and not reencode:
+        if filters:
+            raise ValueError('Crop and rotate require re-encoding')
+        _copy_segments(source, output, _segments(points, duration))
+        return
     command = ['ffmpeg', '-hide_banner', '-loglevel', 'error']
     if points is None:
         command += ['-i', source, '-vf', ','.join(filters), '-c:a', 'copy']
@@ -131,9 +167,7 @@ def _render_video(source, output, operations):
             command += ['-map', '[aout]']
     if output.lower().endswith(('.mp4', '.mov')):
         command += ['-movflags', '+faststart']
-    result = subprocess.run(command + [output, '-y'], capture_output=True, text=True)
-    if result.returncode:
-        raise RuntimeError(f'ffmpeg error: {result.stderr[-500:]}')
+    _run_ffmpeg(command + [output, '-y'])
 
 
 def edit_and_stamp(directory, filename, new_path, operations, copy):
