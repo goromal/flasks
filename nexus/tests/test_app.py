@@ -39,6 +39,8 @@ class FakeSpokes:
         self.state = {}  # host -> {"status", "run_id"}
         self.runs = []  # (host, payload)
         self.reboots = []  # hosts
+        self.checks = {}  # host -> bitd checks overriding the default single pass
+        self.health_calls = []  # hosts
         app = Flask("fake-spokes")
 
         @app.before_request
@@ -90,7 +92,8 @@ class FakeSpokes:
                 return "Not Found", 404
             if host == "jetson":
                 return jsonify({"error": "bitd is not installed on this machine"}), 404
-            return jsonify({"checks": [{"name": "internet", "state": "STATE_PASSED"}]})
+            self.health_calls.append(host)
+            return jsonify({"checks": self.checks.get(host, [{"name": "internet", "state": "STATE_PASSED"}])})
 
         self.port = _free_port()
         self.server = make_server("127.0.0.1", self.port, app, threaded=True)
@@ -321,3 +324,30 @@ def test_machines_flags_hosts_missing_from_mdns(tmp_path, fake):
 
 def test_machines_advertised_unknown_without_discovery(client):
     assert by_host(client.get("/api/machines"))["jetson"]["advertised"] is None
+
+
+def test_machines_summarize_recurring_checks(client, fake):
+    fake.checks["ats"] = [
+        {"name": "internet", "kind": "KIND_HEALTH", "state": "STATE_PASSED"},
+        {"name": "systemd_units", "kind": "KIND_HEALTH", "state": "STATE_FAILED"},
+        {"name": "avahi", "kind": "KIND_HEALTH", "state": "STATE_TIMED_OUT"},
+        {"name": "fresh", "kind": "KIND_HEALTH", "state": "STATE_IDLE"},
+        # Regressions run only on request, so they do not count.
+        {"name": "gpu", "kind": "KIND_REGRESSION", "state": "STATE_FAILED"},
+    ]
+    ms = by_host(client.get("/api/machines"))
+    assert ms["ats"]["health"] == {"total": 4, "passing": 1, "failing": ["avahi", "systemd_units"]}
+    assert ms["old-box"]["health"] is None  # spoke predates the health API
+    assert ms["jetson"]["health"] is None  # no bitd
+    assert ms["pi"]["health"] is None  # no upgrade UI
+    assert ms["down-box"]["health"] is None
+
+
+def test_health_summary_is_cached_and_refreshed_by_dialog(client, fake):
+    client.get("/api/machines")
+    client.get("/api/machines")
+    assert fake.health_calls.count("ats") == 1  # second poll reused the summary
+    fake.checks["ats"] = [{"name": "internet", "kind": "KIND_HEALTH", "state": "STATE_FAILED"}]
+    assert by_host(client.get("/api/machines"))["ats"]["health"]["failing"] == []
+    client.get("/api/health/ats")  # opening the Health dialog refreshes it
+    assert by_host(client.get("/api/machines"))["ats"]["health"]["failing"] == ["internet"]

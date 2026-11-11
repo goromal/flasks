@@ -210,6 +210,19 @@ function versionMark(m) {
   return '';
 }
 
+// Recurring (health) check pass rate; anything short of all passing stands out.
+function healthMark(m) {
+  const h = m.health;
+  if (stale || !m.online || !h || !h.total) return '';
+  const count = `checks ${h.passing}/${h.total}`;
+  if (h.passing === h.total)
+    return ` <span class="badge bg-success-subtle text-success-emphasis border" title="All recurring bitd checks passing">${count}</span>`;
+  const failing = h.failing.length;
+  const title = failing ? `Failing: ${h.failing.join(', ')}` : 'Some checks have not completed a run yet';
+  return ` <button type="button" class="badge border-0 ${failing ? 'bg-danger' : 'bg-warning text-dark'}"
+    onclick="showHealth('${esc(m.host)}')" title="${esc(title)}">${failing ? '&#9888; ' : ''}${count}</button>`;
+}
+
 function renderLatest() {
   $('latest-badge').hidden = !latest;
   $('latest-badge').textContent = latest ? `master: ${latest}` : '';
@@ -240,8 +253,9 @@ function render() {
   const rows = machines.map(m => {
     if (!selectable(m)) selected.delete(m.host);
     const homeLink = `<a class="btn ${m.online ? 'btn-primary' : 'btn-outline-primary'} home-btn" href="${esc(m.home_url)}" title="${esc(m.home_url)}">Home &rarr;</a>`;
+    const unhealthy = !stale && m.health?.failing?.length;
     const healthBtn = m.can_upgrade && m.online && !stale
-      ? `<button class="btn btn-sm btn-outline-success" onclick="showHealth('${esc(m.host)}')" title="bitd check results">Health</button>` : '';
+      ? `<button class="btn btn-sm ${unhealthy ? 'btn-danger' : 'btn-outline-success'}" onclick="showHealth('${esc(m.host)}')" title="bitd check results">Health</button>` : '';
     const isRebooting = m.host in rebooting;
     const rebootBtn = m.can_upgrade && m.online && !stale
       ? `<button class="btn btn-sm btn-outline-danger" onclick="reboot('${esc(m.host)}')"
@@ -270,7 +284,7 @@ function render() {
       <td><span class="dot ${m.online ? 'on' : 'off'} me-2" title="${m.online ? 'online' : 'offline'}"></span>
           <a class="host-name" href="${esc(m.home_url)}">${esc(m.host)}</a>${m.is_self ? ' <span class="badge bg-info">hub</span>' : ''}
           <div>${ip}${others ? ` <span class="small text-muted" title="Other interfaces">(also ${others})</span>` : ''}</div>${seen}</td>
-      <td>${isRebooting ? '<span class="badge bg-danger">rebooting…</span> ' : ''}${badge(m)}${versionMark(m)}
+      <td>${isRebooting ? '<span class="badge bg-danger">rebooting…</span> ' : ''}${badge(m)}${versionMark(m)}${healthMark(m)}
           ${m.version ? `<span class="font-monospace small trunc mt-1" title="${esc(m.version)}">${esc(m.version)}</span>` : ''}
           ${m.meta ? `<span class="small text-muted font-monospace trunc" title="${esc(m.meta)}">${esc(m.meta)}</span>` : ''}
           ${up}</td>
@@ -427,6 +441,7 @@ async function loadHealth() {
     checks.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
     const health = checks.filter(c => c.kind !== 'KIND_REGRESSION');
     const passing = health.filter(c => c.state === 'STATE_PASSED').length;
+    refresh(false);  // The hub just refreshed this machine's summary; show it in the list.
     body.innerHTML = `<div class="small text-muted mb-1">${passing}/${health.length} health checks passing</div>
       <div class="health-list">${checks.map(renderCheck).join('')}</div>`;
   } catch (e) {

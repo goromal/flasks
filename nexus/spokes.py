@@ -1,10 +1,15 @@
 import json
+import threading
+import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 TIMEOUT_S = 2.0
 HEALTH_TIMEOUT_S = 8.0
+# Health checks run every 5-60 s on the spoke, and each health request spawns
+# bitctl there, so the machine list reuses a summary this long.
+HEALTH_SUMMARY_TTL_S = 30.0
 RUN_TIMEOUT_S = 10.0
 STREAM_TIMEOUT_S = 3600.0
 OPTION_KEYS = ("version", "commit", "branch", "source", "local", "boot")
@@ -24,12 +29,27 @@ class SpokeError(Exception):
         self.status = status
 
 
+def summarize_health(checks):
+    """Pass counts over the recurring (health) checks; regressions run only on request."""
+    health = [c for c in checks if c.get("kind") != "KIND_REGRESSION"]
+    return {
+        "total": len(health),
+        "passing": sum(c.get("state") == "STATE_PASSED" for c in health),
+        "failing": sorted(
+            c.get("name", "?") for c in health if c.get("state") in ("STATE_FAILED", "STATE_TIMED_OUT")
+        ),
+    }
+
+
 class Spokes:
     """HTTP client for each machine's anix-upgrade-ui API (and landing page)."""
 
-    def __init__(self, base_url=default_base_url, timeout=TIMEOUT_S):
+    def __init__(self, base_url=default_base_url, timeout=TIMEOUT_S, health_ttl=HEALTH_SUMMARY_TTL_S):
         self.base_url = base_url
         self.timeout = timeout
+        self.health_ttl = health_ttl
+        self._health_cache = {}  # host -> (monotonic time, summary or None)
+        self._health_lock = threading.Lock()
 
     def _url(self, host, ip, upgrade_path, suffix):
         return self.base_url(host, ip) + upgrade_path.rstrip("/") + "/" + suffix
@@ -67,6 +87,7 @@ class Spokes:
                     "upgrade_status": data.get("status", "idle"),
                     "run_id": data.get("run_id"),
                     "uptime_s": data.get("uptime_s"),
+                    "health": self.health_summary(host, ip, upgrade_path),
                 }
             self._request(host, self.base_url(host, ip) + "/")
             return {"online": True}
@@ -84,13 +105,29 @@ class Spokes:
             }
             return {host: f.result() for host, f in futures.items()}
 
-    def health(self, host, ip, upgrade_path):
+    def health_summary(self, host, ip, upgrade_path):
+        """summarize_health() of the spoke's checks, cached; None if unavailable."""
+        now = time.monotonic()
+        with self._health_lock:
+            hit = self._health_cache.get(host)
+        if hit and now - hit[0] < self.health_ttl:
+            return hit[1]
+        try:
+            # The short probe timeout: this runs inside every machine-list poll.
+            # health() caches the summary on success.
+            return summarize_health(self.health(host, ip, upgrade_path, timeout=self.timeout))
+        except SpokeError:
+            with self._health_lock:
+                self._health_cache[host] = (now, None)
+            return None
+
+    def health(self, host, ip, upgrade_path, timeout=HEALTH_TIMEOUT_S):
         """The spoke's latest bitd check results (list of dicts)."""
         try:
             raw = self._request(
                 host,
                 self._url(host, ip, upgrade_path, "api/v1/health"),
-                timeout=HEALTH_TIMEOUT_S,
+                timeout=timeout,
             )
         except SpokeError as e:
             # The route's own 404 carries a JSON error; Flask's generic one
@@ -99,9 +136,14 @@ class Spokes:
                 raise SpokeError("No health API on this machine yet; upgrade it", status=404)
             raise
         try:
-            return json.loads(raw)["checks"]
-        except (ValueError, KeyError, TypeError):
+            checks = json.loads(raw)["checks"]
+            summary = summarize_health(checks)
+        except (ValueError, KeyError, TypeError, AttributeError):
             raise SpokeError("invalid health response")
+        # A full fetch (e.g. the Health dialog) also refreshes the list's summary.
+        with self._health_lock:
+            self._health_cache[host] = (time.monotonic(), summary)
+        return checks
 
     def start_run(self, host, ip, upgrade_path, opts):
         payload = {k: opts[k] for k in OPTION_KEYS if opts.get(k)}
