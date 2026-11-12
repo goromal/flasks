@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from flask import Flask
 from werkzeug.security import generate_password_hash
@@ -94,6 +95,21 @@ class AgentSessionsTest(unittest.TestCase):
         mgr.kill(name)
         self.assertFalse(os.path.exists(os.path.join(self.spool, f"budget-agent-{sid}")))
         self.assertIn(["tmux", "-L", "budget-agent", "kill-session", "-t", name], self.calls)
+
+    def test_kill_forgets_restore_record(self):
+        subprocess.run = self._fake_run()
+        mgr = self._mgr()
+        name = mgr.spawn("codex")
+        with tempfile.TemporaryDirectory() as home, \
+                mock.patch.dict(os.environ, {"HOME": home}):
+            record = os.path.join(home, ".local", "state", "agent-sessions",
+                                  "budget-agent", name + ".json")
+            os.makedirs(os.path.dirname(record))
+            with open(record, "w") as handle:
+                handle.write("{}")
+            mgr.kill(name)
+            self.assertFalse(os.path.exists(record))
+            mgr.kill(name)  # no record left: still fine
 
     def test_kill_rejects_bad_and_foreign_names(self):
         subprocess.run = self._fake_run()

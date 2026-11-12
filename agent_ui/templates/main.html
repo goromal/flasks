@@ -89,6 +89,7 @@
             <div>
               {% if session.label %}<strong class="label">{{ session.label }}</strong><small>{{ session.agent }} in {{ session.workspace }} · {{ "attached" if session.attached else "detached" }}</small>
               {% else %}<strong>{{ session.agent }}</strong> in {{ session.workspace }}<small>{{ "attached" if session.attached else "detached" }}</small>{% endif %}
+              {% if session.orphaned %}<small class="orphaned">{{ session.workspace }} / {{ session.agent }} is no longer configured; terminate this session if you are done with it.</small>{% endif %}
               <form class="rename" method="post" action="{{ subdomain }}/sessions/{{ session.name }}/rename">
                 <input type="hidden" name="_csrf" value="{{ csrf_token }}">
                 <input name="label" maxlength="80" value="{{ session.label }}" placeholder="name this session" aria-label="Session name">

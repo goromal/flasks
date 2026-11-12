@@ -122,12 +122,14 @@ class TmuxSessions:
                 continue
             workspace = match.group("workspace")
             agent = match.group("agent")
-            if workspace not in workspaces or agent not in allowed_agents:
-                continue
+            # A session whose workspace (or agent) is no longer configured is
+            # still running and still costs memory: list it, flagged, so it can
+            # be terminated instead of living on unseen.
             sessions.append({
                 "name": name, "workspace": workspace, "agent": agent,
                 "created": int(created), "attached": int(attached),
                 "label": label,
+                "orphaned": workspace not in workspaces or agent not in allowed_agents,
             })
         return sorted(sessions, key=lambda session: session["created"], reverse=True)
 
@@ -161,11 +163,25 @@ class TmuxSessions:
     def terminate(self, name):
         self._require_session_name(name)
         subprocess.run(self._base() + ["kill-session", "-t", name], check=True)
+        forget_restore_record(self.socket or "default", name)
 
     @staticmethod
     def _require_session_name(name):
         if not SESSION_NAME.fullmatch(name):
             raise ValueError("invalid session name")
+
+
+def forget_restore_record(socket, name):
+    """Drop the record anixpkgs' agent-session-run keeps so a reboot can bring
+    the session back (~/.local/state/agent-sessions/<socket>/<name>.json): a
+    session the user killed must stay dead."""
+    path = os.path.join(
+        os.path.expanduser("~"), ".local", "state", "agent-sessions", socket, f"{name}.json"
+    )
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
 
 
 class WorkspaceCommandError(Exception):
@@ -347,6 +363,8 @@ def create_app(
             flash(str(error), "error")
         active_sessions = {}
         for session in sessions.list(configured, session_types):
+            if session["orphaned"]:
+                continue
             active_sessions[session["workspace"]] = (
                 active_sessions.get(session["workspace"], 0) + 1
             )

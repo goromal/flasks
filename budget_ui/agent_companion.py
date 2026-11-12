@@ -111,10 +111,24 @@ class AgentSessions:
         if not match or match.group("agent") not in self.agents:
             raise ValueError("invalid session name")
         subprocess.run(self._base() + ["kill-session", "-t", name], check=False, timeout=10)
+        forget_restore_record(SOCKET, name)
         workdir = self._workdir(match.group("id"))
         if (os.path.commonpath([self.spool_dir, os.path.abspath(workdir)]) == self.spool_dir
                 and os.path.isdir(workdir)):
             shutil.rmtree(workdir, ignore_errors=True)
+
+
+def forget_restore_record(socket, name):
+    """Drop the record anixpkgs' agent-session-run keeps so a reboot can bring
+    the session back (~/.local/state/agent-sessions/<socket>/<name>.json): a
+    session the user killed must stay dead."""
+    path = os.path.join(
+        os.path.expanduser("~"), ".local", "state", "agent-sessions", socket, f"{name}.json"
+    )
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
 
 
 def create_agent_blueprint(auth, sessions, url_prefix, cookie_path, secure_cookie=True):
