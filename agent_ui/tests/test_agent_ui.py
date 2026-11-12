@@ -22,7 +22,12 @@ class FakeSessions:
         self.renamed = []
 
     def list(self, configured_workspaces, allowed_agents):
-        return [s for s in self.active if s["agent"] in allowed_agents]
+        workspaces = {workspace["name"] for workspace in configured_workspaces}
+        return [
+            dict(s, orphaned=s.get("orphaned", s["workspace"] not in workspaces
+                                   or s["agent"] not in allowed_agents))
+            for s in self.active
+        ]
 
     def start(self, workspace, agent, label=""):
         self.started.append((workspace, agent))
@@ -685,3 +690,54 @@ def test_workspace_page_shows_repository_without_commits(configured_app):
     response = client.get("/agents/workspaces/ui")
     assert response.status_code == 200
     assert b"no commits" in response.data
+
+
+def test_unconfigured_workspace_sessions_are_listed_as_orphaned(monkeypatch):
+    from agent_ui import TmuxSessions
+
+    class Result:
+        returncode = 0
+        stdout = (
+            "agent-ui-ui--claude--0123abcd\t5\t1\t\n"
+            "agent-ui-gone--codex--89abcdef\t4\t0\told work\n"
+            "unrelated\t3\t0\t\n"
+        )
+
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kwargs: Result())
+    listed = TmuxSessions(tmux_bin="tmux").list([{"name": "ui"}], ("claude", "codex"))
+    assert [(s["name"], s["orphaned"]) for s in listed] == [
+        ("agent-ui-ui--claude--0123abcd", False),
+        ("agent-ui-gone--codex--89abcdef", True),
+    ]
+
+
+def test_orphaned_session_is_shown_and_terminable(configured_app):
+    app, manager, _ = configured_app
+    name = "agent-ui-gone--codex--0123abcd"
+    manager.active = [{
+        "name": name, "workspace": "gone", "agent": "codex",
+        "created": 1, "attached": 0, "label": "", "orphaned": True,
+    }]
+    client = app.test_client()
+    login(client)
+    assert b"no longer configured" in client.get("/agents/").data
+    response = client.post(
+        f"/agents/sessions/{name}/terminate", data={"_csrf": csrf(client)}
+    )
+    assert response.status_code == 302
+    assert manager.terminated == [name]
+
+
+def test_terminate_forgets_restore_record(monkeypatch, tmp_path):
+    from agent_ui import TmuxSessions
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    name = "agent-ui-ui--claude--0123abcd"
+    record = tmp_path / ".local/state/agent-sessions/agent-ui" / f"{name}.json"
+    record.parent.mkdir(parents=True)
+    record.write_text("{}")
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kwargs: None)
+    sessions = TmuxSessions(tmux_bin="tmux", socket="agent-ui")
+    sessions.terminate(name)
+    assert not record.exists()
+    sessions.terminate(name)  # already gone: still fine

@@ -119,6 +119,20 @@ class RepoSessions:
         self._check_name(name)
         # The checkout is shared and durable: never remove anything here.
         subprocess.run(self._base() + ["kill-session", "-t", name], check=False, timeout=10)
+        forget_restore_record(SOCKET, name)
+
+
+def forget_restore_record(socket, name):
+    """Drop the record anixpkgs' agent-session-run keeps so a reboot can bring
+    the session back (~/.local/state/agent-sessions/<socket>/<name>.json): a
+    session the user killed must stay dead."""
+    path = os.path.join(
+        os.path.expanduser("~"), ".local", "state", "agent-sessions", socket, f"{name}.json"
+    )
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
 
 
 def clean_title(title):

@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from flask import Flask
 from werkzeug.security import generate_password_hash
@@ -105,6 +106,21 @@ class RepoSessionsTest(unittest.TestCase):
         self.assertIn(["tmux", "-L", "assistant-agent", "kill-session", "-t", name], self.calls)
         with open(os.path.join(self.repo, "sentinel.md")) as handle:
             self.assertEqual(handle.read(), "keep me\n")
+
+    def test_kill_forgets_restore_record(self):
+        subprocess.run = self._fake_run()
+        mgr = self._mgr()
+        name = mgr.spawn("codex")
+        with tempfile.TemporaryDirectory() as home, \
+                mock.patch.dict(os.environ, {"HOME": home}):
+            record = os.path.join(home, ".local", "state", "agent-sessions",
+                                  "assistant-agent", name + ".json")
+            os.makedirs(os.path.dirname(record))
+            with open(record, "w") as handle:
+                handle.write("{}")
+            mgr.kill(name)
+            self.assertFalse(os.path.exists(record))
+            mgr.kill(name)  # no record left: still fine
 
     def test_rename_sets_and_clears_tmux_title(self):
         subprocess.run = self._fake_run()

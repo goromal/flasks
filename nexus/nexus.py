@@ -85,6 +85,9 @@ def create_app(
             "run_id": probe.get("run_id"),
             # None when the spoke has no upgrade UI or predates uptime reporting.
             "uptime_s": probe.get("uptime_s"),
+            # {total, passing, failing: [names]} over recurring checks; None when
+            # the spoke has no bitd, predates the health API, or did not answer.
+            "health": probe.get("health"),
         }
 
     @bp.route("/")
