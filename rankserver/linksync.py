@@ -101,6 +101,50 @@ def sync_links(res_dir, watches):
     return warnings
 
 
+def sync_rank_sources(res_dir, selections):
+    """Mirror each source's current top names, removing links that leave top N.
+
+    Only links pointing directly into a selected source directory are managed.
+    Regular files and links from other sources retain precedence.
+    """
+    warnings = []
+    try:
+        entries = data_dir_entries(res_dir, {os.path.realpath(path)
+                                             for path, _ in selections})
+    except OSError as e:
+        return ["rank source sync failed ({})".format(e)]
+    desired = {}
+    for path, names in selections:
+        real = os.path.realpath(path)
+        for name in names:
+            if (name != os.path.basename(name) or not rankops.is_rankable(name)
+                    or not os.path.isfile(os.path.join(real, name))):
+                warnings.append("rank source item unavailable: {}".format(name))
+                continue
+            desired.setdefault(name, os.path.join(real, name))
+    for name, entry in entries.items():
+        if entry["type"] != "symlink" or not entry["owned"]:
+            continue
+        target = desired.get(name)
+        if target and _link_target(os.path.join(res_dir, name)) == target:
+            continue
+        try:
+            os.unlink(os.path.join(res_dir, name))
+        except OSError as e:
+            warnings.append("rank source unlink failed for {}: {}".format(name, e))
+    for name, target in desired.items():
+        full = os.path.join(res_dir, name)
+        if os.path.lexists(full):
+            if not os.path.islink(full) or _link_target(full) != target:
+                warnings.append("{} already exists; rank source item skipped".format(name))
+            continue
+        try:
+            os.symlink(target, full)
+        except OSError as e:
+            warnings.append("rank source link failed for {}: {}".format(name, e))
+    return warnings
+
+
 def count_owned_links(res_dir, stamp_dir, tag):
     """Links in res_dir pointing into stamp_dir whose target sits at the watch's
     stamp path or deeper. Link names are identity keys (sub-stamps dropped),

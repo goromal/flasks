@@ -20,6 +20,35 @@ def _links(res):
             if os.path.islink(str(res / name))}
 
 
+def test_rank_sources_follow_top_membership(tmp_path):
+    source = tmp_path / "source"
+    res = tmp_path / "res"
+    source.mkdir()
+    res.mkdir()
+    for name in ("a.png", "b.png", "c.png"):
+        _touch(source / name)
+    _touch(res / "c.png")
+    assert linksync.sync_rank_sources(str(res), [(str(source), ["a.png", "b.png"])]) == []
+    assert set(_links(res)) == {"a.png", "b.png"}
+    assert linksync.sync_rank_sources(str(res), [(str(source), ["b.png", "c.png"])]) == [
+        "c.png already exists; rank source item skipped"]
+    assert set(_links(res)) == {"b.png"}
+    assert (res / "c.png").is_file()
+
+
+def test_rank_sources_preserve_other_source_links(tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    res = tmp_path / "res"
+    for path in (first, second, res):
+        path.mkdir()
+    _touch(first / "a.png")
+    _touch(second / "b.png")
+    os.symlink(str(second / "b.png"), str(res / "b.png"))
+    assert linksync.sync_rank_sources(str(res), [(str(first), ["a.png"])]) == []
+    assert set(_links(res)) == {"a.png", "b.png"}
+
+
 def test_links_named_by_identity_key(tmp_path):
     stamp = tmp_path / "stamp"
     res = tmp_path / "res"
