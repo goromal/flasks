@@ -33,6 +33,19 @@ def get_watches(cfg):
     return [w for w in watches if isinstance(w, dict)]
 
 
+def get_rank_sources(cfg):
+    """Rank directories whose completed top items feed this ranking."""
+    return [s for s in cfg.get("rank_sources", []) if isinstance(s, dict)]
+
+
+def top_names(state, file_map, count):
+    """Names at the top of a completed ranking, highest first."""
+    if (not state.sorted or len(state.arr) != len(file_map)
+            or set(state.arr) != set(range(len(file_map)))):
+        raise ValueError("ranking is incomplete or invalid")
+    return [file_map[i] for i in reversed(state.arr)][:count]
+
+
 STAMP_PREFIX = "stamped."
 
 

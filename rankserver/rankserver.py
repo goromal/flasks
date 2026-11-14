@@ -126,9 +126,30 @@ def save_config(cfg):
     os.replace(tmp, path)
 
 
+def source_top_names(path, count):
+    with open(os.path.join(path, MAPNAME)) as f:
+        file_map = [line.strip() for line in f if line.strip()]
+    ok, state = sortStateFromDisk(os.path.join(path, LOGNAME))
+    if not ok or not file_map:
+        raise ValueError("ranking is incomplete or invalid")
+    return rankops.top_names(state, file_map, count)
+
+
 def sync_symlinks(cfg):
-    """Mirror watched stamp files into RES_DIR (see linksync.sync_links)."""
-    return linksync.sync_links(RES_DIR, rankops.get_watches(cfg))
+    """Mirror watched stamp files and ranked source selections into RES_DIR."""
+    warnings = linksync.sync_links(RES_DIR, rankops.get_watches(cfg))
+    selections = []
+    for source in rankops.get_rank_sources(cfg):
+        path, count = source.get("rank_dir"), source.get("top_n")
+        if not isinstance(path, str) or not path or type(count) is not int or count < 1:
+            warnings.append("rank source config incomplete; sync skipped")
+            continue
+        try:
+            selections.append((path, source_top_names(path, count)))
+        except (OSError, ValueError) as e:
+            warnings.append("rank source {} unavailable ({}); links kept".format(path, e))
+    warnings += linksync.sync_rank_sources(RES_DIR, selections)
+    return warnings
 
 
 def state_to_dict(s):
@@ -577,6 +598,50 @@ def clear_watch_config():
     else:
         watches = []
     _set_watches(cfg, watches)
+    save_config(cfg)
+    return flask.jsonify({"success": True})
+
+
+@bp.route("/api/rank-sources", methods=["GET"])
+@flask_login.login_required
+def rank_sources():
+    cfg, err = load_config()
+    return flask.jsonify({"sources": rankops.get_rank_sources(cfg), "error": err})
+
+
+@bp.route("/api/rank-sources", methods=["POST"])
+@flask_login.login_required
+def add_rank_source():
+    data = flask.request.get_json(silent=True) or {}
+    raw_path = data.get("rank_dir")
+    count = data.get("top_n")
+    if not isinstance(raw_path, str) or not raw_path:
+        return flask.jsonify({"success": False, "error": "Missing rank directory"}), 400
+    path = os.path.realpath(raw_path)
+    if path == os.path.realpath(RES_DIR) or not os.path.isdir(path):
+        return flask.jsonify({"success": False, "error": "Choose another rank directory"}), 400
+    if type(count) is not int or count < 1:
+        return flask.jsonify({"success": False, "error": "Top N must be a positive integer"}), 400
+    try:
+        source_top_names(path, count)
+    except (OSError, ValueError) as e:
+        return flask.jsonify({"success": False, "error": "Source ranking unavailable: {}".format(e)}), 400
+    cfg, _ = load_config()
+    sources = rankops.get_rank_sources(cfg)
+    sources = [s for s in sources if os.path.realpath(s.get("rank_dir", "")) != path]
+    sources.append({"rank_dir": path, "top_n": count})
+    cfg["rank_sources"] = sources
+    save_config(cfg)
+    return flask.jsonify({"success": True, "warnings": sync_symlinks(cfg)})
+
+
+@bp.route("/api/rank-sources", methods=["DELETE"])
+@flask_login.login_required
+def remove_rank_source():
+    data = flask.request.get_json(silent=True) or {}
+    cfg, _ = load_config()
+    cfg["rank_sources"] = [s for s in rankops.get_rank_sources(cfg)
+                           if s.get("rank_dir") != data.get("rank_dir")]
     save_config(cfg)
     return flask.jsonify({"success": True})
 

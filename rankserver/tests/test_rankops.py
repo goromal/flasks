@@ -4,6 +4,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import rankops
 
 
+def test_top_names_reads_completed_order():
+    state = type("State", (), {"sorted": 1, "arr": [2, 0, 1]})()
+    assert rankops.top_names(state, ["a.png", "b.png", "c.png"], 2) == ["b.png", "a.png"]
+    state.sorted = 0
+    with pytest.raises(ValueError):
+        rankops.top_names(state, ["a.png", "b.png", "c.png"], 2)
+
+
 def test_scan_stamps_counts_rankable_only():
     listing = [
         "stamped.a.x.png", "stamped.a.y.mp4", "stamped.a.z.webp",

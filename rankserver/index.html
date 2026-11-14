@@ -636,6 +636,24 @@
             </div>
         </div>
 
+        <div class="rankables-config">
+            <h2>Rank Sources</h2>
+            <p class="help">Link the top N items from other completed rankserver directories.
+               The linked set updates when a source's top N changes; new items queue for placement here.</p>
+            <div class="rankables-realpath">
+                <span class="realpath-label">Status:</span>
+                <span class="realpath-value" id="rankSourceStatus">Loading...</span>
+                <button class="btn btn-sm" onclick="openRankSourceConfig()">Add&hellip;</button>
+            </div>
+            <ul class="watch-list" id="rankSourceList"></ul>
+            <div class="rankables-realpath" id="rankSourceRow" style="display: none;">
+                <span class="realpath-label">Top N from <span id="rankSourceDir"></span>:</span>
+                <input id="rankSourceCount" type="number" min="1" value="10" style="width: 5em;">
+                <button class="btn btn-sm" onclick="saveRankSource()">Save</button>
+                <button class="btn btn-sm btn-danger" onclick="cancelRankSource()">Cancel</button>
+            </div>
+        </div>
+
         <div class="start-row">
             <a href="{{ urlroot }}" class="btn start-btn">Start Ranking &rarr;</a>
         </div>
@@ -878,8 +896,9 @@
         {% if intro %}
         let _pickerPath = '/';
         let _defaultPath = null;
-        let _pickerMode = 'rankables';   // 'rankables' | 'stampdir'
+        let _pickerMode = 'rankables';   // 'rankables' | 'stampdir' | 'rankdir'
         let _watchDir = null;
+        let _rankSourceDir = null;
 
         function loadRankablesInfo() {
             fetch('{{ urlroot }}api/rankables-info')
@@ -897,6 +916,7 @@
         function openDirPicker() {
             _pickerMode = 'rankables';
             document.getElementById('watchTagRow').style.display = 'none';
+            document.getElementById('rankSourceRow').style.display = 'none';
             document.getElementById('dirPicker').style.display = 'block';
             loadPickerDirs(_pickerPath);
         }
@@ -943,6 +963,13 @@
         }
 
         function selectPickerDir() {
+            if (_pickerMode === 'rankdir') {
+                _rankSourceDir = _pickerPath;
+                closeDirPicker();
+                document.getElementById('rankSourceDir').textContent = _rankSourceDir;
+                document.getElementById('rankSourceRow').style.display = 'flex';
+                return;
+            }
             if (_pickerMode === 'stampdir') {
                 _watchDir = _pickerPath;
                 closeDirPicker();
@@ -988,6 +1015,7 @@
                     document.getElementById('rankablesRealPath').textContent = data.real_path;
                     showStatus('Rankables directory updated to: ' + data.real_path);
                     loadWatchInfo();
+                    loadRankSources();
                 } else {
                     showStatus('Error: ' + (data.error || 'Unknown error'), true);
                 }
@@ -1010,6 +1038,7 @@
                     document.getElementById('rankablesRealPath').textContent = data.real_path;
                     showStatus('Rankables directory reset to default: ' + data.real_path);
                     loadWatchInfo();
+                    loadRankSources();
                 } else {
                     showStatus('Error: ' + (data.error || 'Unknown error'), true);
                 }
@@ -1072,6 +1101,7 @@
         function openWatchConfig() {
             _pickerMode = 'stampdir';
             document.getElementById('watchTagRow').style.display = 'none';
+            document.getElementById('rankSourceRow').style.display = 'none';
             document.getElementById('dirPicker').style.display = 'block';
             loadPickerDirs(_pickerPath);
         }
@@ -1118,8 +1148,89 @@
             .catch(err => showStatus('Error: ' + err.message, true));
         }
 
+        function loadRankSources() {
+            fetch('{{ urlroot }}api/rank-sources')
+                .then(r => r.json())
+                .then(data => {
+                    const status = document.getElementById('rankSourceStatus');
+                    const list = document.getElementById('rankSourceList');
+                    list.innerHTML = '';
+                    if (data.error) { status.textContent = data.error; return; }
+                    status.textContent = data.sources.length + ' source'
+                        + (data.sources.length === 1 ? '' : 's');
+                    data.sources.forEach(source => {
+                        const li = document.createElement('li');
+                        const span = document.createElement('span');
+                        span.className = 'realpath-value';
+                        span.textContent = source.rank_dir + ' — top ' + source.top_n;
+                        const btn = document.createElement('button');
+                        btn.className = 'btn btn-sm btn-danger';
+                        btn.textContent = 'Remove';
+                        btn.onclick = () => removeRankSource(source.rank_dir);
+                        li.appendChild(span);
+                        li.appendChild(btn);
+                        list.appendChild(li);
+                    });
+                })
+                .catch(() => {
+                    document.getElementById('rankSourceStatus').textContent = '(error loading)';
+                });
+        }
+
+        function openRankSourceConfig() {
+            _pickerMode = 'rankdir';
+            document.getElementById('watchTagRow').style.display = 'none';
+            document.getElementById('rankSourceRow').style.display = 'none';
+            document.getElementById('dirPicker').style.display = 'block';
+            loadPickerDirs(_pickerPath);
+        }
+
+        function cancelRankSource() {
+            document.getElementById('rankSourceRow').style.display = 'none';
+            _rankSourceDir = null;
+        }
+
+        function saveRankSource() {
+            const count = Number(document.getElementById('rankSourceCount').value);
+            if (!_rankSourceDir || !Number.isInteger(count) || count < 1) {
+                showStatus('Choose a directory and a positive top N', true);
+                return;
+            }
+            fetch('{{ urlroot }}api/rank-sources', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({rank_dir: _rankSourceDir, top_n: count})
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    cancelRankSource();
+                    loadRankSources();
+                    showStatus('Rank source saved'
+                        + (data.warnings.length ? ' — ' + data.warnings.join('; ') : ''));
+                } else showStatus('Error: ' + (data.error || 'Unknown error'), true);
+            })
+            .catch(err => showStatus('Error: ' + err.message, true));
+        }
+
+        function removeRankSource(path) {
+            if (!confirm('Stop linking top items from ' + path + '?\nExisting symlinks are kept.')) return;
+            fetch('{{ urlroot }}api/rank-sources', {
+                method: 'DELETE',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({rank_dir: path})
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) { showStatus('Rank source removed'); loadRankSources(); }
+                else showStatus('Error: ' + (data.error || 'Unknown error'), true);
+            })
+            .catch(err => showStatus('Error: ' + err.message, true));
+        }
+
         loadRankablesInfo();
         loadWatchInfo();
+        loadRankSources();
         {% endif %}
     </script>
 </body>
