@@ -207,6 +207,39 @@
 
         .compare-card form { margin: 0; width: 100%; }
 
+        /* Collapsed-by-default path of the file being viewed */
+        details.file-path { width: 100%; margin: -8px 0 0; font-size: 0.85rem; color: #6c757d; }
+        details.file-path summary { cursor: pointer; width: fit-content; user-select: none; }
+        .file-path-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+        .file-path-text {
+            flex: 1;
+            min-width: 0;
+            padding: 6px 8px;
+            background: #f1f3f5;
+            border-radius: 4px;
+            color: #212529;
+            text-align: left;
+            word-break: break-all;
+            user-select: all;
+        }
+        .file-path-copy {
+            padding: 6px 12px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            background: #fff;
+            cursor: pointer;
+        }
+        details.lightbox-path {
+            position: absolute;
+            left: 50%;
+            bottom: 8px;
+            transform: translateX(-50%);
+            width: min(90vw, 900px);
+            margin: 0;
+            color: #dee2e6;
+            cursor: default;
+        }
+
         .choose-btn {
             width: 100%;
             padding: 16px 24px;
@@ -685,6 +718,13 @@
                     <img src="{{ urlroot }}thumb/{{ l }}?w=1200" decoding="async" alt="" />
                     {% endif %}
                 </div>
+                <details class="file-path">
+                    <summary>Path</summary>
+                    <div class="file-path-row">
+                        <code class="file-path-text">{{ res_dir }}/{{ l }}</code>
+                        <button type="button" class="file-path-copy" onclick="copyFilePath(this)">Copy</button>
+                    </div>
+                </details>
                 <form action="{{ urlroot }}" method="POST">
                     <input type="submit" class="choose-btn" name="choose_l" value="Choose" />
                 </form>
@@ -699,6 +739,13 @@
                     <img src="{{ urlroot }}thumb/{{ r }}?w=1200" decoding="async" alt="" />
                     {% endif %}
                 </div>
+                <details class="file-path">
+                    <summary>Path</summary>
+                    <div class="file-path-row">
+                        <code class="file-path-text">{{ res_dir }}/{{ r }}</code>
+                        <button type="button" class="file-path-copy" onclick="copyFilePath(this)">Copy</button>
+                    </div>
+                </details>
                 <form action="{{ urlroot }}" method="POST">
                     <input type="submit" class="choose-btn" name="choose_r" value="Choose" />
                 </form>
@@ -714,12 +761,12 @@
                     {% if item.endswith('.txt') %}
                     <span class="rank-txt">{{ item }}</span>
                     {% elif item.endswith(('.mp4', '.mov')) %}
-                    <span class="rank-media rank-video-poster" data-full="{{ urlroot }}media/{{ item }}" data-type="video">
+                    <span class="rank-media rank-video-poster" data-full="{{ urlroot }}media/{{ item }}" data-type="video" data-path="{{ res_dir }}/{{ item }}">
                         <img src="{{ urlroot }}thumb/{{ item }}?w=240" loading="lazy" decoding="async" alt="" />
                     </span>
                     {% else %}
                     <img class="rank-media" src="{{ urlroot }}thumb/{{ item }}?w=240" loading="lazy" decoding="async" alt=""
-                         data-full="{{ urlroot }}thumb/{{ item }}?w=1600" data-type="image" />
+                         data-full="{{ urlroot }}thumb/{{ item }}?w=1600" data-type="image" data-path="{{ res_dir }}/{{ item }}" />
                     {% endif %}
                     {% if done and rlist|length > 1 %}
                     <form action="{{ urlroot }}" method="POST" onsubmit="return confirm('Re-adjudicate this item?');">
@@ -737,6 +784,13 @@
     <div class="lightbox" id="lightbox" onclick="closeLightbox()">
         <span class="lightbox-close">&times;</span>
         <div class="lightbox-content" id="lightboxContent"></div>
+        <details class="file-path lightbox-path" onclick="event.stopPropagation()">
+            <summary>Path</summary>
+            <div class="file-path-row">
+                <code class="file-path-text" id="lightboxPath"></code>
+                <button type="button" class="file-path-copy" onclick="copyFilePath(this)">Copy</button>
+            </div>
+        </details>
         <button class="lightbox-nav" id="lightboxPrev" onclick="lightboxStep(-1, event)" title="Previous (higher rank)">&#9650;</button>
         <button class="lightbox-nav" id="lightboxNext" onclick="lightboxStep(1, event)" title="Next (lower rank)">&#9660;</button>
     </div>
@@ -828,6 +882,32 @@
             setTimeout(() => { statusDiv.style.display = 'none'; }, 5000);
         }
 
+        // ===== FILE PATH =====
+
+        function copyFilePath(btn) {
+            const text = btn.previousElementSibling.textContent;
+            const done = (ok) => {
+                btn.textContent = ok ? 'Copied' : 'Copy failed';
+                setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+            };
+            // The Clipboard API only exists in secure contexts; fall back to a
+            // hidden textarea + execCommand when served over plain HTTP.
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(text).then(() => done(true), () => done(false));
+                return;
+            }
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            let ok = false;
+            try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+            ta.remove();
+            done(ok);
+        }
+
         // ===== LIGHTBOX (maximize ranked-list media on click) =====
 
         // Zoomable ranked-list entries in rank order; the lightbox tracks an
@@ -857,6 +937,7 @@
             el.addEventListener('click', (e) => e.stopPropagation());
             content.appendChild(el);
             if (item.dataset.type === 'video') initVideoTools(el);
+            document.getElementById('lightboxPath').textContent = item.dataset.path;
             lightboxIndex = index;
             document.getElementById('lightboxPrev').disabled = index <= 0;
             document.getElementById('lightboxNext').disabled = index >= rankMedia.length - 1;

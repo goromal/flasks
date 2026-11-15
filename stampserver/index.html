@@ -64,6 +64,28 @@
             h1 { font-size: 2rem; }
         }
 
+        /* Collapsed-by-default path of the file being viewed */
+        details.file-path { margin: -4px 0 12px; font-size: 0.85rem; color: #6c757d; }
+        details.file-path summary { cursor: pointer; width: fit-content; user-select: none; }
+        .file-path-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+        .file-path-text {
+            flex: 1;
+            min-width: 0;
+            padding: 6px 8px;
+            background: #f1f3f5;
+            border-radius: 4px;
+            color: #212529;
+            word-break: break-all;
+            user-select: all;
+        }
+        .file-path-copy {
+            padding: 6px 12px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            background: #fff;
+            cursor: pointer;
+        }
+
         /* Collapsible controls */
         details.controls-section {
             margin: 20px 0;
@@ -985,6 +1007,16 @@
         </div>
         {% endif %}
 
+        {% if filepath %}
+        <details class="file-path">
+            <summary>Path</summary>
+            <div class="file-path-row">
+                <code class="file-path-text">{{ filepath }}</code>
+                <button type="button" class="file-path-copy" onclick="copyFilePath(this)">Copy</button>
+            </div>
+        </details>
+        {% endif %}
+
         <form id="stampForm" action="{{ urlroot }}{{ root }}" method="POST">
             <textarea id="text" name="text" placeholder="Enter stamp text here..."></textarea>
             <input type="hidden" id="editsInput" name="edits" value="">
@@ -1164,6 +1196,32 @@
         }
 
         initVideoTools(document.getElementById('currentVideo'));
+
+        // ===== FILE PATH =====
+
+        function copyFilePath(btn) {
+            const text = btn.previousElementSibling.textContent;
+            const done = (ok) => {
+                btn.textContent = ok ? 'Copied' : 'Copy failed';
+                setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+            };
+            // The Clipboard API only exists in secure contexts; fall back to a
+            // hidden textarea + execCommand when served over plain HTTP.
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(text).then(() => done(true), () => done(false));
+                return;
+            }
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            let ok = false;
+            try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+            ta.remove();
+            done(ok);
+        }
 
         // ===== STATUS =====
 
