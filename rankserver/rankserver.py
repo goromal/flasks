@@ -445,7 +445,7 @@ def index():
     warn = " | ".join(rankserver.warnings)
     if not res:
         return flask.render_template("index.html", urlroot=urlroot, intro=False,
-                                     datadir=current_datadir(), err=True, done=False,
+                                     datadir=current_datadir(), res_dir=os.path.realpath(RES_DIR), err=True, done=False,
                                      msg=msg, rlist=[], l="", r="", warn=warn,
                                      progress_note="")
     rlist = rankserver.getRankList()
@@ -457,12 +457,12 @@ def index():
             note = "Binary-search placement — {} more in queue".format(
                 len(rankserver.insertions["queue"]))
             return flask.render_template("index.html", urlroot=urlroot,
-                                         intro=False, datadir=current_datadir(),
+                                         intro=False, datadir=current_datadir(), res_dir=os.path.realpath(RES_DIR),
                                          err=False, done=False, msg="",
                                          rlist=rlist, l=l, r=r, warn=warn,
                                          progress_note=note)
         return flask.render_template("index.html", urlroot=urlroot, intro=False,
-                                     datadir=current_datadir(), err=False, done=True,
+                                     datadir=current_datadir(), res_dir=os.path.realpath(RES_DIR), err=False, done=True,
                                      msg="", rlist=rlist, l="", r="", warn=warn,
                                      progress_note="")
     l, r = rankserver.getCompFiles()
@@ -470,7 +470,7 @@ def index():
     note = "Sorting — {} item{} still unsorted".format(
         remaining, "" if remaining == 1 else "s")
     return flask.render_template("index.html", urlroot=urlroot, intro=False,
-                                 datadir=current_datadir(), err=False, done=False,
+                                 datadir=current_datadir(), res_dir=os.path.realpath(RES_DIR), err=False, done=False,
                                  msg="", rlist=rlist, l=l, r=r, warn=warn,
                                  progress_note=note)
 
@@ -478,7 +478,7 @@ def index():
 @flask_login.login_required
 def intro():
     global urlroot
-    return flask.render_template("index.html", urlroot=urlroot, intro=True, datadir=current_datadir(), err=False, done=False, msg="", rlist=[], l="", r="", warn="", progress_note="")
+    return flask.render_template("index.html", urlroot=urlroot, intro=True, datadir=current_datadir(), res_dir=os.path.realpath(RES_DIR), err=False, done=False, msg="", rlist=[], l="", r="", warn="", progress_note="")
 
 @bp.route("/api/rankables-info", methods=["GET"])
 @flask_login.login_required

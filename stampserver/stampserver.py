@@ -291,6 +291,14 @@ def file_url(name, ftype):
     except OSError:
         return url
 
+def file_path(name):
+    """Absolute on-disk path of a file in RES_DIR, for the page's Path toggle.
+
+    Resolved through the stampables symlink so the copied path points at the
+    real file rather than the server's symlink.
+    """
+    return os.path.join(os.path.realpath(RES_DIR), name)
+
 @login_manager.user_loader
 def load_user(user_id):
     global user
@@ -371,8 +379,7 @@ def index():
     if not res:
         return flask.render_template("index.html", urlroot=urlroot, err=True, msg=msg, file="", ftype="", root="", nleft="?", datadir=current_datadir(), stamps=stamps)
     file, ftype, numleft = stampserver.getfile()
-    file = file_url(file, ftype)
-    return flask.render_template("index.html", urlroot=urlroot, err=False, msg="", file=file, ftype=ftype, root="", nleft=str(numleft), datadir=current_datadir(), stamps=stamps)
+    return flask.render_template("index.html", urlroot=urlroot, err=False, msg="", file=file_url(file, ftype), filepath=file_path(file), ftype=ftype, root="", nleft=str(numleft), datadir=current_datadir(), stamps=stamps)
 
 def restamp_url(path):
     return urlroot + "restamp/" + "/".join(quote(segment, safe="") for segment in path)
@@ -492,8 +499,7 @@ def stamped(stamp=""):
     if got is None:
         return flask.render_template("index.html", urlroot=urlroot, err=True, msg="The deck was reloaded; please try again.", file="", ftype="", root=root, nleft="?", datadir=current_datadir(), stamps={}, **tree)
     file, ftype, numleft = got
-    file = file_url(file, ftype)
-    return flask.render_template("index.html", urlroot=urlroot, err=False, msg="", file=file, ftype=ftype, root=root, nleft=str(numleft), datadir=current_datadir(), stamps={}, **tree)
+    return flask.render_template("index.html", urlroot=urlroot, err=False, msg="", file=file_url(file, ftype), filepath=file_path(file), ftype=ftype, root=root, nleft=str(numleft), datadir=current_datadir(), stamps={}, **tree)
 
 @bp.route("/zzz", methods=["GET","POST"])
 @flask_login.login_required
