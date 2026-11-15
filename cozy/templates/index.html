@@ -78,7 +78,9 @@
         .modal { background:#fff; width:90%; max-width:520px; max-height:85vh; overflow:auto; border-radius:12px; padding:20px; }
         .modal-row { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
         .modal-row input[type="text"] { flex:1; padding:8px 10px; font-size:0.95rem; border:2px solid #ced4da; border-radius:6px; }
-        #modal-path { font-size:0.85rem; color:#495057; word-break:break-all; margin-bottom:8px; }
+        #modal-path { display:block; width:100%; box-sizing:border-box; font-size:0.85rem; color:#495057; font-family:inherit; padding:4px 6px; margin-bottom:8px; border:1px solid transparent; border-radius:4px; background:transparent; }
+        #modal-msg { color:#c92a2a; font-size:0.85rem; margin:-4px 0 8px; word-break:break-all; }
+        #modal-path:hover, #modal-path:focus { border-color:#ced4da; background:#fff; outline:none; }
         #modal-list { list-style:none; margin:8px 0; padding:0; max-height:40vh; overflow:auto; border:1px solid #e9ecef; border-radius:6px; }
         #modal-list li { padding:8px 12px; cursor:pointer; border-bottom:1px solid #f1f3f5; }
         #modal-list li:hover { background:#f0f4ff; }
@@ -344,7 +346,9 @@
                 <button type="button" class="secondary" id="modal-go">Go</button>
                 <button type="button" class="secondary" id="modal-close">Close</button>
             </div>
-            <div id="modal-path"></div>
+            <input type="text" id="modal-path" enterkeyhint="go" spellcheck="false" autocomplete="off"
+                   title="Edit or paste a full directory or file path, then press Enter" />
+            <div id="modal-msg" style="display:none;"></div>
             <div class="modal-row">
                 <button type="button" class="secondary" id="modal-up">&#8679; Up</button>
                 <input type="text" id="modal-filter" placeholder="filter" />
@@ -755,6 +759,15 @@
         const modalBackdrop = document.getElementById("modal-backdrop");
         const modalHost = document.getElementById("modal-host");
         const modalPathEl = document.getElementById("modal-path");
+        const modalMsg = document.getElementById("modal-msg");
+
+        // Browse errors go to the tab's own error sink as before, and are also
+        // shown inside the modal, which otherwise covers that sink.
+        function modalFail(msg) {
+            modalMsg.textContent = msg;
+            modalMsg.style.display = msg ? "block" : "none";
+            (browser.onError || showError)(msg);
+        }
         const modalFilter = document.getElementById("modal-filter");
         const modalList = document.getElementById("modal-list");
         const modalSelectBtn = document.getElementById("modal-select");
@@ -791,7 +804,7 @@
                       (browser.mode === "dir" ? "" : "&files=" + browser.mode);
             // The Video tab passes its own error sink; the Single tab's box
             // is hidden while another tab is showing.
-            const fail = browser.onError || showError;
+            const fail = modalFail;
             let d;
             try {
                 const r = await fetch(root + "api/browse?" + q);
@@ -805,8 +818,29 @@
                 .concat((d.files || []).map(n => ({ name: n, dir: false })));
             modalPreviewWrap.style.display = "none";
             modalSelectBtn.disabled = browser.mode !== "dir";
-            modalPathEl.textContent = d.path;
+            modalPathEl.value = d.path;
+            modalPathEl.scrollLeft = modalPathEl.scrollWidth;  // keep the deepest segment visible
             renderBrowser();
+            return true;
+        }
+
+        // Jump to a typed/pasted absolute path (e.g. one copied from
+        // stampserver's Path toggle). A directory is opened; a file opens its
+        // parent and is picked as if clicked, so the preview + Use button work.
+        async function jumpTo(raw) {
+            const p = raw.trim().replace(/(.)\/+$/, "$1");
+            if (!p) return;
+            const name = p.slice(p.lastIndexOf("/") + 1);
+            if (browser.mode === "dir" || !name.includes(".")) { browseTo(p); return; }
+            const filter = modalFilter.value;
+            modalFilter.value = "";
+            if (!(await browseTo(parentPath(p)))) { modalFilter.value = filter; return; }
+            const entry = browser.entries.find(e => e.name === name);
+            if (entry && entry.dir) { browseTo(p); return; }
+            const li = [...modalList.children].find(c => c.dataset.file === name);
+            if (li) { li.click(); li.scrollIntoView({ block: "nearest" }); return; }
+            modalFail(name + " is not a selectable " +
+                (browser.mode === "video" ? "video" : "image") + " in " + browser.path);
         }
 
         function joinPath(a, b) { return a.replace(/\/+$/, "") + "/" + b; }
@@ -824,6 +858,7 @@
                 .forEach(e => {
                     const li = document.createElement("li");
                     li.textContent = (e.dir ? "📁 " : browser.mode === "video" ? "🎞 " : "🖼 ") + e.name;
+                    if (!e.dir) li.dataset.file = e.name;
                     li.addEventListener("click", () => {
                         if (e.dir) { browseTo(joinPath(browser.path, e.name)); return; }
                         browser.picked = joinPath(browser.path, e.name);
@@ -846,6 +881,18 @@
         document.getElementById("modal-up").addEventListener("click", () => browseTo(parentPath(browser.path)));
         document.getElementById("modal-close").addEventListener("click", () => { modalBackdrop.style.display = "none"; });
         modalFilter.addEventListener("input", renderBrowser);
+        modalPathEl.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") { e.preventDefault(); jumpTo(modalPathEl.value); }
+        });
+        // A pasted path replaces the field (it already holds the current
+        // directory) and jumps straight there, no Enter needed.
+        modalPathEl.addEventListener("paste", (e) => {
+            const text = (e.clipboardData || window.clipboardData).getData("text");
+            if (!text.trim()) return;
+            e.preventDefault();
+            modalPathEl.value = text.trim();
+            jumpTo(modalPathEl.value);
+        });
         modalSelectBtn.addEventListener("click", () => {
             const res = browser.mode === "dir" ? browser.path : browser.picked;
             modalBackdrop.style.display = "none";
