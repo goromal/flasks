@@ -316,6 +316,27 @@ def create_folio_submit():
     return flask.redirect(flask.url_for(url_for_prefix + "index"))
 
 
+def _store_exam(title, exam_type, source_material, content):
+    db = get_db()
+    cur = db.execute(
+        "INSERT INTO exams (title, exam_type, created_at, source_material, content) VALUES (?,?,?,?,?)",
+        (title, exam_type, now_str(), source_material, json.dumps(content)),
+    )
+    exam_id = cur.lastrowid
+    db.commit()
+    db.close()
+    return exam_id
+
+
+def split_atoms(text):
+    """Split rote text into atomic units: prefer lines, fall back to sentences
+    if newlines were lost."""
+    atoms = chunk_text(text, "line")
+    if len(atoms) < 2:
+        atoms = chunk_text(text, "sentence")
+    return atoms
+
+
 def _create_rote(title):
     text = flask.request.form.get("text", "").strip()
 
@@ -323,22 +344,12 @@ def _create_rote(title):
         flask.flash("Text is required for rote memorization exams.")
         return flask.redirect(flask.url_for(url_for_prefix + "create"))
 
-    # Split into atomic units: prefer lines, fall back to sentences if newlines were lost.
-    atoms = chunk_text(text, "line")
-    if len(atoms) < 2:
-        atoms = chunk_text(text, "sentence")
+    atoms = split_atoms(text)
     if len(atoms) < 2:
         flask.flash("Could not split text into at least 2 units. Try adding newlines between sections.")
         return flask.redirect(flask.url_for(url_for_prefix + "create"))
 
-    content = json.dumps({"full_text": text, "atoms": atoms})
-    db = get_db()
-    db.execute(
-        "INSERT INTO exams (title, exam_type, created_at, source_material, content) VALUES (?,?,?,?,?)",
-        (title, "rote", now_str(), "{}", content),
-    )
-    db.commit()
-    db.close()
+    _store_exam(title, "rote", "{}", {"full_text": text, "atoms": atoms})
     flask.flash(f"Rote exam created with {len(atoms)} units.")
     return flask.redirect(flask.url_for(url_for_prefix + "index"))
 
@@ -376,15 +387,7 @@ def _generate_and_store_exam(title, exam_type, source_texts, topics, num_q, emph
 
     response = call_claude(prompt)
     questions = extract_json_array(response)
-    content = json.dumps({"questions": questions})
-
-    db = get_db()
-    db.execute(
-        "INSERT INTO exams (title, exam_type, created_at, source_material, content) VALUES (?,?,?,?,?)",
-        (title, exam_type, now_str(), source_material, content),
-    )
-    db.commit()
-    db.close()
+    _store_exam(title, exam_type, source_material, {"questions": questions})
     return len(questions)
 
 
@@ -524,26 +527,31 @@ def submit_exam(exam_id):
     return flask.redirect(flask.url_for(url_for_prefix + "result", result_id=result_id))
 
 
-def _grade_rote(exam_id, content):
+def _store_result(exam_id, overall, details):
+    db = get_db()
+    cur = db.execute(
+        "INSERT INTO results (exam_id, taken_at, score, details) VALUES (?,?,?,?)",
+        (exam_id, now_str(), overall, json.dumps(details)),
+    )
+    result_id = cur.lastrowid
+    db.commit()
+    db.close()
+    return result_id
+
+
+def grade_rote(exam_id, content, chunk_size, blank_indices, answers):
+    """Fuzzy-grade answers[i] against the chunk at blank_indices[i]."""
     atoms = content.get("atoms") or content.get("chunks", [])
-    try:
-        chunk_size = max(1, int(flask.request.form.get("chunk_size", "1")))
-    except ValueError:
-        chunk_size = 1
     # Re-derive chunks the same way the client did
     chunks = [" ".join(atoms[i:i + chunk_size]) for i in range(0, len(atoms), chunk_size)]
-    try:
-        blank_indices = json.loads(flask.request.form.get("blank_indices", "[]"))
-    except (json.JSONDecodeError, ValueError):
-        blank_indices = []
-    blank_indices = [idx for idx in blank_indices if isinstance(idx, int) and 0 <= idx < len(chunks)]
     THRESHOLD = 0.80
 
     details = []
     correct_count = 0
-    for i, idx in enumerate(blank_indices):
+    for idx, user_answer in zip(blank_indices, answers):
+        if not (isinstance(idx, int) and 0 <= idx < len(chunks)):
+            continue
         actual = chunks[idx]
-        user_answer = flask.request.form.get(f"answer_{i}", "").strip()
         score = fuzzy_score(actual, user_answer)
         is_correct = score >= THRESHOLD
         if is_correct:
@@ -556,25 +564,17 @@ def _grade_rote(exam_id, content):
             "correct": is_correct,
         })
 
-    overall = correct_count / len(blank_indices) if blank_indices else 0.0
-    db = get_db()
-    cur = db.execute(
-        "INSERT INTO results (exam_id, taken_at, score, details) VALUES (?,?,?,?)",
-        (exam_id, now_str(), overall, json.dumps(details)),
-    )
-    result_id = cur.lastrowid
-    db.commit()
-    db.close()
-    return result_id
+    overall = correct_count / len(details) if details else 0.0
+    return _store_result(exam_id, overall, details)
 
 
-def _grade_mc(exam_id, content):
+def grade_mc(exam_id, content, answers):
+    """answers[i] is the chosen 0-based option index for question i (-1 = unanswered)."""
     questions = content["questions"]
     details = []
     correct_count = 0
     for i, q in enumerate(questions):
-        raw = flask.request.form.get(f"answer_{i}")
-        user_idx = int(raw) if raw is not None else -1
+        user_idx = answers[i] if i < len(answers) else -1
         is_correct = user_idx == q["correct"]
         if is_correct:
             correct_count += 1
@@ -587,49 +587,68 @@ def _grade_mc(exam_id, content):
         })
 
     overall = correct_count / len(questions) if questions else 0.0
-    db = get_db()
-    cur = db.execute(
-        "INSERT INTO results (exam_id, taken_at, score, details) VALUES (?,?,?,?)",
-        (exam_id, now_str(), overall, json.dumps(details)),
-    )
-    result_id = cur.lastrowid
-    db.commit()
-    db.close()
-    return result_id
+    return _store_result(exam_id, overall, details)
+
+
+def grade_sa(exam_id, content, answers, grades=None):
+    """Grade short answers via Claude, or record caller-supplied grades
+    ([{"score": 0.0-1.0, "justification": "..."}], one per question) as-is.
+    Raises on Claude/JSON failure."""
+    questions = content["questions"]
+    answers = [answers[i] if i < len(answers) else "" for i in range(len(questions))]
+
+    if grades is not None:
+        details = [{
+            "question": q,
+            "user_answer": a,
+            "score": float(g.get("score", 0)),
+            "justification": g.get("justification", ""),
+        } for q, a, g in zip(questions, answers, grades)]
+    else:
+        qa_text = "\n".join(
+            f"Q{i+1}: {q}\nA{i+1}: {a}" for i, (q, a) in enumerate(zip(questions, answers))
+        )
+        prompt = (
+            f"You are a teacher grading a short answer exam. Grade each student answer.\n\n"
+            f"Questions and student answers:\n{qa_text}\n\n"
+            f"Return ONLY a valid JSON array, no other text:\n"
+            f'[{{"question":"...","user_answer":"...","score":0.8,"justification":"..."}}]\n\n'
+            f'"score" is a float 0.0–1.0. Be fair but accurate.'
+        )
+        details = extract_json_array(call_claude(prompt))
+
+    overall = sum(d.get("score", 0) for d in details) / len(details) if details else 0.0
+    return _store_result(exam_id, overall, details)
+
+
+def _grade_rote(exam_id, content):
+    try:
+        chunk_size = max(1, int(flask.request.form.get("chunk_size", "1")))
+    except ValueError:
+        chunk_size = 1
+    try:
+        blank_indices = json.loads(flask.request.form.get("blank_indices", "[]"))
+    except (json.JSONDecodeError, ValueError):
+        blank_indices = []
+    answers = [flask.request.form.get(f"answer_{i}", "").strip() for i in range(len(blank_indices))]
+    return grade_rote(exam_id, content, chunk_size, blank_indices, answers)
+
+
+def _grade_mc(exam_id, content):
+    answers = []
+    for i in range(len(content["questions"])):
+        raw = flask.request.form.get(f"answer_{i}")
+        answers.append(int(raw) if raw is not None else -1)
+    return grade_mc(exam_id, content, answers)
 
 
 def _grade_sa(exam_id, content):
-    questions = content["questions"]
-    answers = [flask.request.form.get(f"answer_{i}", "").strip() for i in range(len(questions))]
-
-    qa_text = "\n".join(
-        f"Q{i+1}: {q}\nA{i+1}: {a}" for i, (q, a) in enumerate(zip(questions, answers))
-    )
-    prompt = (
-        f"You are a teacher grading a short answer exam. Grade each student answer.\n\n"
-        f"Questions and student answers:\n{qa_text}\n\n"
-        f"Return ONLY a valid JSON array, no other text:\n"
-        f'[{{"question":"...","user_answer":"...","score":0.8,"justification":"..."}}]\n\n'
-        f'"score" is a float 0.0–1.0. Be fair but accurate.'
-    )
-
+    answers = [flask.request.form.get(f"answer_{i}", "").strip() for i in range(len(content["questions"]))]
     try:
-        response = call_claude(prompt)
-        details = extract_json_array(response)
-        overall = sum(d.get("score", 0) for d in details) / len(details) if details else 0.0
+        return grade_sa(exam_id, content, answers)
     except Exception as exc:
         flask.flash(f"Error grading exam via AI: {exc}")
         return None
-
-    db = get_db()
-    cur = db.execute(
-        "INSERT INTO results (exam_id, taken_at, score, details) VALUES (?,?,?,?)",
-        (exam_id, now_str(), overall, json.dumps(details)),
-    )
-    result_id = cur.lastrowid
-    db.commit()
-    db.close()
-    return result_id
 
 
 @bp.route("/exam/<int:exam_id>/results")
@@ -673,6 +692,182 @@ def result(result_id):
         details=details,
         score_pct=round(res["score"] * 100),
     )
+
+
+# ── Agent API ─────────────────────────────────────────────────────────────────
+# JSON backdoor for agents: create exams from caller-supplied content (no AI
+# generation) and submit answers directly, bypassing the HTML take/submit flow.
+
+class ApiError(Exception):
+    def __init__(self, message, status=400):
+        super().__init__(message)
+        self.status = status
+
+
+@bp.errorhandler(ApiError)
+def _api_error(exc):
+    return flask.jsonify({"error": str(exc)}), exc.status
+
+
+def _api_exam(exam_id):
+    db = get_db()
+    exam = db.execute("SELECT * FROM exams WHERE id = ?", (exam_id,)).fetchone()
+    db.close()
+    if not exam:
+        raise ApiError("exam not found", 404)
+    exam = dict(exam)
+    exam["source_material"] = json.loads(exam["source_material"])
+    exam["content"] = json.loads(exam["content"])
+    return exam
+
+
+def _api_result(result_id):
+    db = get_db()
+    res = db.execute("SELECT * FROM results WHERE id = ?", (result_id,)).fetchone()
+    db.close()
+    if not res:
+        raise ApiError("result not found", 404)
+    res = dict(res)
+    res["details"] = json.loads(res["details"])
+    return res
+
+
+def _api_rote_content(data):
+    atoms = data.get("atoms")
+    if atoms is not None:
+        if not (isinstance(atoms, list) and all(isinstance(a, str) and a.strip() for a in atoms)):
+            raise ApiError("atoms must be a list of non-empty strings")
+        atoms = [a.strip() for a in atoms]
+        text = "\n".join(atoms)
+    else:
+        text = (data.get("text") or "").strip()
+        if not text:
+            raise ApiError("rote exams require text or atoms")
+        atoms = split_atoms(text)
+    if len(atoms) < 2:
+        raise ApiError("rote exams need at least 2 units")
+    return {"full_text": text, "atoms": atoms}
+
+
+def _api_mc_content(data):
+    questions = data.get("questions")
+    if not (isinstance(questions, list) and questions):
+        raise ApiError("multiple_choice exams require a non-empty questions list")
+    for i, q in enumerate(questions):
+        ok = (isinstance(q, dict) and isinstance(q.get("question"), str)
+              and isinstance(q.get("options"), list) and len(q["options"]) >= 2
+              and all(isinstance(o, str) for o in q["options"])
+              and type(q.get("correct")) is int and 0 <= q["correct"] < len(q["options"]))
+        if not ok:
+            raise ApiError(f'questions[{i}] must be {{"question": str, "options": [str, ...] (2+), '
+                           f'"correct": 0-based index}}')
+    return {"questions": [{"question": q["question"], "options": q["options"],
+                           "correct": q["correct"]} for q in questions]}
+
+
+def _api_sa_content(data):
+    questions = data.get("questions")
+    if not (isinstance(questions, list) and questions
+            and all(isinstance(q, str) and q.strip() for q in questions)):
+        raise ApiError("short_answer exams require a non-empty list of question strings")
+    return {"questions": [q.strip() for q in questions]}
+
+
+_API_CONTENT = {
+    "rote": _api_rote_content,
+    "multiple_choice": _api_mc_content,
+    "short_answer": _api_sa_content,
+}
+
+
+@bp.route("/api/exams", methods=["GET"])
+def api_list_exams():
+    db = get_db()
+    exams = db.execute(
+        "SELECT id, title, exam_type, created_at FROM exams ORDER BY created_at DESC").fetchall()
+    db.close()
+    return flask.jsonify({"exams": [dict(e) for e in exams]})
+
+
+@bp.route("/api/exams", methods=["POST"])
+def api_create_exam():
+    data = flask.request.get_json(silent=True)
+    if not isinstance(data, dict):
+        raise ApiError("JSON object body required")
+    title = (data.get("title") or "").strip()
+    exam_type = data.get("exam_type", "")
+    if not title:
+        raise ApiError("title required")
+    if exam_type not in _API_CONTENT:
+        raise ApiError(f"exam_type must be one of {sorted(_API_CONTENT)}")
+    content = _API_CONTENT[exam_type](data)
+    source_material = data.get("source_material", {})
+    if not isinstance(source_material, dict):
+        raise ApiError("source_material must be an object")
+    source_material = dict(source_material, created_via="api")
+    exam_id = _store_exam(title, exam_type, json.dumps(source_material), content)
+    return flask.jsonify(_api_exam(exam_id)), 201
+
+
+@bp.route("/api/exams/<int:exam_id>", methods=["GET"])
+def api_get_exam(exam_id):
+    return flask.jsonify(_api_exam(exam_id))
+
+
+@bp.route("/api/exams/<int:exam_id>/submit", methods=["POST"])
+def api_submit_exam(exam_id):
+    exam = _api_exam(exam_id)
+    content = exam["content"]
+    data = flask.request.get_json(silent=True)
+    if not isinstance(data, dict):
+        raise ApiError("JSON object body required")
+    answers = data.get("answers")
+    if not isinstance(answers, list):
+        raise ApiError("answers list required")
+
+    if exam["exam_type"] == "rote":
+        chunk_size = data.get("chunk_size", 1)
+        if type(chunk_size) is not int or chunk_size < 1:
+            raise ApiError("chunk_size must be a positive integer")
+        atoms = content.get("atoms") or content.get("chunks", [])
+        n_chunks = -(-len(atoms) // chunk_size)
+        if not all(isinstance(a, dict) and type(a.get("chunk_index")) is int
+                   and 0 <= a["chunk_index"] < n_chunks and isinstance(a.get("answer"), str)
+                   for a in answers) or not answers:
+            raise ApiError(f'answers must be a non-empty list of {{"chunk_index": 0..{n_chunks - 1}, '
+                           f'"answer": str}} (chunks of {chunk_size} atom(s))')
+        result_id = grade_rote(exam_id, content, chunk_size,
+                               [a["chunk_index"] for a in answers],
+                               [a["answer"].strip() for a in answers])
+
+    elif exam["exam_type"] == "multiple_choice":
+        n = len(content["questions"])
+        if len(answers) != n or not all(a is None or type(a) is int for a in answers):
+            raise ApiError(f"answers must be {n} option indices (null = unanswered)")
+        result_id = grade_mc(exam_id, content, [-1 if a is None else a for a in answers])
+
+    else:  # short_answer
+        n = len(content["questions"])
+        if len(answers) != n or not all(isinstance(a, str) for a in answers):
+            raise ApiError(f"answers must be {n} strings")
+        grades = data.get("grades")
+        if grades is not None and not (
+                isinstance(grades, list) and len(grades) == n
+                and all(isinstance(g, dict) and isinstance(g.get("score"), (int, float))
+                        and not isinstance(g["score"], bool) and 0 <= g["score"] <= 1
+                        for g in grades)):
+            raise ApiError(f'grades must be {n} objects {{"score": 0.0-1.0, "justification": str}}')
+        try:
+            result_id = grade_sa(exam_id, content, [a.strip() for a in answers], grades)
+        except Exception as exc:
+            raise ApiError(f"AI grading failed: {exc}", 502)
+
+    return flask.jsonify(_api_result(result_id)), 201
+
+
+@bp.route("/api/results/<int:result_id>", methods=["GET"])
+def api_get_result(result_id):
+    return flask.jsonify(_api_result(result_id))
 
 
 def run():
