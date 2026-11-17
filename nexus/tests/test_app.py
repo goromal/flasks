@@ -351,3 +351,30 @@ def test_health_summary_is_cached_and_refreshed_by_dialog(client, fake):
     assert by_host(client.get("/api/machines"))["ats"]["health"]["failing"] == []
     client.get("/api/health/ats")  # opening the Health dialog refreshes it
     assert by_host(client.get("/api/machines"))["ats"]["health"]["failing"] == ["internet"]
+
+
+def test_machines_remember_last_online_and_version(tmp_path, fake):
+    state = str(tmp_path / "state")
+    Roster(state).merge({"down-box": {"ip": "192.0.2.30", "home": "/", "upgrade": "/anix-upgrade/"}})
+    roster_file = Roster(state)
+    roster_file.observe({"down-box": {"online": True, "version": "1.2.0"}})
+    app = create_app(
+        state_dir=state,
+        self_host="ats",
+        spokes=Spokes(base_url=fake.base_url, timeout=1.0),
+        latest=FakeLatest(),
+        changes=FakeLatest(CHANGES),
+    )
+    client = app.test_client()
+    box = by_host(client.get("/api/machines"))["down-box"]
+    assert box["online"] is False
+    assert box["version"] is None
+    assert box["last_version"] == "1.2.0"
+    assert box["last_version_behind"] is True
+    assert box["last_online"]
+
+
+def test_machines_record_online_observations(client):
+    ats = by_host(client.get("/api/machines"))["ats"]
+    assert ats["last_version"] == "1.2.3"
+    assert ats["last_online"]

@@ -126,3 +126,25 @@ def test_discover_records_advertised_hosts_only_on_success(tmp_path):
     r.discover(force=True)  # a failed browse keeps the last listing
     assert r.advertised == {"ats", "ats-pi"}
     assert set(r.list()) == {"ats", "ats-pi", "renamed"}
+
+
+def test_observe_remembers_online_time_and_version(tmp_path):
+    r = Roster(str(tmp_path))
+    r.merge({"ats": {"ip": "198.51.100.1", "home": "/", "upgrade": "/anix-upgrade/"}})
+    r.observe({"ats": {"online": True, "version": "1.2.3"}})
+    rec = Roster(str(tmp_path)).list()["ats"]
+    assert rec["last_online"] and rec["last_version"] == "1.2.3"
+
+    # Offline probes and a later rediscovery keep what was remembered.
+    r.observe({"ats": {"online": False}, "gone": {"online": True, "version": "9.9.9"}})
+    r.merge({"ats": {"ip": "198.51.100.9", "home": "/", "upgrade": "/anix-upgrade/"}})
+    machines = r.list()
+    assert set(machines) == {"ats"}  # observe never adds machines
+    assert machines["ats"]["ip"] == "198.51.100.9"
+    assert machines["ats"]["last_online"] == rec["last_online"]
+    assert machines["ats"]["last_version"] == "1.2.3"
+
+    # Online without a version (no upgrade UI answer) keeps the last version.
+    r.observe({"ats": {"online": True, "version": "1.2.4"}})
+    r.observe({"ats": {"online": True}})
+    assert r.list()["ats"]["last_version"] == "1.2.4"
