@@ -20,6 +20,7 @@
       font-family: monospace; background: #fff;
     }
     .opt { font-weight: normal; color: #888; font-size: 13px; }
+    .hint { color: #666; font-size: 13px; margin: 4px 0 0; }
     .check-label {
       display: flex; align-items: center; gap: 8px;
       margin: 14px 0 4px; font-weight: bold;
@@ -90,6 +91,9 @@
 
     <label for="msg">Message</label>
     <textarea id="msg" name="msg" required placeholder="Type your message here…"></textarea>
+    <p class="hint" id="task-hint" style="display:none;">
+      First line is the task title; the second line and beyond become the task description.
+    </p>
     <button type="submit" id="submit-btn">Send</button>
   </form>
   <p id="status"></p>
@@ -122,6 +126,10 @@
         <tr>
           <td>P3: &lt;task&gt;</td>
           <td>Create task — should do eventually</td>
+        </tr>
+        <tr>
+          <td>P1: &lt;title&gt;<br>&lt;description…&gt;</td>
+          <td>Multi-line task — first line is the title, the rest is the task description</td>
         </tr>
         <tr>
           <td>journal: &lt;text&gt;</td>
@@ -159,10 +167,16 @@
   </div>
 
   <script>
-    // The date picker only means anything to goromail after a "journal:" prefix.
+    // The date picker only means anything to goromail after a "journal:" prefix,
+    // and the title/description split only applies to P0-P3 tasks.
     function syncPrefixUi() {
-      const isJournal = document.getElementById('prefix').value === 'journal';
-      document.getElementById('journal-date-row').style.display = isJournal ? '' : 'none';
+      const tag = document.getElementById('prefix').value;
+      const isTask = /^P[0-3]$/.test(tag);
+      document.getElementById('journal-date-row').style.display = tag === 'journal' ? '' : 'none';
+      document.getElementById('task-hint').style.display = isTask ? '' : 'none';
+      document.getElementById('msg').placeholder = isTask
+        ? 'Task title\nOptional description on the following lines…'
+        : 'Type your message here…';
     }
 
     // Build the string that actually gets sent:
