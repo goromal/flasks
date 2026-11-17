@@ -9,12 +9,21 @@ from datetime import datetime, timezone
 
 SERVICE_TYPE = "_anix-nexus._tcp"
 DISCOVERY_TTL_S = 30
+# A machine answering every poll would otherwise rewrite the roster every few seconds.
+OBSERVE_WRITE_S = 60
 # Browsing and resolving every host on a busy multi-homed LAN can take >10 s.
 BROWSE_TIMEOUT_S = 20
 
 
 def _now():
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+
+def _age_s(stamp, now):
+    try:
+        return (now - datetime.fromisoformat(stamp)).total_seconds()
+    except (TypeError, ValueError):
+        return float("inf")
 
 
 def bare_host(name):
@@ -130,8 +139,30 @@ class Roster:
             machines = self._read()
             stamp = _now()
             for host, rec in records.items():
-                machines[host] = dict(rec, last_seen=stamp)
+                # Keep what probes remembered (last_online, last_version).
+                machines[host] = dict(machines.get(host, {}), **rec, last_seen=stamp)
             self._write(machines)
+
+    def observe(self, probes):
+        """Remember when each online machine last answered and its anix version,
+        so offline machines can still show both. probes: {host: probe result}."""
+        with self._lock:
+            machines = self._read()
+            now = datetime.now(timezone.utc).astimezone()
+            changed = False
+            for host, probe in probes.items():
+                rec = machines.get(host)
+                if rec is None or not probe.get("online"):
+                    continue
+                version = probe.get("version") or rec.get("last_version")
+                if version != rec.get("last_version") or _age_s(rec.get("last_online"), now) >= OBSERVE_WRITE_S:
+                    rec["last_online"] = now.isoformat(timespec="seconds")
+                    if version:
+                        rec["last_version"] = version
+                    changed = True
+            if changed:
+                self._write(machines)
+            return machines
 
     def forget(self, host):
         with self._lock:

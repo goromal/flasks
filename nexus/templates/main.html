@@ -276,8 +276,15 @@ function render() {
     // Cached (stale) rows would show an outdated uptime, so only show it live.
     const up = m.online && !stale && m.uptime_s != null
       ? `<span class="small text-muted" title="Uptime">up ${fmtUptime(m.uptime_s)}</span>` : '';
-    const seen = (!m.online || unlisted) && m.last_seen
-      ? `<div class="small text-muted">${unlisted && m.online ? 'not advertised over mDNS; ' : ''}last seen ${esc(m.last_seen)}</div>` : '';
+    // Offline: when a probe last got an answer (falling back to the last mDNS
+    // sighting for machines never probed online since this was recorded).
+    const lastOnline = !m.online && (m.last_online || m.last_seen);
+    const seen = lastOnline
+      ? `<div class="small text-muted" title="${esc(new Date(lastOnline).toLocaleString())}">last ${m.last_online ? 'online' : 'seen'} ${ago(Date.parse(lastOnline))}</div>`
+      : unlisted && m.last_seen
+      ? `<div class="small text-muted">not advertised over mDNS; last seen ${esc(m.last_seen)}</div>` : '';
+    const lastVer = !m.online && m.last_version
+      ? `${versionMark({behind_latest: m.last_version_behind})}<span class="font-monospace small text-muted trunc mt-1" title="Last known version: ${esc(m.last_version)}">last: ${esc(m.last_version)}</span>` : '';
     return `<tr class="${m.online ? '' : 'row-offline'}">
       <td><input class="form-check-input" type="checkbox" ${selectable(m) ? '' : 'disabled'}
            ${selected.has(m.host) ? 'checked' : ''} onchange="toggle('${esc(m.host)}', this.checked)"></td>
@@ -285,7 +292,7 @@ function render() {
           <a class="host-name" href="${esc(m.home_url)}">${esc(m.host)}</a>${m.is_self ? ' <span class="badge bg-info">hub</span>' : ''}
           <div>${ip}${others ? ` <span class="small text-muted" title="Other interfaces">(also ${others})</span>` : ''}</div>${seen}</td>
       <td>${isRebooting ? '<span class="badge bg-danger">rebooting…</span> ' : ''}${badge(m)}${versionMark(m)}${healthMark(m)}
-          ${m.version ? `<span class="font-monospace small trunc mt-1" title="${esc(m.version)}">${esc(m.version)}</span>` : ''}
+          ${m.version ? `<span class="font-monospace small trunc mt-1" title="${esc(m.version)}">${esc(m.version)}</span>` : lastVer}
           ${m.meta ? `<span class="small text-muted font-monospace trunc" title="${esc(m.meta)}">${esc(m.meta)}</span>` : ''}
           ${up}</td>
       <td class="text-end text-nowrap"><div class="d-inline-flex gap-1 row-actions">${homeLink}${healthBtn}${rebootBtn}${forgetBtn}</div></td>

@@ -74,6 +74,11 @@ def create_app(
             ],
             "can_upgrade": bool(rec.get("upgrade")),
             "last_seen": rec.get("last_seen"),
+            # Last time a probe got an answer, and the anix version it reported;
+            # kept across restarts so offline machines still show them.
+            "last_online": rec.get("last_online"),
+            "last_version": rec.get("last_version"),
+            "last_version_behind": is_behind(rec.get("last_version"), latest_version),
             # False when the latest mDNS browse did not list this host, e.g. after
             # Avahi renamed the machine; its IP may still answer for the new name.
             "advertised": None if advertised is None else host in advertised,
@@ -99,6 +104,7 @@ def create_app(
         roster.discover(force=request.args.get("refresh") == "1")
         machines = roster.list()
         probes = spokes.probe_all(machines)
+        machines = roster.observe(probes)
         latest_version = latest.get()
         views = [
             machine_view(h, machines[h], probes.get(h, {}), latest_version, roster.advertised)
