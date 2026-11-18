@@ -55,3 +55,50 @@ def test_autoplay_blank_restamp_still_skips(monkeypatch, tmp_path):
     assert source.exists()
     assert sorted(path.name for path in tmp_path.glob('*.png')) == [source.name]
     assert module.stampserver.filelist == []
+
+
+def _delete(module, stamp, confirm):
+    with module.app.test_request_context('/delete-stamp/' + stamp, method='POST', data={'confirm': confirm}):
+        response = module.delete_stamp.__wrapped__(stamp)
+        return response, module.flask.get_flashed_messages()
+
+
+def test_delete_stamp_requires_exact_confirmation(monkeypatch, tmp_path):
+    module = _server(monkeypatch, tmp_path)
+    target = tmp_path / 'stamped.foo.photo.png'
+    target.write_bytes(b'x')
+
+    response, messages = _delete(module, 'foo', 'fo')
+
+    assert target.exists()
+    assert response.location.endswith('/restamp/foo')
+    assert 'nothing was deleted' in messages[0]
+
+
+def test_delete_stamp_removes_subtree_and_keeps_others(monkeypatch, tmp_path):
+    module = _server(monkeypatch, tmp_path)
+    for name in ('stamped.foo.a.png', 'stamped.foo.stamped.bar.b.mp4',
+                 'stamped.foobar.c.png', 'stamped.baz.d.png', 'e.png'):
+        (tmp_path / name).write_bytes(b'x')
+    module.stampserver.filelist = [('stamped.foo.a.png', 'PNG')]
+
+    response, messages = _delete(module, 'foo', ' foo ')
+
+    assert sorted(p.name for p in tmp_path.iterdir() if p.name != 'secrets.json') == [
+        'e.png', 'stamped.baz.d.png', 'stamped.foobar.c.png',
+    ]
+    assert response.location == '/'
+    assert 'Deleted 2 file(s)' in messages[0]
+    assert module.stampserver.filelist == []
+
+
+def test_delete_substamp_redirects_to_parent(monkeypatch, tmp_path):
+    module = _server(monkeypatch, tmp_path)
+    (tmp_path / 'stamped.foo.stamped.bar.b.png').write_bytes(b'x')
+    (tmp_path / 'stamped.foo.a.png').write_bytes(b'x')
+
+    response, _ = _delete(module, 'foo/bar', 'foo/bar')
+
+    assert not (tmp_path / 'stamped.foo.stamped.bar.b.png').exists()
+    assert (tmp_path / 'stamped.foo.a.png').exists()
+    assert response.location.endswith('/restamp/foo')

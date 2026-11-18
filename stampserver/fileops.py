@@ -143,6 +143,34 @@ def files_at_path(listing, path):
     return [name for name in listing if parse_stamped(name)[0] == path]
 
 
+def files_under_path(listing, path):
+    """Filenames whose stamp path is `path` or deeper (sub-stamps included)."""
+    return [name for name in listing if parse_stamped(name)[0][:len(path)] == path]
+
+
+def delete_subtree(res_dir, listing, path):
+    """Permanently delete every regular file at `path` or deeper. Returns
+    (deleted, failed): the removed filenames, and the ones that couldn't be
+    removed (already gone, or an OS error).
+
+    Raises ValueError if `path` is empty, since an empty path would match
+    every file in `listing`, unstamped ones included.
+    """
+    if not path:
+        raise ValueError("delete_subtree requires a non-empty stamp path")
+    deleted, failed = [], []
+    for name in sorted(files_under_path(listing, path)):
+        full = os.path.join(res_dir, name)
+        if not os.path.isfile(full):
+            continue
+        try:
+            os.remove(full)
+            deleted.append(name)
+        except OSError:
+            failed.append(name)
+    return deleted, failed
+
+
 def substamp_counts(listing, path):
     """Direct children of `path` -> number of files at that child or deeper,
     ordered by count descending, then name."""

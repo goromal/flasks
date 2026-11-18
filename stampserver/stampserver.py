@@ -27,6 +27,8 @@ from imageops import (
 )
 from fileops import (
     IdentityConflictError,
+    delete_subtree,
+    files_under_path,
     files_at_path,
     join_stamp_path,
     parse_stamped,
@@ -258,6 +260,12 @@ class StampServer:
         self.filelist = []
         return skipped
 
+    def delete_all(self, path):
+        """Permanently delete every file under `path`. Returns (deleted, failed)."""
+        deleted, failed = delete_subtree(RES_DIR, os.listdir(RES_DIR), path)
+        self.reset()
+        return deleted, failed
+
     def edit_current(self, path, target_path, operations, copy=False, advance=False):
         self._require_current_at(path)
         edit_and_stamp(RES_DIR, self.filedeck, target_path, operations, copy)
@@ -381,8 +389,17 @@ def index():
     file, ftype, numleft = stampserver.getfile()
     return flask.render_template("index.html", urlroot=urlroot, err=False, msg="", file=file_url(file, ftype), filepath=file_path(file), ftype=ftype, root="", nleft=str(numleft), datadir=current_datadir(), stamps=stamps)
 
+def _quoted_path(path):
+    return "/".join(quote(segment, safe="") for segment in path)
+
+
 def restamp_url(path):
-    return urlroot + "restamp/" + "/".join(quote(segment, safe="") for segment in path)
+    return urlroot + "restamp/" + _quoted_path(path)
+
+
+def delete_confirm_phrase(path):
+    """What the user must type to confirm deleting everything under `path`."""
+    return join_stamp_path(path) or "(empty)"
 
 
 def _identity_conflict_message(e):
@@ -490,6 +507,9 @@ def stamped(stamp=""):
     ]
     tree = dict(
         stamp_path=path,
+        subtree_count=len(files_under_path(listing, path)),
+        delete_phrase=delete_confirm_phrase(path),
+        delete_url=urlroot + "delete-stamp/" + _quoted_path(path),
         crumbs=[(segment or "(empty)", restamp_url(path[:i + 1])) for i, segment in enumerate(path)],
         substamps=substamps,
     )
@@ -500,6 +520,34 @@ def stamped(stamp=""):
         return flask.render_template("index.html", urlroot=urlroot, err=True, msg="The deck was reloaded; please try again.", file="", ftype="", root=root, nleft="?", datadir=current_datadir(), stamps={}, **tree)
     file, ftype, numleft = got
     return flask.render_template("index.html", urlroot=urlroot, err=False, msg="", file=file_url(file, ftype), filepath=file_path(file), ftype=ftype, root=root, nleft=str(numleft), datadir=current_datadir(), stamps={}, **tree)
+
+@bp.route("/delete-stamp/", methods=["POST"])
+@bp.route("/delete-stamp/<path:stamp>", methods=["POST"])
+@flask_login.login_required
+def delete_stamp(stamp=""):
+    """Permanently delete every file stamped `stamp` (sub-stamps included).
+
+    The form must echo the stamp path back in its `confirm` field, so a stray
+    or replayed POST can't wipe a category.
+    """
+    path = split_stamp_path(stamp)
+    if any("." in segment for segment in path) or ("" in path and path != [""]):
+        flask.abort(404)
+    if flask.request.form.get("confirm", "").strip() != delete_confirm_phrase(path):
+        flask.flash(f"Type \u201c{delete_confirm_phrase(path)}\u201d exactly to confirm deletion; nothing was deleted.")
+        return flask.redirect(restamp_url(path))
+    try:
+        deleted, failed = stampserver.delete_all(path)
+    except (ValueError, OSError) as e:
+        flask.flash(str(e))
+        return flask.redirect(restamp_url(path))
+    msg = f"Deleted {len(deleted)} file(s) stamped \u201c{delete_confirm_phrase(path)}\u201d."
+    if failed:
+        msg += " Could not delete: " + ", ".join(failed)
+    # The page only shows the first flashed message.
+    flask.flash(msg)
+    # A parent stamp still exists to land on; a root stamp is now gone.
+    return flask.redirect(restamp_url(path[:-1]) if len(path) > 1 else urlroot)
 
 @bp.route("/zzz", methods=["GET","POST"])
 @flask_login.login_required
