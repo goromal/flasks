@@ -8,7 +8,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from fileops import (
     IdentityConflictError,
     build_stamped,
+    delete_subtree,
     files_at_path,
+    files_under_path,
     identity_index,
     identity_key,
     join_stamp_path,
@@ -319,3 +321,40 @@ def test_rename_subtree_copy_within_same_root_skips_identity_conflicts(tmp_path)
         "stamped.a.stamped.d.z.png",
     ]
     assert sorted(os.listdir(d)) == before
+
+
+def test_files_under_path_includes_substamps():
+    assert sorted(files_under_path(LISTING, ["a", "d"])) == [
+        "stamped.a.stamped.d.stamped.p.v.png",
+        "stamped.a.stamped.d.y.png",
+        "stamped.a.stamped.d.z.png",
+    ]
+    assert files_under_path(LISTING, ["b"]) == ["stamped.b.q.png"]
+    assert files_under_path(LISTING, ["nope"]) == []
+
+
+def test_delete_subtree_removes_only_the_subtree(tmp_path):
+    for name in LISTING:
+        (tmp_path / name).write_bytes(b"x")
+    (tmp_path / "stamped.a.stamped.d.dir.png").mkdir()
+    deleted, failed = delete_subtree(str(tmp_path), os.listdir(tmp_path) + ["stamped.a.gone.png"], ["a", "d"])
+    assert deleted == [
+        "stamped.a.stamped.d.stamped.p.v.png",
+        "stamped.a.stamped.d.y.png",
+        "stamped.a.stamped.d.z.png",
+    ]
+    assert failed == []
+    assert sorted(os.listdir(tmp_path)) == sorted([
+        "plain.png",
+        "stamped.a.x.png",
+        "stamped.a.stamped.c.w.png",
+        "stamped.b.q.png",
+        "stamped.a.stamped.d.dir.png",
+    ])
+
+
+def test_delete_subtree_rejects_empty_path(tmp_path):
+    (tmp_path / "plain.png").write_bytes(b"x")
+    with pytest.raises(ValueError):
+        delete_subtree(str(tmp_path), ["plain.png"], [])
+    assert (tmp_path / "plain.png").exists()

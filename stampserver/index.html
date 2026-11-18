@@ -547,6 +547,22 @@
 
         .stamp-list li:last-child { border-bottom: none; }
 
+        .delete-stamp { border: 2px solid #f5c6cb; }
+        .delete-stamp summary { cursor: pointer; color: #c0392b; font-weight: 600; }
+        .delete-stamp form { box-shadow: none; padding: 0; margin: 16px 0 0; }
+        .delete-stamp input[type="text"] {
+            width: 100%;
+            padding: 12px;
+            font-size: 1rem;
+            font-family: inherit;
+            border: 2px solid #ced4da;
+            border-radius: 8px;
+            margin-bottom: 14px;
+            box-sizing: border-box;
+        }
+        .delete-stamp .btn { width: 100%; }
+        .delete-stamp .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
         .stamp-list a {
             display: flex;
             justify-content: space-between;
@@ -1071,6 +1087,18 @@
                 {% endfor %}
             </ul>
         </div>
+
+        {% if subtree_count %}
+        <details class="stamp-list delete-stamp">
+            <summary>Delete all media stamped &ldquo;{{ delete_phrase }}&rdquo;</summary>
+            <form id="deleteStampForm" action="{{ delete_url }}" method="POST">
+                <p class="upload-hint">Permanently deletes all <strong>{{ subtree_count }}</strong> file(s) stamped &ldquo;{{ delete_phrase }}&rdquo;, sub-stamps included. This cannot be undone. Type <code>{{ delete_phrase }}</code> to confirm.</p>
+                <input type="text" id="deleteConfirm" name="confirm" autocomplete="off" spellcheck="false"
+                       placeholder="{{ delete_phrase }}" data-phrase="{{ delete_phrase }}">
+                <button type="submit" id="deleteStampBtn" class="btn btn-danger" disabled>Delete {{ subtree_count }} file(s)</button>
+            </form>
+        </details>
+        {% endif %}
         {% endif %}
 
         <div class="stamp-list">
@@ -1312,6 +1340,26 @@
                 return raw;
             }
         }
+
+        // ===== DELETE ALL UNDER STAMP =====
+        // The server re-checks the typed phrase; this only gates the button and
+        // adds a last-chance dialog.
+        (function() {
+            const form = document.getElementById('deleteStampForm');
+            if (!form) return;
+            const input = document.getElementById('deleteConfirm');
+            const btn = document.getElementById('deleteStampBtn');
+            input.addEventListener('input', function() {
+                btn.disabled = input.value.trim() !== input.dataset.phrase;
+            });
+            form.addEventListener('submit', function(e) {
+                if (input.value.trim() !== input.dataset.phrase
+                        || !confirm('Permanently ' + btn.textContent.trim().toLowerCase()
+                                    + ' stamped "' + input.dataset.phrase + '"? This cannot be undone.')) {
+                    e.preventDefault();
+                }
+            });
+        })();
 
         // ===== STAMP INPUT VALIDATION =====
         // A stamp becomes the middle '.'-delimited field of the filename and must
