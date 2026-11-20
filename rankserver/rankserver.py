@@ -9,7 +9,7 @@ from PIL import Image, ImageOps
 import pillow_heif
 import flask_login
 import flask_wtf
-from wtforms import StringField, PasswordField, SubmitField
+from wtforms import StringField, SubmitField
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import timedelta
 from pysorting import (
@@ -64,9 +64,31 @@ if len(url_for_prefix) > 0:
 
 bp = flask.Blueprint("rank", __name__, url_prefix=args.subdomain)
 
+
+class SecretField(StringField):
+    """Password input masked by CSS rather than type="password", so browsers
+    and password managers never offer to save it. Never echoes its value."""
+
+    def _value(self):
+        return ""
+
+
+SECRET_FIELD_ATTRS = {
+    "class": "secret",
+    "autocomplete": "off",
+    "autocapitalize": "off",
+    "autocorrect": "off",
+    "spellcheck": "false",
+    "data-1p-ignore": "true",
+    "data-lpignore": "true",
+    "data-bwignore": "true",
+    "data-form-type": "other",
+}
+
+
 class LoginForm(flask_wtf.FlaskForm):
     username = StringField("Username")
-    password = PasswordField("Password")
+    password = SecretField("Password", render_kw=SECRET_FIELD_ATTRS)
     submit = SubmitField("Submit")
 
 class User(flask_login.UserMixin):
