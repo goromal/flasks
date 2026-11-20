@@ -91,11 +91,27 @@ def test_plan_sync_prunes_owned_dangling_across_tags():
     assert plan["prune"] == ["stamped.other.x.png"]
 
 
-def test_plan_sync_warns_on_blocking_regular_file():
+def test_plan_sync_replaces_blocking_regular_file():
     entries = {"stamped.t.a.png": {"type": "file"}}
     plan = rankops.plan_sync(["stamped.t.a.png"], entries, "t", "/s")
     assert plan["link"] == {}
-    assert len(plan["warnings"]) == 1 and "stamped.t.a.png" in plan["warnings"][0]
+    assert plan["replace"] == {"stamped.t.a.png": "stamped.t.a.png"}
+    assert plan["warnings"] == []
+
+
+def test_plan_sync_leaves_blocking_dir():
+    entries = {"stamped.t.a.png": {"type": "dir"}}
+    plan = rankops.plan_sync(["stamped.t.a.png"], entries, "t", "/s")
+    assert plan["link"] == {} and plan["replace"] == {}
+    assert len(plan["warnings"]) == 1
+
+
+def test_merge_plans_first_watch_wins_replace():
+    entries = {"stamped.t.a.png": {"type": "file"}}
+    first = rankops.plan_sync(["stamped.t.a.png"], entries, "t", "/s1")
+    second = rankops.plan_sync(["stamped.t.a.png"], entries, "t", "/s2")
+    merged = rankops.merge_plans([("/s1", first), ("/s2", second)])
+    assert merged["replace"] == {"stamped.t.a.png": ("/s1", "stamped.t.a.png")}
 
 
 UMAX = rankops.UINT32_MAX

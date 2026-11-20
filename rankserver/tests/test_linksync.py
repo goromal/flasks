@@ -30,10 +30,34 @@ def test_rank_sources_follow_top_membership(tmp_path):
     _touch(res / "c.png")
     assert linksync.sync_rank_sources(str(res), [(str(source), ["a.png", "b.png"])]) == []
     assert set(_links(res)) == {"a.png", "b.png"}
+    assert (res / "c.png").is_file() and not (res / "c.png").is_symlink()
     assert linksync.sync_rank_sources(str(res), [(str(source), ["b.png", "c.png"])]) == [
-        "c.png already exists; rank source item skipped"]
-    assert set(_links(res)) == {"b.png"}
-    assert (res / "c.png").is_file()
+        "Regular file c.png replaced by rank source link"]
+    assert set(_links(res)) == {"b.png", "c.png"}
+    assert os.readlink(str(res / "c.png")) == os.path.join(os.path.realpath(str(source)), "c.png")
+    assert (source / "c.png").is_file()
+    assert linksync.sync_rank_sources(str(res), [(str(source), ["b.png", "c.png"])]) == []
+
+
+def test_rank_source_never_deletes_its_own_target(tmp_path):
+    res = tmp_path / "res"
+    res.mkdir()
+    _touch(res / "a.png")
+    assert linksync.sync_rank_sources(str(res), [(str(res), ["a.png"])]) == [
+        "a.png is the rank source file itself; skipped"]
+    assert (res / "a.png").is_file() and not (res / "a.png").is_symlink()
+
+
+def test_rank_source_keeps_colliding_directory(tmp_path):
+    source = tmp_path / "source"
+    res = tmp_path / "res"
+    source.mkdir()
+    res.mkdir()
+    _touch(source / "a.png")
+    (res / "a.png").mkdir()
+    assert linksync.sync_rank_sources(str(res), [(str(source), ["a.png"])]) == [
+        "a.png already exists; rank source item skipped"]
+    assert (res / "a.png").is_dir()
 
 
 def test_rank_sources_preserve_other_source_links(tmp_path):
@@ -67,6 +91,25 @@ def test_links_named_by_identity_key(tmp_path):
     assert os.path.realpath(str(res / "stamped.t.a.png")) == os.path.realpath(str(stamp / "stamped.t.a.png"))
     assert os.path.realpath(str(res / "stamped.t.b.png")) == os.path.realpath(str(stamp / "stamped.t.stamped.d.b.png"))
     assert warnings == []
+
+
+def test_regular_file_replaced_by_stamp_link(tmp_path):
+    stamp = tmp_path / "stamp"
+    res = tmp_path / "res"
+    stamp.mkdir()
+    res.mkdir()
+    _touch(stamp / "stamped.t.stamped.d.a.png")
+    _touch(res / "stamped.t.a.png")
+    _touch(res / "other.png")
+
+    watches = [{"stamp_dir": str(stamp), "stamp_tag": "t"}]
+    assert _sync(res, watches) == ["Regular file stamped.t.a.png replaced by stamp link"]
+    assert set(_links(res)) == {"stamped.t.a.png"}
+    assert os.path.realpath(str(res / "stamped.t.a.png")) == os.path.realpath(
+        str(stamp / "stamped.t.stamped.d.a.png"))
+    assert (res / "other.png").is_file()
+    assert sorted(os.listdir(str(res))) == ["other.png", "stamped.t.a.png"]
+    assert _sync(res, watches) == []
 
 
 def test_sub_stamp_rename_retargets_in_place(tmp_path):

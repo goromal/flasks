@@ -169,14 +169,19 @@ def plan_sync(stamp_files, data_entries, tag, stamp_dir):
       retarget: {key: filename} for this watch's own dangling link, pointed
                 at its (possibly sub-stamp-renamed) match
       keep:     set of keys already linked to the right file by this watch
+      replace:  {key: filename} for matches blocked by a regular file; the
+                symlink takes precedence and the caller swaps it in over
+                (deleting) the regular file
       prune:    owned dangling symlinks of ANY tag/dir. The caller (via
                 merge_plans) must not prune a key any watch links, retargets
                 or keeps.
       warnings: human-readable strings
-    Never proposes touching regular files, dirs, or foreign symlinks.
+    Never proposes touching dirs or foreign symlinks; a regular file is only
+    ever replaced by the link for its own name.
     """
     tag_path = split_tag(tag)
-    plan = {"link": {}, "retarget": {}, "keep": set(), "prune": [], "warnings": []}
+    plan = {"link": {}, "retarget": {}, "keep": set(), "replace": {}, "prune": [],
+            "warnings": []}
     # Identity groups over every rankable file in the dir, regardless of tag
     # -- ambiguity has to be judged dir-wide: a narrow sub-path watch's own
     # tag-filtered candidate list can look unambiguous (one match) even when
@@ -234,7 +239,7 @@ def plan_sync(stamp_files, data_entries, tag, stamp_dir):
         if entry is None:
             plan["link"][key] = name
         elif entry["type"] == "file":
-            plan["warnings"].append("Regular file blocks stamped name: {}".format(key))
+            plan["replace"][key] = name
         elif entry["type"] == "dir" or not entry.get("owned"):
             plan["warnings"].append(
                 "{} exists and is not a link managed by this watch; not linking {}".format(
@@ -272,19 +277,21 @@ def merge_plans(plans):
     could win a race against the watch that does, depending on list order.
     plans: list of (stamp_dir, plan).
     Returns {"link": {key: (stamp_dir, name)}, "retarget": {key: (stamp_dir, name)},
+             "replace": {key: (stamp_dir, name)},
              "prune": sorted keys no watch claimed, "warnings": [...]}."""
-    merged = {"link": {}, "retarget": {}, "prune": [], "warnings": []}
+    merged = {"link": {}, "retarget": {}, "replace": {}, "prune": [], "warnings": []}
     taken = set()
     for _, plan in plans:
         taken |= plan["keep"]
     prunable = set()
     for stamp_dir, plan in plans:
         merged["warnings"] += plan["warnings"]
-        for kind in ("link", "retarget"):
-            for key, name in plan[kind].items():
+        for kind in ("link", "retarget", "replace"):
+            for key, name in plan.get(kind, {}).items():
                 if key not in taken:
                     merged[kind][key] = (stamp_dir, name)
-        taken |= set(plan["link"]) | set(plan["retarget"]) | plan["keep"]
+        taken |= (set(plan["link"]) | set(plan["retarget"])
+                  | set(plan.get("replace", {})) | plan["keep"])
         prunable.update(plan["prune"])
     merged["prune"] = sorted(prunable - taken)
     return merged

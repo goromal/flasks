@@ -17,6 +17,17 @@ def _link_target(full):
     return target
 
 
+def _swap_link(res_dir, key, target):
+    """Atomically point res_dir/key at target, replacing whatever is there
+    (a link, or a regular file, which is deleted). The name never disappears,
+    so reconcile() never sees the file drop out of the ranking."""
+    tmp = os.path.join(res_dir, ".{}.swap.tmp".format(key))
+    if os.path.lexists(tmp):
+        os.unlink(tmp)
+    os.symlink(target, tmp)
+    os.replace(tmp, os.path.join(res_dir, key))
+
+
 def data_dir_entries(res_dir, stamp_reals):
     """Classify res_dir entries for rankops.plan_sync.
 
@@ -47,8 +58,9 @@ def data_dir_entries(res_dir, stamp_reals):
 def sync_links(res_dir, watches):
     """Mirror watched stamp files into res_dir as symlinks named by identity
     key; re-point links whose target was renamed by a sub-stamp change; prune
-    owned dangling links no watch claims. Returns warning strings. Never
-    raises."""
+    owned dangling links no watch claims. A regular file colliding with a
+    link name is deleted in favor of the link. Returns warning strings.
+    Never raises."""
     warnings = []
     listings = []  # (stamp_real, stamp_files, tag)
     for watch in watches:
@@ -83,16 +95,16 @@ def sync_links(res_dir, watches):
         except OSError as e:
             warnings.append("link failed for {}: {}".format(key, e))
     for key, (stamp_real, name) in sorted(merged["retarget"].items()):
-        # Swap atomically so the link never disappears: a missing name would
-        # make reconcile() drop the file from the ranking.
-        tmp = os.path.join(res_dir, ".{}.retarget.tmp".format(key))
         try:
-            if os.path.lexists(tmp):
-                os.unlink(tmp)
-            os.symlink(os.path.join(stamp_real, name), tmp)
-            os.replace(tmp, os.path.join(res_dir, key))
+            _swap_link(res_dir, key, os.path.join(stamp_real, name))
         except OSError as e:
             warnings.append("retarget failed for {}: {}".format(key, e))
+    for key, (stamp_real, name) in sorted(merged["replace"].items()):
+        try:
+            _swap_link(res_dir, key, os.path.join(stamp_real, name))
+            warnings.append("Regular file {} replaced by stamp link".format(key))
+        except OSError as e:
+            warnings.append("replace failed for {}: {}".format(key, e))
     for key in merged["prune"]:
         try:
             os.unlink(os.path.join(res_dir, key))
@@ -105,7 +117,8 @@ def sync_rank_sources(res_dir, selections):
     """Mirror each source's current top names, removing links that leave top N.
 
     Only links pointing directly into a selected source directory are managed.
-    Regular files and links from other sources retain precedence.
+    A regular file colliding with a selected name is deleted in favor of the
+    link; links from other sources retain precedence.
     """
     warnings = []
     try:
@@ -134,6 +147,18 @@ def sync_rank_sources(res_dir, selections):
             warnings.append("rank source unlink failed for {}: {}".format(name, e))
     for name, target in desired.items():
         full = os.path.join(res_dir, name)
+        if os.path.isfile(full) and not os.path.islink(full):
+            try:
+                if os.path.samefile(full, target):
+                    # The "duplicate" is the source file itself; deleting it
+                    # would destroy the link's target.
+                    warnings.append("{} is the rank source file itself; skipped".format(name))
+                    continue
+                _swap_link(res_dir, name, target)
+                warnings.append("Regular file {} replaced by rank source link".format(name))
+            except OSError as e:
+                warnings.append("rank source replace failed for {}: {}".format(name, e))
+            continue
         if os.path.lexists(full):
             if not os.path.islink(full) or _link_target(full) != target:
                 warnings.append("{} already exists; rank source item skipped".format(name))
