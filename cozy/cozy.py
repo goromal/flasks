@@ -14,7 +14,7 @@ import flask_login
 import flask_wtf
 from datetime import timedelta
 from werkzeug.security import check_password_hash
-from wtforms import PasswordField, StringField, SubmitField
+from wtforms import StringField, SubmitField
 
 import wormhole
 from comfyui_client import ComfyUIClient
@@ -134,9 +134,30 @@ def _write_new_file(directory, name, data):
     raise OSError("too many files named like %s" % name)
 
 
+class SecretField(StringField):
+    """Password input masked by CSS rather than type="password", so browsers
+    and password managers never offer to save it. Never echoes its value."""
+
+    def _value(self):
+        return ""
+
+
+SECRET_FIELD_ATTRS = {
+    "class": "secret",
+    "autocomplete": "off",
+    "autocapitalize": "off",
+    "autocorrect": "off",
+    "spellcheck": "false",
+    "data-1p-ignore": "true",
+    "data-lpignore": "true",
+    "data-bwignore": "true",
+    "data-form-type": "other",
+}
+
+
 class LoginForm(flask_wtf.FlaskForm):
     username = StringField("Username")
-    password = PasswordField("Password")
+    password = SecretField("Password", render_kw=SECRET_FIELD_ATTRS)
     submit = SubmitField("Submit")
 
 

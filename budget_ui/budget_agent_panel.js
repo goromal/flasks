@@ -24,6 +24,18 @@
     children.forEach((c) => node.append(c));
     return node;
   };
+  // Masked text field instead of type="password" so the browser never offers to
+  // save it; falls back to a real password field where the CSS mask is unsupported.
+  const secretInput = (placeholder) => {
+    const input = el('input', {
+      type: window.CSS?.supports?.('-webkit-text-security', 'disc') ? 'text' : 'password',
+      autocomplete: 'off', autocapitalize: 'off', spellcheck: false, placeholder,
+    });
+    input.style.setProperty('-webkit-text-security', 'disc');
+    const attrs = { autocorrect: 'off', 'data-1p-ignore': 'true', 'data-lpignore': 'true', 'data-bwignore': 'true', 'data-form-type': 'other' };
+    Object.entries(attrs).forEach(([k, v]) => input.setAttribute(k, v));
+    return input;
+  };
   // Terminal controls for the current session view; torn down on any view change.
   let teardown = null;
   const show = (...nodes) => {
@@ -47,7 +59,7 @@
   }
 
   function loginView(error) {
-    const input = el('input', { type: 'password', autocomplete: 'current-password', placeholder: 'Companion password' });
+    const input = secretInput('Companion password');
     const button = el('button', { type: 'submit', textContent: 'Unlock' });
     const form = el('form', {}, input, button);
     if (error) form.append(el('p', { className: 'agent-error', textContent: error }));

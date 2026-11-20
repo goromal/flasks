@@ -116,6 +116,7 @@
                 font-size: 1.5rem;
             }
         }
+        .secret { -webkit-text-security: disc; }
     </style>
 </head>
 
@@ -146,6 +147,12 @@
             </form>
         </div>
     </div>
+    <script>
+        // Masked text field instead of type="password" so the browser never offers to save it;
+        // fall back to a real password field where the CSS mask is unsupported.
+        if (!(window.CSS && CSS.supports("-webkit-text-security", "disc")))
+            document.querySelectorAll("input.secret").forEach(function (i) { i.type = "password"; });
+    </script>
 </body>
 
 </html>
