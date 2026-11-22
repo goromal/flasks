@@ -51,12 +51,32 @@
             opacity: 0.6;
             cursor: not-allowed;
         }
+        .jump { margin-left: 16px; color: #1a4f8f; }
+        .report-tools { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; }
+        .report-tools input { flex: 1; max-width: 420px; padding: 8px 10px; font-size: 15px; }
+        .report-list { list-style: none; padding: 0; margin: 0; }
+        .report {
+            background: #f9f9f9; padding: 12px 15px; margin-bottom: 10px; border-radius: 8px;
+            display: flex; gap: 12px; align-items: flex-start; justify-content: space-between;
+        }
+        .report a.report-title { font-weight: bold; font-size: 17px; color: #1a4f8f; text-decoration: none; }
+        .report a.report-title:hover { text-decoration: underline; }
+        .report-meta { color: #666; font-size: 13px; margin: 2px 0 4px; }
+        .report-meta .tag { background: #e6e6e6; border-radius: 4px; padding: 0 6px; margin-left: 4px; }
+        .report-headline { margin: 0; font-size: 14px; color: #333; }
+        .report-totals { font-size: 13px; color: #444; margin-top: 4px; font-variant-numeric: tabular-nums; }
+        .report-totals span { margin-right: 14px; }
+        .report-totals .neg { color: #b4471c; }
+        .report button.delete { margin: 0; padding: 4px 10px; font-size: 13px; background: none;
+            border: 1px solid #ccc; border-radius: 6px; cursor: pointer; color: #900; flex-shrink: 0; }
+        .report-empty { color: #666; }
     </style>
 </head>
 
 <body>
     <header class="page-head">
         <h1>Let's Budget! 💸</h1>
+        <a class="jump" href="#reports">Spending reports ↓</a>
         {% if agent_enabled %}
         <button id="agent-toggle" type="button" aria-expanded="false">Agent</button>
         {% endif %}
@@ -101,6 +121,16 @@
             Process transactions
         </button>
         <div id="process-log" class="log-box"></div>
+    </div>
+
+    <div class="section" id="reports">
+        <h2>Spending reports</h2>
+        <p class="report-empty">Ask the budget agent for a report on any period (e.g. "a spending report for
+            October" or "Q3 vs Q2"); it appears here.</p>
+        <div class="report-tools">
+            <input id="report-q" type="search" placeholder="Filter reports…" autocomplete="off">
+        </div>
+        <ul id="report-list" class="report-list"></ul>
     </div>
 
     <script>
@@ -183,6 +213,93 @@
                 }
             })
             .catch(() => {});
+        // ---- Spending reports ------------------------------------------------
+        const REPORTS_URL = {{ (subdomain ~ "/reports") | tojson }};
+        const fmtMoney = v => (v < 0 ? '-$' : '$') + Math.abs(Math.round(v)).toLocaleString();
+        const fmtDay = s => s ? new Date(s + 'T00:00:00').toLocaleDateString(undefined,
+            { year: 'numeric', month: 'short', day: 'numeric' }) : '?';
+
+        function renderReports(list) {
+            const ul = document.getElementById('report-list');
+            ul.innerHTML = '';
+            if (!list.length) {
+                const li = document.createElement('li');
+                li.className = 'report-empty';
+                li.textContent = document.getElementById('report-q').value
+                    ? 'No reports match.' : 'No reports yet.';
+                ul.appendChild(li);
+                return;
+            }
+            for (const r of list) {
+                const li = document.createElement('li');
+                li.className = 'report';
+                const body = document.createElement('div');
+                const a = document.createElement('a');
+                a.className = 'report-title';
+                a.href = REPORTS_URL + '/' + encodeURIComponent(r.id);
+                a.target = '_blank';
+                a.rel = 'noopener';
+                a.textContent = r.title;
+                const meta = document.createElement('div');
+                meta.className = 'report-meta';
+                meta.textContent = fmtDay(r.from) + ' – ' + fmtDay(r.to)
+                    + (r.created ? ' · made ' + fmtDay(r.created.slice(0, 10)) : '');
+                for (const t of r.tags) {
+                    const tag = document.createElement('span');
+                    tag.className = 'tag';
+                    tag.textContent = t;
+                    meta.appendChild(tag);
+                }
+                body.append(a, meta);
+                if (r.headline) {
+                    const p = document.createElement('p');
+                    p.className = 'report-headline';
+                    p.textContent = r.headline;
+                    body.appendChild(p);
+                }
+                if (r.totals) {
+                    const t = document.createElement('div');
+                    t.className = 'report-totals';
+                    const parts = [['Income', r.totals.income], ['Spent', r.totals.spent],
+                                   ['Saved', r.totals.saved], ['Net', r.totals.net]];
+                    for (const [label, v] of parts) {
+                        if (typeof v !== 'number') continue;
+                        const span = document.createElement('span');
+                        span.textContent = label + ' ' + fmtMoney(v);
+                        if (label === 'Net' && v < 0) span.className = 'neg';
+                        t.appendChild(span);
+                    }
+                    body.appendChild(t);
+                }
+                const del = document.createElement('button');
+                del.className = 'delete';
+                del.type = 'button';
+                del.textContent = 'Delete';
+                del.onclick = () => {
+                    if (!confirm('Delete report "' + r.title + '"?')) return;
+                    fetch(REPORTS_URL + '/' + encodeURIComponent(r.id) + '/delete', { method: 'POST' })
+                        .then(res => res.ok ? loadReports() : res.json().then(d => alert(d.error || 'Delete failed')));
+                };
+                li.append(body, del);
+                ul.appendChild(li);
+            }
+        }
+
+        let reportTimer = null;
+        function loadReports() {
+            const q = document.getElementById('report-q').value;
+            fetch(REPORTS_URL + '?q=' + encodeURIComponent(q))
+                .then(r => r.json())
+                .then(d => renderReports(d.reports || []))
+                .catch(() => {});
+        }
+        document.getElementById('report-q').addEventListener('input', () => {
+            clearTimeout(reportTimer);
+            reportTimer = setTimeout(loadReports, 150);
+        });
+        loadReports();
+        // The agent panel writes reports while this page is open; pick them up.
+        setInterval(() => { if (!document.hidden) loadReports(); }, 15000);
     </script>
     {% if agent_enabled %}
     <aside id="agent-panel" data-base="{{ subdomain }}/agent" hidden aria-label="Agent companion">
