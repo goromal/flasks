@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from latest import LatestVersion, RecentChanges, is_behind, parse_version
+from latest import LatestVersion, RecentChanges, _parse_ls_refs, is_behind, parse_version
 
 
 @pytest.mark.parametrize("s,expected", [
@@ -48,6 +48,10 @@ class Clock:
         return self.t
 
 
+def no_head():
+    raise OSError("offline")
+
+
 def wait_idle(lv):
     for _ in range(200):
         if not lv._refreshing:
@@ -67,7 +71,7 @@ def test_fetches_in_background_and_caches_until_ttl():
         return responses[len(calls) - 1]
 
     clock = Clock()
-    lv = LatestVersion(url="u", ttl=300, fetch=fetch, clock=clock)
+    lv = LatestVersion(url="u", ttl=300, fetch=fetch, head=no_head, clock=clock)
     assert lv.get() is None  # never blocks: first call only starts the fetch
     assert lv.get() is None  # no second fetch while one is in flight
     release.set()
@@ -96,7 +100,7 @@ def test_keeps_last_known_value_on_failure(failure):
         return r
 
     clock = Clock()
-    lv = LatestVersion(ttl=10, fetch=fetch, clock=clock)
+    lv = LatestVersion(ttl=10, fetch=fetch, head=no_head, clock=clock)
     lv.get()
     wait_idle(lv)
     clock.t = 10
@@ -104,6 +108,82 @@ def test_keeps_last_known_value_on_failure(failure):
     wait_idle(lv)
     assert lv.get() == "9.6.6"
     assert results == []
+
+
+def test_reads_version_at_master_sha_and_skips_refetch_until_it_moves():
+    calls = []
+    heads = ["a" * 40, "a" * 40, "b" * 40]
+
+    def fetch(url):
+        calls.append(url)
+        return {"a": "9.23.0", "b": "9.24.0"}[url.split("/")[-2][0]]
+
+    clock = Clock()
+    lv = LatestVersion(ttl=30, fetch=fetch, head=lambda: heads.pop(0), clock=clock)
+    for t in (0, 30, 60):
+        clock.t = t
+        lv.get()
+        wait_idle(lv)
+    assert lv.get() == "9.24.0"
+    assert lv.sha == "b" * 40
+    assert calls == [f"https://raw.githubusercontent.com/goromal/anixpkgs/{'a' * 40}/ANIX_VERSION",
+                     f"https://raw.githubusercontent.com/goromal/anixpkgs/{'b' * 40}/ANIX_VERSION"]
+
+
+def test_parse_ls_refs():
+    sha = "11f7f0fd37a3926bb790cfc8a2767e0977ea156b"
+    assert _parse_ls_refs(f"003f{sha} refs/heads/master\n0000") == sha
+    with pytest.raises(ValueError):
+        _parse_ls_refs("0000")
+
+
+def test_falls_back_to_master_path_when_sha_check_fails():
+    calls = []
+    lv = LatestVersion(url="u", fetch=lambda url: calls.append(url) or "9.6.6", head=no_head)
+    assert lv._load() == "9.6.6"
+    assert calls == ["u"] and lv.sha is None
+
+
+def test_recent_changes_refresh_early_when_master_moves_but_not_too_often():
+    loads = []
+    head = ["a"]
+
+    def fetch(url):
+        loads.append(url)
+        return "[]"
+
+    clock = Clock()
+    rc = RecentChanges(ttl=900, min_interval=150, fetch=fetch, head=lambda: head[0], clock=clock)
+    rc.get()
+    wait_idle(rc)
+    assert len(loads) == 1
+    clock.t = 100
+    rc.get()
+    wait_idle(rc)
+    assert len(loads) == 1  # master unchanged
+    head[0] = "b"
+    rc.get()
+    wait_idle(rc)
+    assert len(loads) == 1  # moved, but within min_interval of the last load
+    clock.t = 150
+    rc.get()
+    wait_idle(rc)
+    assert len(loads) == 2
+    clock.t = 400
+    rc.get()
+    wait_idle(rc)
+    assert len(loads) == 2  # already loaded at "b"
+
+
+def test_changelog_files_are_read_at_the_loaded_sha():
+    urls = []
+
+    def fetch(url):
+        urls.append(url)
+        return _github([_commit("A (#7)", "2026-10-25T00:00:00Z")], [], {"pr-7.md": "A"})(url)
+
+    RecentChanges(count=1, fetch=fetch, head=lambda: "c" * 40)._load()
+    assert f"https://raw.githubusercontent.com/goromal/anixpkgs/{'c' * 40}/changes/pr-7.md" in urls
 
 
 def _commit(message, date, sha="abc"):
