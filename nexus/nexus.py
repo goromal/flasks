@@ -39,7 +39,8 @@ def create_app(
     roster = Roster(os.path.expanduser(state_dir), browse_cmd=browse_cmd)
     spokes = spokes or Spokes()
     latest = latest or LatestVersion()
-    changes = changes or RecentChanges()
+    # Refresh the changelog as soon as the version check sees master move.
+    changes = changes or RecentChanges(head=lambda: getattr(latest, "sha", None))
     # Start the first fetches now so they are ready for the first page load.
     latest.get()
     changes.get()
@@ -106,6 +107,7 @@ def create_app(
         probes = spokes.probe_all(machines)
         machines = roster.observe(probes)
         latest_version = latest.get()
+        changes.get()  # Never blocks; starts a refresh if master moved.
         views = [
             machine_view(h, machines[h], probes.get(h, {}), latest_version, roster.advertised)
             for h in machines

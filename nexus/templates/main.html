@@ -341,8 +341,10 @@ async function refresh(force) {
     const data = await r.json();
     machines = data.machines;
     // Keep the last known value if the hub briefly cannot reach GitHub.
+    const moved = data.latest && data.latest !== latest;
     latest = data.latest || latest;
     stale = false;
+    if (moved) setTimeout(refreshChanges, 5000);  // The hub refetches it once master moves.
     render();
     try {
       localStorage.setItem(CACHE_KEY, JSON.stringify(machines));
@@ -511,7 +513,7 @@ function renderChanges(changes) {
   }).join('');
 }
 
-// GitHub data the hub refreshes every 15 minutes, so poll it slowly.
+// GitHub data the hub refreshes when master moves (at most every 150 s); asking is cheap.
 async function refreshChanges() {
   try {
     const changes = (await (await fetch(`${BASE}/api/changelog`)).json()).changes;
@@ -539,7 +541,7 @@ loadCached();
 refresh(false);
 setInterval(() => refresh(false), 5000);
 refreshChanges();
-setInterval(refreshChanges, 60000);
+setInterval(refreshChanges, 15000);
 </script>
 </body>
 </html>

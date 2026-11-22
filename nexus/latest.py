@@ -5,17 +5,22 @@ import time
 import urllib.request
 from datetime import datetime
 
-MASTER_VERSION_URL = "https://raw.githubusercontent.com/goromal/anixpkgs/master/ANIX_VERSION"
-# raw.githubusercontent.com caches for ~5 min, so polling faster gains nothing.
-TTL_S = 300.0
+RAW_URL = "https://raw.githubusercontent.com/goromal/anixpkgs"
+# raw.githubusercontent.com caches branch paths for ~5 min, so this is only the
+# fallback when the master SHA is unknown; paths under a SHA are never stale.
+MASTER_VERSION_URL = f"{RAW_URL}/master/ANIX_VERSION"
+UPLOAD_PACK_URL = "https://github.com/goromal/anixpkgs.git/git-upload-pack"
+# A master-SHA check is one tiny git request outside the GitHub API rate limit.
+TTL_S = 30.0
 TIMEOUT_S = 5.0
 REPO_URL = "https://github.com/goromal/anixpkgs"
 COMMITS_API = "https://api.github.com/repos/goromal/anixpkgs/commits"
-CHANGES_RAW_URL = "https://raw.githubusercontent.com/goromal/anixpkgs/master/changes"
 CHANGES_COUNT = 5
 BUMPS_PAGE = 100  # GitHub's max per_page.
-# Unauthenticated GitHub API calls are limited to 60/hour per IP; this spends 2 per refresh.
+# Unauthenticated GitHub API calls are limited to 60/hour per IP and a refresh
+# spends 2: refresh when master moves, but at most every 150 s (48/hour).
 CHANGES_TTL_S = 900.0
+CHANGES_MIN_S = 150.0
 _BUMP = re.compile(r"(?:Bump\s+(patch|minor|major)\s+)?ANIX_VERSION\s*->\s*v?(\d+\.\d+\.\d+)", re.IGNORECASE)
 _PR_TITLE = re.compile(r"\(#(\d+)\)\s*$")
 _SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
@@ -24,6 +29,31 @@ _SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
 def _fetch_url(url, timeout=TIMEOUT_S):
     with urllib.request.urlopen(url, timeout=timeout) as resp:
         return resp.read().decode()
+
+
+def _pkt(line):
+    return b"%04x" % (len(line) + 4) + line
+
+
+def _master_sha(timeout=TIMEOUT_S):
+    """master's commit SHA via git protocol v2 ls-refs: always current, unlike raw URLs."""
+    body = (_pkt(b"command=ls-refs\n") + b"0001"
+            + _pkt(b"ref-prefix refs/heads/master\n") + b"0000")
+    req = urllib.request.Request(UPLOAD_PACK_URL, data=body, headers={
+        "Git-Protocol": "version=2",
+        "Content-Type": "application/x-git-upload-pack-request",
+        "Accept": "application/x-git-upload-pack-result",
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return _parse_ls_refs(resp.read().decode())
+
+
+def _parse_ls_refs(out):
+    # Each pkt-line is a 4-hex-digit length, then "<sha> <ref>".
+    m = re.search(r"^[0-9a-f]{4}([0-9a-f]{40}) refs/heads/master$", out, re.MULTILINE)
+    if not m:
+        raise ValueError(f"no master ref in {out[:100]!r}")
+    return m.group(1)
 
 
 def _commit_time(c):
@@ -61,6 +91,9 @@ class _Background:
         self._refreshing = False
         self._lock = threading.Lock()
 
+    def _stale(self, now):
+        return self._fetched_at is None or now - self._fetched_at >= self.ttl
+
     def _refresh(self):
         try:
             self.value = self._load()
@@ -73,8 +106,7 @@ class _Background:
 
     def get(self):
         with self._lock:
-            stale = self._fetched_at is None or self.clock() - self._fetched_at >= self.ttl
-            start = stale and not self._refreshing
+            start = not self._refreshing and self._stale(self.clock())
             if start:
                 self._refreshing = True
         if start:
@@ -83,16 +115,31 @@ class _Background:
 
 
 class LatestVersion(_Background):
-    """The anixpkgs version on master, i.e. what a default upgrade installs."""
+    """The anixpkgs version on master, i.e. what a default upgrade installs.
 
-    def __init__(self, url=MASTER_VERSION_URL, ttl=TTL_S, fetch=_fetch_url, clock=time.monotonic):
+    Polls master's SHA and reads ANIX_VERSION at that commit, so a release shows
+    within one ttl instead of waiting out the CDN cache on the master path.
+    """
+
+    def __init__(self, url=MASTER_VERSION_URL, ttl=TTL_S, fetch=_fetch_url, head=_master_sha,
+                 clock=time.monotonic):
         super().__init__(ttl, fetch, clock)
         self.url = url
+        self.head = head
+        # The master commit `value` was read at; None when it came from the fallback.
+        self.sha = None
 
     def _load(self):
-        value = str(self.fetch(self.url)).strip()
+        try:
+            sha = self.head()
+        except Exception:
+            sha = None
+        if sha and sha == self.sha and self.value:
+            return self.value
+        value = str(self.fetch(f"{RAW_URL}/{sha}/ANIX_VERSION" if sha else self.url)).strip()
         if parse_version(value) is None:
             raise ValueError(f"unexpected ANIX_VERSION: {value!r}")
+        self.sha = sha
         return value
 
 
@@ -105,11 +152,24 @@ class RecentChanges(_Background):
     bump committed at or after it. Either can happen without the other: an entry
     merged without a release ships in the next bump (version None until then),
     and a bump without an entry is just never anyone's first bump.
+
+    head() is master's current SHA (or None); a change refreshes early, at most
+    every min_interval, so a merge or release shows without waiting out the ttl.
     """
 
-    def __init__(self, count=CHANGES_COUNT, ttl=CHANGES_TTL_S, fetch=_fetch_url, clock=time.monotonic):
+    def __init__(self, count=CHANGES_COUNT, ttl=CHANGES_TTL_S, fetch=_fetch_url, clock=time.monotonic,
+                 head=lambda: None, min_interval=CHANGES_MIN_S):
         super().__init__(ttl, fetch, clock)
         self.count = count
+        self.head = head
+        self.min_interval = min_interval
+        self._loaded_head = None
+
+    def _stale(self, now):
+        if super()._stale(now):
+            return True
+        sha = self.head()
+        return bool(sha) and sha != self._loaded_head and now - self._fetched_at >= self.min_interval
 
     def _commits(self, path, per_page, since=None):
         url = f"{COMMITS_API}?sha=master&path={path}&per_page={per_page}"
@@ -118,6 +178,8 @@ class RecentChanges(_Background):
         return json.loads(self.fetch(url))
 
     def _load(self):
+        sha = self.head()
+        self._loaded_head = sha
         changes = self._commits("changes", self.count)
         if not changes:
             return []
@@ -142,7 +204,7 @@ class RecentChanges(_Background):
             text = title[: m.start()].strip() if m else title
             if pr is not None:
                 try:
-                    text = str(self.fetch(f"{CHANGES_RAW_URL}/pr-{pr}.md")).strip() or text
+                    text = str(self.fetch(f"{RAW_URL}/{sha or 'master'}/changes/pr-{pr}.md")).strip() or text
                 except Exception:
                     pass  # The commit title is the PR title; good enough.
             if covered_from is not None and when < covered_from:
