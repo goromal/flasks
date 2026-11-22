@@ -10,6 +10,7 @@ from flask import (
 from werkzeug.utils import secure_filename
 
 from run_store import RunStore
+from reports import create_reports_blueprint
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--port", type=int, default=5000, help="Port to run the server on")
@@ -18,6 +19,8 @@ parser.add_argument("--config-file", type=str, default="~/configs/budget-tool.js
                     help="Path to default budget config JSON file")
 parser.add_argument("--state-dir", type=str, default="~/.local/state/budget-ui",
                     help="Directory for run log and state persistence")
+parser.add_argument("--reports-dir", type=str, default="~/data/budgets/reports",
+                    help="Directory the budget agent writes spending reports into")
 parser.add_argument("--agents", type=str, default="",
                     help="Comma-separated agent CLIs for the companion (empty = disabled)")
 parser.add_argument("--agent-secrets", type=str, default="",
@@ -145,6 +148,7 @@ def custom_static(filename):
     return app.send_static_file(filename)
 
 app.register_blueprint(bp)
+app.register_blueprint(create_reports_blueprint(args.reports_dir, url_prefix=args.subdomain))
 
 AGENT_ENABLED = bool(args.agents.strip() and args.agent_secrets)
 if AGENT_ENABLED:
