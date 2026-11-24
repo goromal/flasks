@@ -358,6 +358,17 @@ def test_workspace_pages_show_status(configured_app):
     assert detail.status_code == 200
     assert b"dev/example" in detail.data
     assert b"helper" in detail.data
+    assert b"not in devrc" not in detail.data
+
+
+def test_workspace_page_flags_repository_missing_from_devrc(configured_app):
+    app, _, workspaces = configured_app
+    client = app.test_client()
+    login(client)
+    status = workspaces.status("ui")
+    status["repositories"][0]["configured"] = False
+    workspaces.status = lambda workspace: status
+    assert b"not in devrc" in client.get("/agents/workspaces/ui").data
 
 
 def test_workspace_action_invokes_devshellctl(configured_app):
