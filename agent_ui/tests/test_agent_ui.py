@@ -529,6 +529,21 @@ def test_terminal_page_has_agents_navigation_and_embeds_ttyd(configured_app):
     assert token.encode() in response.data
 
 
+def test_agent_composer_js_is_safe_for_jinja_include():
+    # terminal.html does `{% include "agent_composer.js" %}` inside a <script>
+    # tag, so Jinja parses the file as a template: it must never contain
+    # Jinja delimiters or a literal "</script" that would break the include
+    # or let the composer's own content terminate the tag early.
+    path = os.path.join(
+        os.path.dirname(__file__), "..", "templates", "agent_composer.js"
+    )
+    assert os.path.islink(path)
+    with open(path, encoding="utf-8") as handle:
+        content = handle.read()
+    for forbidden in ("{{", "{%", "{#", "</script"):
+        assert forbidden not in content, forbidden
+
+
 def test_session_name_accepts_any_configured_agent_shape():
     # The regex must not pin the agent to claude|codex|shell.
     from agent_ui import SESSION_NAME

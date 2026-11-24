@@ -167,10 +167,16 @@
 
     textarea.value = loadDraft();
     fit();
+    // Budget/Assistant mount into a host that isn't attached to the document
+    // yet (it's inserted afterward): scrollHeight is 0 at that point, so fit()
+    // pins an inline height instead of sizing to content. Once attached, a
+    // layout pass has happened by the next frame.
+    if (!form.isConnected) window.requestAnimationFrame(fit);
     textarea.addEventListener("input", function () {
       saveDraft(textarea.value);
       fit();
     });
+    textarea.addEventListener("focus", fit);
     textarea.addEventListener("keydown", function (evt) {
       if (evt.key === "Enter" && (evt.ctrlKey || evt.metaKey)) {
         evt.preventDefault();

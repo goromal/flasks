@@ -250,6 +250,13 @@ class AgentSendRouteTest(unittest.TestCase):
         self.assertEqual(r.status_code, 204)
         self.assertEqual(sessions.sent, [(SEND_NAME, "")])
 
+    def test_send_non_object_json_is_empty_text(self):
+        client, sessions, csrf = _send_client()
+        r = client.post(f"/budget/agent/sessions/{SEND_NAME}/send",
+                         json=["not", "an", "object"], headers={"X-CSRF-Token": csrf})
+        self.assertEqual(r.status_code, 204)
+        self.assertEqual(sessions.sent, [(SEND_NAME, "")])
+
     def test_send_requires_auth(self):
         client, sessions = _client()
         sessions.active = [{"name": SEND_NAME, "agent": "claude", "created": 1, "attached": 0}]

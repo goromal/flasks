@@ -274,7 +274,9 @@ def create_agent_blueprint(auth, sessions, url_prefix, cookie_path, status,
         require_csrf()
         if (request.content_length or 0) > MAX_SEND_REQUEST_BYTES:
             abort(413)
-        body = request.get_json(silent=True) or {}
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            body = {}
         text = body.get("text", "")
         if not isinstance(text, str):
             text = ""
