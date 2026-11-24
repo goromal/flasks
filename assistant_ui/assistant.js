@@ -577,7 +577,16 @@
     });
     const bar = keyBar(installed.controls);
     select = bar.select;
-    show(frame, bar.nav);
+    // Composer (shared flasks/shared/agent_composer.js): typed text is posted
+    // to the backend, which pastes it into the tmux pane via agent-send.
+    const composerHost = el('div', { className: 'agent-composer-host' });
+    AgentComposer.mount(composerHost, {
+      draftKey: 'assistant-agent-draft:' + name,
+      send: (text) => api('/sessions/' + encodeURIComponent(name) + '/send', {
+        method: 'POST', body: JSON.stringify({ text }),
+      }),
+    });
+    show(frame, composerHost, bar.nav);
     teardown = installed.cleanup;
   }
 

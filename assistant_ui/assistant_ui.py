@@ -10,7 +10,7 @@ from agent_companion import (
 
 def create_app(subdomain, agents, secrets_file, repo_dir, tmux_bin="tmux",
                tmux_config=None, session_command="assistant-agent-session",
-               git_bin="git", secure_cookie=True):
+               git_bin="git", secure_cookie=True, send_command="agent-send"):
     app = Flask(__name__)
     page = Blueprint("assistant", __name__, url_prefix=subdomain)
 
@@ -28,7 +28,8 @@ def create_app(subdomain, agents, secrets_file, repo_dir, tmux_bin="tmux",
     app.register_blueprint(create_agent_blueprint(
         AgentAuth(key, pwhash),
         RepoSessions(agents=agents, repo_dir=repo_dir, tmux_bin=tmux_bin,
-                     config=tmux_config, session_command=session_command),
+                     config=tmux_config, session_command=session_command,
+                     send_command=send_command),
         url_prefix=f"{subdomain}/agent",
         cookie_path=f"{subdomain}/" if subdomain else "/",
         status=lambda: repo_status(repo_dir, git_bin),
@@ -48,6 +49,7 @@ def run():
     parser.add_argument("--agent-tmux", default="tmux")
     parser.add_argument("--agent-tmux-config", default="")
     parser.add_argument("--agent-session-cmd", default="assistant-agent-session")
+    parser.add_argument("--agent-send-cmd", default="agent-send")
     parser.add_argument("--git", default="git")
     parser.add_argument("--insecure-cookie", action="store_true",
                         help="Allow the login cookie over plain HTTP (local testing only)")
@@ -56,6 +58,7 @@ def run():
         args.subdomain, [a for a in args.agents.replace(",", " ").split() if a],
         args.agent_secrets, args.repo_dir, args.agent_tmux, args.agent_tmux_config or None,
         args.agent_session_cmd, args.git, secure_cookie=not args.insecure_cookie,
+        send_command=args.agent_send_cmd,
     )
     app.run(host="127.0.0.1", port=args.port, debug=False, threaded=True)
 
