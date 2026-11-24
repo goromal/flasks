@@ -14,17 +14,47 @@
     var style = document.createElement("style");
     style.setAttribute(STYLE_ATTR, "");
     style.textContent = [
+      // Host pages (budget_ui, Assistant) carry generic rules like
+      // "#agent-body form" or ".main form" for their own login/new-session
+      // forms; those are higher-specificity than a plain ".agent-composer"
+      // class (one has an id) and were flipping this row to a column. The
+      // "form.agent-composer" selector plus !important on exactly the
+      // properties such host rules set (display/flex-direction/flex-wrap/
+      // align-items/margin/padding/gap) is the only way to reliably beat an
+      // id-qualified host selector without knowing its name in advance;
+      // cosmetic properties (background/colors/fonts) don't need it, since
+      // host rules here never target this class specifically.
       ".agent-composer {",
       "  display: flex;",
+      "  flex-direction: row;",
+      "  flex-wrap: nowrap;",
+      "  align-items: stretch;",
       "  gap: 6px;",
+      "  width: 100%;",
+      "  box-sizing: border-box;",
+      "  margin: 0;",
       "  padding: 6px 6px 0;",
       "  background: #10151d;",
       "  border-top: 1px solid #2d3b4c;",
       "}",
-      ".agent-composer__text {",
+      "form.agent-composer {",
+      "  display: flex !important;",
+      "  flex-direction: row !important;",
+      "  flex-wrap: nowrap !important;",
+      "  align-items: stretch !important;",
+      "  margin: 0 !important;",
+      "  padding: 6px 6px 0 !important;",
+      "  gap: 6px !important;",
+      "}",
+      ".agent-composer .agent-composer__text {",
+      "  display: block;",
       "  flex: 1 1 auto;",
       "  min-width: 0;",
+      "  width: auto;",
+      "  height: auto;",
+      "  min-height: 0;",
       "  max-height: 152px;",
+      "  margin: 0;",
       "  box-sizing: border-box;",
       "  resize: none;",
       "  overflow-y: auto;",
@@ -34,19 +64,29 @@
       "  background: #0b1017;",
       "  color: #eef4f8;",
       "  font: 16px/1.35 system-ui, sans-serif;",
+      "  line-height: 1.35;",
       "}",
-      ".agent-composer__send {",
+      ".agent-composer .agent-composer__send {",
+      "  display: flex;",
+      "  align-items: center;",
+      "  justify-content: center;",
       "  flex: 0 0 auto;",
+      "  width: auto;",
+      "  height: auto;",
+      "  min-height: 0;",
+      "  margin: 0;",
+      "  box-sizing: border-box;",
       "  padding: 0 16px;",
       "  border: 1px solid #2f81f7;",
       "  border-radius: 8px;",
       "  background: #2f81f7;",
       "  color: #fff;",
       "  font: 650 16px/1 system-ui, sans-serif;",
+      "  line-height: 1;",
       "  cursor: pointer;",
       "  touch-action: manipulation;",
       "}",
-      ".agent-composer__send:disabled { opacity: 0.7; }",
+      ".agent-composer .agent-composer__send:disabled { opacity: 0.7; }",
     ].join("\n");
     document.head.appendChild(style);
   }
