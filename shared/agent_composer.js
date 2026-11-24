@@ -17,13 +17,16 @@
       // Host pages (budget_ui, Assistant) carry generic rules like
       // "#agent-body form" or ".main form" for their own login/new-session
       // forms; those are higher-specificity than a plain ".agent-composer"
-      // class (one has an id) and were flipping this row to a column. The
-      // "form.agent-composer" selector plus !important on exactly the
-      // properties such host rules set (display/flex-direction/flex-wrap/
-      // align-items/margin/padding/gap) is the only way to reliably beat an
-      // id-qualified host selector without knowing its name in advance;
-      // cosmetic properties (background/colors/fonts) don't need it, since
-      // host rules here never target this class specifically.
+      // class (one has an id, both have a type selector) and were observed
+      // overriding display, flex-direction, margin, padding, gap and width
+      // (one of them sets a max-width that squeezes this row short of the
+      // page edge). The "form.agent-composer" selector plus !important on
+      // exactly those contested properties is the only way to reliably beat
+      // an id-qualified host selector without knowing its name in advance.
+      // flex-wrap, align-items and box-sizing aren't contested by any rule
+      // seen so far; they're !important here defensively, for the same
+      // reason. Cosmetic properties (background/colors/fonts) don't need it,
+      // since host rules here never target this class specifically.
       ".agent-composer {",
       "  display: flex;",
       "  flex-direction: row;",
@@ -45,6 +48,8 @@
       "  margin: 0 !important;",
       "  padding: 6px 6px 0 !important;",
       "  gap: 6px !important;",
+      "  width: 100% !important;",
+      "  box-sizing: border-box !important;",
       "}",
       ".agent-composer .agent-composer__text {",
       "  display: block;",
