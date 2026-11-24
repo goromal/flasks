@@ -816,9 +816,28 @@ def test_send_rejects_oversized_text(configured_app):
     assert manager.sent == []
 
 
+def test_send_rejects_request_over_max_content_length(configured_app):
+    client, manager, token = _send_app(configured_app)
+    response = client.post(
+        f"/agents/sessions/{SEND_NAME}/send",
+        data={"_csrf": token, "text": "x" * (2 * 1024 * 1024)},
+    )
+    assert response.status_code == 413
+    assert manager.sent == []
+
+
 def test_send_failure_is_500(configured_app):
     client, manager, token = _send_app(configured_app)
     manager.send_error = subprocess.CalledProcessError(1, ["agent-send"])
+    response = client.post(
+        f"/agents/sessions/{SEND_NAME}/send", data={"_csrf": token, "text": "hi"}
+    )
+    assert response.status_code == 500
+
+
+def test_send_timeout_is_500(configured_app):
+    client, manager, token = _send_app(configured_app)
+    manager.send_error = subprocess.TimeoutExpired(["agent-send"], 10)
     response = client.post(
         f"/agents/sessions/{SEND_NAME}/send", data={"_csrf": token, "text": "hi"}
     )
@@ -846,7 +865,7 @@ def test_tmux_send_pipes_text_to_send_command(monkeypatch):
     TmuxSessions(socket="agent-ui", send_command="/x/agent-send").send(SEND_NAME, "hi")
     assert calls[-1] == (
         ["/x/agent-send", "-L", "agent-ui", SEND_NAME],
-        {"input": "hi", "text": True, "check": True},
+        {"input": "hi", "encoding": "utf-8", "check": True, "timeout": 10},
     )
 
     TmuxSessions(send_command="/x/agent-send").send(SEND_NAME, "")

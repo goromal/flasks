@@ -168,7 +168,7 @@ class TmuxSessions:
         self._require_session_name(name)
         subprocess.run(
             [self.send_command, "-L", self.socket or "default", name],
-            input=text, text=True, check=True,
+            input=text, encoding="utf-8", check=True, timeout=10,
         )
 
     def terminate(self, name):
@@ -297,6 +297,7 @@ def create_app(
         SESSION_COOKIE_SECURE=secure_cookie,
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Strict",
+        MAX_CONTENT_LENGTH=1 << 20,
     )
 
     login_manager = flask_login.LoginManager()
@@ -536,7 +537,10 @@ def create_app(
             abort(413)
         try:
             sessions.send(name, text)
-        except (ValueError, OSError, subprocess.CalledProcessError):
+        except (
+            ValueError, OSError,
+            subprocess.CalledProcessError, subprocess.TimeoutExpired,
+        ):
             abort(500)
         return "", 204
 
