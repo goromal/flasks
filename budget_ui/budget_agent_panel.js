@@ -531,7 +531,9 @@
   }
 
   async function init() {
-    if (location.protocol !== 'https:') { httpsView(); return; }
+    if (location.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(location.hostname)) {
+      httpsView(); return;
+    }
     try {
       const cfg = await api('/config');
       csrf = cfg.csrf; agents = cfg.agents;
