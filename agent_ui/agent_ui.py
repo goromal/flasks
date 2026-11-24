@@ -30,6 +30,7 @@ SESSION_NAME = re.compile(
 )
 LABEL_OPTION = "@agent_ui_label"
 MAX_LABEL_LENGTH = 80
+MAX_SEND_BYTES = 64 * 1024
 
 
 def clean_label(raw):
@@ -86,12 +87,13 @@ def _load_secrets(path):
 class TmuxSessions:
     def __init__(
         self, tmux_bin="tmux", session_command="agent-ui-session",
-        socket=None, config=None,
+        socket=None, config=None, send_command="agent-send",
     ):
         self.tmux_bin = tmux_bin
         self.session_command = session_command
         self.socket = socket
         self.config = config
+        self.send_command = send_command
 
     def _base(self):
         base = [self.tmux_bin]
@@ -159,6 +161,15 @@ class TmuxSessions:
     def interrupt(self, name):
         self._require_session_name(name)
         subprocess.run(self._base() + ["send-keys", "-t", name, "C-c"], check=True)
+
+    def send(self, name, text):
+        """Type text into the session as one bracketed paste, then Enter (via
+        anixpkgs' agent-send, shared with the companion UIs)."""
+        self._require_session_name(name)
+        subprocess.run(
+            [self.send_command, "-L", self.socket or "default", name],
+            input=text, text=True, check=True,
+        )
 
     def terminate(self, name):
         self._require_session_name(name)
@@ -247,6 +258,7 @@ def create_app(
     tmux_socket=None,
     tmux_config=None,
     session_command="agent-ui-session",
+    send_command="agent-send",
     workspace_command="devshellctl",
     history="~/.devhist",
     secure_cookie=True,
@@ -262,7 +274,8 @@ def create_app(
     csrf_token = hmac.new(secret_key, b"csrf", hashlib.sha256).hexdigest()
     cookie_path = f"{subdomain}/" if subdomain else "/"
     sessions = session_manager or TmuxSessions(
-        tmux_bin, session_command, socket=tmux_socket, config=tmux_config
+        tmux_bin, session_command, socket=tmux_socket, config=tmux_config,
+        send_command=send_command,
     )
     workspaces = workspace_manager or WorkspaceCli(workspace_command, devrc, history)
     session_types = (*allowed_agents, "shell")
@@ -490,6 +503,7 @@ def create_app(
             "terminal.html",
             name=name,
             label=session.get("label", ""),
+            csrf_token=csrf_token,
             subdomain=subdomain,
         )
 
@@ -512,6 +526,19 @@ def create_app(
         except (ValueError, subprocess.CalledProcessError):
             abort(500)
         return redirect(url_for("agent_ui.index"))
+
+    @bp.route("/sessions/<name>/send", methods=["POST"])
+    def send_to_session(name):
+        require_csrf()
+        require_session(name)
+        text = request.form.get("text", "").replace("\r\n", "\n")
+        if len(text.encode()) > MAX_SEND_BYTES:
+            abort(413)
+        try:
+            sessions.send(name, text)
+        except (ValueError, OSError, subprocess.CalledProcessError):
+            abort(500)
+        return "", 204
 
     @bp.route("/sessions/<name>/terminate", methods=["POST"])
     def terminate_session(name):
@@ -544,6 +571,7 @@ def main():
     parser.add_argument("--tmux-socket", default=None)
     parser.add_argument("--tmux-config", default=None)
     parser.add_argument("--session-command", default="agent-ui-session")
+    parser.add_argument("--send-command", default="agent-send")
     parser.add_argument("--workspace-command", default="devshellctl")
     parser.add_argument("--history", default="~/.devhist")
     args = parser.parse_args()
@@ -557,6 +585,7 @@ def main():
         tmux_socket=args.tmux_socket,
         tmux_config=args.tmux_config,
         session_command=args.session_command,
+        send_command=args.send_command,
         workspace_command=args.workspace_command,
         history=args.history,
     )
