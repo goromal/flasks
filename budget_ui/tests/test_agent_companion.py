@@ -120,12 +120,40 @@ class AgentSessionsTest(unittest.TestCase):
                 mgr.kill(bad)
         self.assertTrue(os.path.isdir(os.path.join(self.spool, f"budget-agent-{sid}")))
 
+    def test_send_pipes_text_to_send_command(self):
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((list(cmd), kwargs))
+
+        subprocess.run = fake_run
+        mgr = AgentSessions(
+            agents=("claude", "codex"), spool_dir=self.spool, tmux_bin="tmux",
+            config=None, session_command="budget-agent-session",
+            send_command="/x/agent-send",
+        )
+        name = "budget-agent--claude--0123abcd"
+        mgr.send(name, "hi")
+        self.assertEqual(calls[-1], (
+            ["/x/agent-send", "-L", "budget-agent", name],
+            {"input": "hi", "encoding": "utf-8", "check": True, "timeout": 10},
+        ))
+
+    def test_send_rejects_bad_name_before_running(self):
+        subprocess.run = self._fake_run()
+        mgr = self._mgr()
+        with self.assertRaises(ValueError):
+            mgr.send("../../etc/passwd", "hi")
+        self.assertEqual(self.calls, [])
+
 
 class FakeSessions:
     def __init__(self):
         self.agents = ("claude", "codex")
         self.active = []
         self.killed = []
+        self.sent = []
+        self.send_error = None
 
     def list(self):
         return list(self.active)
@@ -141,6 +169,11 @@ class FakeSessions:
         if not SESSION_RE.fullmatch(name):
             raise ValueError("bad name")
         self.killed.append(name)
+
+    def send(self, name, text):
+        if self.send_error:
+            raise self.send_error
+        self.sent.append((name, text))
 
 
 def _client():
@@ -190,6 +223,98 @@ class AgentApiTest(unittest.TestCase):
         self.assertEqual(sessions.killed, [name])
         self.assertEqual(
             client.delete("/budget/agent/sessions/nope", headers=hdr).status_code, 400)
+
+
+SEND_NAME = "budget-agent--claude--0123abcd"
+
+
+def _send_client():
+    client, sessions = _client()
+    csrf = client.post("/budget/agent/login", json={"password": "pw"}).get_json()["csrf"]
+    sessions.active = [{"name": SEND_NAME, "agent": "claude", "created": 1, "attached": 0}]
+    return client, sessions, csrf
+
+
+class AgentSendRouteTest(unittest.TestCase):
+    def test_send_pastes_text_into_session(self):
+        client, sessions, csrf = _send_client()
+        r = client.post(f"/budget/agent/sessions/{SEND_NAME}/send",
+                         json={"text": "a\r\nb"}, headers={"X-CSRF-Token": csrf})
+        self.assertEqual(r.status_code, 204)
+        self.assertEqual(sessions.sent, [(SEND_NAME, "a\nb")])
+
+    def test_send_empty_text_just_presses_enter(self):
+        client, sessions, csrf = _send_client()
+        r = client.post(f"/budget/agent/sessions/{SEND_NAME}/send",
+                         json={}, headers={"X-CSRF-Token": csrf})
+        self.assertEqual(r.status_code, 204)
+        self.assertEqual(sessions.sent, [(SEND_NAME, "")])
+
+    def test_send_requires_auth(self):
+        client, sessions = _client()
+        sessions.active = [{"name": SEND_NAME, "agent": "claude", "created": 1, "attached": 0}]
+        r = client.post(f"/budget/agent/sessions/{SEND_NAME}/send", json={"text": "hi"})
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(sessions.sent, [])
+
+    def test_send_requires_csrf(self):
+        client, sessions, _csrf = _send_client()
+        r = client.post(f"/budget/agent/sessions/{SEND_NAME}/send", json={"text": "hi"})
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(sessions.sent, [])
+
+    def test_send_rejects_invalid_name(self):
+        client, sessions, csrf = _send_client()
+        r = client.post("/budget/agent/sessions/not-a-session/send",
+                         json={"text": "hi"}, headers={"X-CSRF-Token": csrf})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(sessions.sent, [])
+
+    def test_send_unknown_session_is_404(self):
+        client, sessions, csrf = _send_client()
+        r = client.post("/budget/agent/sessions/budget-agent--claude--deadbeef/send",
+                         json={"text": "hi"}, headers={"X-CSRF-Token": csrf})
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(sessions.sent, [])
+
+    def test_send_rejects_oversized_text(self):
+        client, sessions, csrf = _send_client()
+        r = client.post(f"/budget/agent/sessions/{SEND_NAME}/send",
+                         json={"text": "é" * (32 * 1024 + 1)}, headers={"X-CSRF-Token": csrf})
+        self.assertEqual(r.status_code, 413)
+        self.assertEqual(sessions.sent, [])
+
+    def test_send_failure_is_500(self):
+        client, sessions, csrf = _send_client()
+        sessions.send_error = subprocess.CalledProcessError(1, ["agent-send"])
+        r = client.post(f"/budget/agent/sessions/{SEND_NAME}/send",
+                         json={"text": "hi"}, headers={"X-CSRF-Token": csrf})
+        self.assertEqual(r.status_code, 500)
+
+    def test_send_timeout_is_500(self):
+        client, sessions, csrf = _send_client()
+        sessions.send_error = subprocess.TimeoutExpired(["agent-send"], 10)
+        r = client.post(f"/budget/agent/sessions/{SEND_NAME}/send",
+                         json={"text": "hi"}, headers={"X-CSRF-Token": csrf})
+        self.assertEqual(r.status_code, 500)
+
+
+class AgentComposerStaticTest(unittest.TestCase):
+    def test_served_with_js_content(self):
+        # Mirrors budget_ui.py's custom_static route: the shared composer is
+        # installed (symlinked, for now) at budget_ui/static/agent_composer.js,
+        # which is the default Flask static_folder next to budget_ui.py.
+        static_dir = os.path.join(os.path.dirname(__file__), "..", "static")
+        app = Flask(__name__, static_folder=static_dir)
+
+        @app.route("/budget/static/<path:filename>")
+        def custom_static(filename):
+            return app.send_static_file(filename)
+
+        client = app.test_client()
+        r = client.get("/budget/static/agent_composer.js")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn(b"AgentComposer", r.data)
 
 
 if __name__ == "__main__":
