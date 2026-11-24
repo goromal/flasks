@@ -49,53 +49,12 @@
     }
     .keys button:active { background: #2f81f7; }
     .keys button.active { background: #2f81f7; }
-    /* Native composer: phone keyboards (autocorrect, swipe, dictation) work in a
-       real textarea; the text reaches tmux server-side via agent-send. */
-    .composer {
-      flex: 0 0 auto;
-      display: flex;
-      gap: 6px;
-      padding: 6px 6px 0;
-      background: #10151d;
-      border-top: 1px solid #2d3b4c;
-    }
-    .composer textarea {
-      flex: 1 1 auto;
-      min-width: 0;
-      max-height: 152px;
-      box-sizing: border-box;
-      resize: none;
-      overflow-y: auto;
-      padding: 10px;
-      border: 1px solid #3a4b5e;
-      border-radius: 8px;
-      background: #0b1017;
-      color: #eef4f8;
-      font: 16px/1.35 system-ui, sans-serif;
-    }
-    .composer button {
-      flex: 0 0 auto;
-      padding: 0 16px;
-      border: 1px solid #2f81f7;
-      border-radius: 8px;
-      background: #2f81f7;
-      color: #fff;
-      font: 650 16px/1 system-ui, sans-serif;
-      cursor: pointer;
-      touch-action: manipulation;
-    }
-    .composer button:disabled { opacity: 0.7; }
   </style>
 </head>
 <body>
   <a class="agents-link" href="{{ subdomain }}/">Agents</a>
   <iframe id="term" src="{{ subdomain }}/terminal/?arg={{ name|urlencode }}" title="Agent terminal"></iframe>
-  <form class="composer" id="composer" action="{{ subdomain }}/sessions/{{ name }}/send" method="post">
-    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-    <textarea id="composer-text" name="text" rows="1" enterkeyhint="enter"
-              autocapitalize="sentences" placeholder="Message" aria-label="Message to send"></textarea>
-    <button type="submit" id="composer-send">Send</button>
-  </form>
+  <div id="composer"></div>
   <nav class="keys" aria-label="Terminal keys">
     <button type="button" data-action="select" aria-pressed="false" title="Drag across terminal text to select it">Select</button>
     <button type="button" data-action="copy" title="Copy selected text, or the visible terminal">Copy</button>
@@ -112,6 +71,7 @@
     <button type="button" data-key="Enter" data-code="13">&crarr;</button>
     <button type="button" data-key="c" data-code="67" data-ctrl="1">^C</button>
   </nav>
+  <script>{% include "agent_composer.js" %}</script>
   <script>
     (function () {
       var iframe = document.getElementById("term");
@@ -567,65 +527,18 @@
         });
       }
 
-      // Composer: typed text is posted to the backend, which pastes it into the
-      // tmux pane (agent-send) -- it never goes through xterm's helper textarea.
-      var composer = document.getElementById("composer");
-      var composerText = document.getElementById("composer-text");
-      var composerSend = document.getElementById("composer-send");
-      var DRAFT_KEY = "agent-ui-draft:" + {{ name|tojson }};
-
-      function loadDraft() {
-        try { return window.localStorage.getItem(DRAFT_KEY) || ""; } catch (err) { return ""; }
-      }
-      function saveDraft(text) {
-        try {
-          if (text) window.localStorage.setItem(DRAFT_KEY, text);
-          else window.localStorage.removeItem(DRAFT_KEY);
-        } catch (err) {}
-      }
-      function fitComposer() {
-        composerText.style.height = "auto";
-        composerText.style.height = composerText.scrollHeight + 2 + "px";
-      }
-      function sendComposer() {
-        if (composerSend.disabled) return;
-        var sent = composerText.value;
-        var body = new URLSearchParams(new FormData(composer));
-        composerSend.disabled = true;
-        fetch(composer.action, { method: "POST", body: body, credentials: "same-origin" })
-          .then(function (response) {
-            if (response.status !== 204) throw new Error("send failed: " + response.status);
-            composerSend.disabled = false;
-            // Keep anything typed while the request was in flight.
-            if (composerText.value === sent) {
-              composerText.value = "";
-              saveDraft("");
-              fitComposer();
-            }
-          })
-          .catch(function () {
-            composerSend.disabled = false;
-            flash(composerSend, "Failed");
-          });
-      }
-
-      composerText.value = loadDraft();
-      fitComposer();
-      composerText.addEventListener("input", function () {
-        saveDraft(composerText.value);
-        fitComposer();
-      });
-      composerText.addEventListener("keydown", function (evt) {
-        if (evt.key === "Enter" && (evt.ctrlKey || evt.metaKey)) {
-          evt.preventDefault();
-          sendComposer();
-        }
-      });
-      // Keep focus (and the phone keyboard) on the field when tapping Send.
-      composerSend.addEventListener("pointerdown", function (evt) { evt.preventDefault(); });
-      composer.addEventListener("submit", function (evt) {
-        evt.preventDefault();
-        sendComposer();
+      // Composer (shared flasks/shared/agent_composer.js): typed text is posted to
+      // the backend, which pastes it into the tmux pane via agent-send.
+      AgentComposer.mount(document.getElementById("composer"), {
+        draftKey: "agent-ui-draft:" + {{ name|tojson }},
+        send: function (text) {
+          var body = new URLSearchParams({ _csrf: {{ csrf_token|tojson }}, text: text });
+          return fetch({{ (subdomain ~ "/sessions/" ~ name ~ "/send")|tojson }},
+                       { method: "POST", body: body, credentials: "same-origin" })
+            .then(function (response) {
+              if (response.status !== 204) throw new Error("send failed: " + response.status);
+            });
+        },
       });
     })();
   </script>

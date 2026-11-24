@@ -502,6 +502,7 @@ def test_terminal_page_has_agents_navigation_and_embeds_ttyd(configured_app):
     client = app.test_client()
     login(client)
     name = sessions.start("ui", "claude")
+    token = csrf(client)
 
     response = client.get(f"/agents/sessions/{name}/terminal")
 
@@ -521,11 +522,11 @@ def test_terminal_page_has_agents_navigation_and_embeds_ttyd(configured_app):
     assert b"handleScrollTouch" in response.data
     assert b"enterCopyMode" in response.data
     assert b'id="composer"' in response.data
-    assert f'action="/agents/sessions/{name}/send"'.encode() in response.data
-    assert b'name="_csrf" value="' in response.data
-    assert b'id="composer-text"' in response.data
-    assert b'id="composer-send"' in response.data
+    assert b"AgentComposer.mount(" in response.data
+    assert b"agent-composer__send" in response.data
+    assert f"/agents/sessions/{name}/send".encode() in response.data
     assert b"agent-ui-draft:" in response.data
+    assert token.encode() in response.data
 
 
 def test_session_name_accepts_any_configured_agent_shape():
