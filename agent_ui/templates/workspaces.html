@@ -105,6 +105,7 @@
                       {% if repo.head %}<span class="badge">{{ repo.head[:7] }}</span>{% else %}<span class="badge bad">no commits</span>{% endif %}
                       {% if repo.upstream %}<span class="badge">↑{{ repo.ahead }} ↓{{ repo.behind }}</span>{% else %}<span class="badge bad">no upstream</span>{% endif %}
                       {% if repo.saved_branch %}<span class="badge {{ 'good' if repo.saved_branch == repo.branch else '' }}">saved: {{ repo.saved_branch }}</span>{% endif %}
+                      {% if not repo.configured %}<span class="badge bad" title="Not recorded in the devrc; add an origin remote so it can be remembered">not in devrc</span>{% endif %}
                     </div>
                   </div>
                   <div class="actions">

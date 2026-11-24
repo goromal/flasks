@@ -27,16 +27,25 @@
     children.forEach((c) => node.append(c));
     return node;
   };
-  // Masked text field instead of type="password" so the browser never offers to
-  // save it; falls back to a real password field where the CSS mask is unsupported.
+  // iOS Safari offers to save a password whenever a form is submitted or a field
+  // looks secret (type="password" or a CSS -webkit-text-security mask). So the
+  // secret is a plain text field that only ever holds dots while the typed value
+  // lives in input.secret, and login posts by fetch with no <form> involved.
   const secretInput = (placeholder) => {
     const input = el('input', {
-      type: window.CSS?.supports?.('-webkit-text-security', 'disc') ? 'text' : 'password',
-      autocomplete: 'off', autocapitalize: 'off', spellcheck: false, placeholder,
+      type: 'text', autocomplete: 'off', autocapitalize: 'off', spellcheck: false, placeholder,
     });
-    input.style.setProperty('-webkit-text-security', 'disc');
     const attrs = { autocorrect: 'off', 'data-1p-ignore': 'true', 'data-lpignore': 'true', 'data-bwignore': 'true', 'data-form-type': 'other' };
     Object.entries(attrs).forEach(([k, v]) => input.setAttribute(k, v));
+    input.secret = '';
+    input.addEventListener('input', () => {
+      const shown = input.value, caret = input.selectionEnd;
+      const typed = shown.replace(/\u2022/g, ''), start = caret - typed.length;
+      const removed = input.secret.length + typed.length - shown.length;
+      input.secret = input.secret.slice(0, start) + typed + input.secret.slice(start + removed);
+      input.value = '\u2022'.repeat(input.secret.length);
+      input.setSelectionRange(caret, caret);
+    });
     return input;
   };
   // Terminal controls for the current view; torn down on any view change.
@@ -601,20 +610,22 @@
     side.hidden = true;
     document.body.classList.remove('in-session');
     const input = secretInput('Agent password');
-    const button = el('button', { type: 'submit', textContent: 'Unlock' });
-    const form = el('form', {}, input, button);
+    const button = el('button', { type: 'button', textContent: 'Unlock' });
+    const form = el('div', { className: 'login' }, input, button);
     if (error) form.append(el('p', { className: 'error', textContent: error }));
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
+    const submit = async () => {
+      if (button.disabled) return;
       button.disabled = true;
       try {
-        const cfg = await api('/login', { method: 'POST', body: JSON.stringify({ password: input.value }) });
+        const cfg = await api('/login', { method: 'POST', body: JSON.stringify({ password: input.secret }) });
         csrf = cfg.csrf; agents = cfg.agents;
         await start();
       } catch (err) {
         loginView(err.status === 401 ? 'Invalid password' : 'Login failed. Try again.');
       }
-    });
+    };
+    button.addEventListener('click', submit);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
     show(form);
     input.focus();
   }

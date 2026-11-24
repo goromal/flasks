@@ -135,8 +135,9 @@ def _write_new_file(directory, name, data):
 
 
 class SecretField(StringField):
-    """Password input masked by CSS rather than type="password", so browsers
-    and password managers never offer to save it. Never echoes its value."""
+    """Plain text password input that the login page script masks with dots
+    (never type="password"), so browsers and password managers never offer to
+    save it. Never echoes its value."""
 
     def _value(self):
         return ""
