@@ -284,6 +284,15 @@ class AgentSendRouteTest(unittest.TestCase):
         self.assertEqual(r.status_code, 413)
         self.assertEqual(sessions.sent, [])
 
+    def test_send_rejects_request_over_1mib_with_no_app_max_content_length(self):
+        # The test app (built by _client()) sets no Flask MAX_CONTENT_LENGTH:
+        # the cap below comes solely from the route's own content_length check.
+        client, sessions, csrf = _send_client()
+        r = client.post(f"/budget/agent/sessions/{SEND_NAME}/send",
+                         json={"text": "x" * (1024 * 1024 + 100)}, headers={"X-CSRF-Token": csrf})
+        self.assertEqual(r.status_code, 413)
+        self.assertEqual(sessions.sent, [])
+
     def test_send_failure_is_500(self):
         client, sessions, csrf = _send_client()
         sessions.send_error = subprocess.CalledProcessError(1, ["agent-send"])

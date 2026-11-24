@@ -24,6 +24,10 @@ SESSION_RE = re.compile(
     r"^budget-agent--(?P<agent>[A-Za-z0-9_][A-Za-z0-9_-]*)--(?P<id>[0-9a-f]{8})$"
 )
 MAX_SEND_BYTES = 64 * 1024
+# The send route's own request-size cap: scoped here (not a global Flask
+# MAX_CONTENT_LENGTH) so it doesn't also clamp unrelated routes like the CSV
+# upload.
+MAX_SEND_REQUEST_BYTES = 1 << 20
 
 
 def load_secrets(path):
@@ -205,6 +209,8 @@ def create_agent_blueprint(auth, sessions, url_prefix, cookie_path, secure_cooki
     def send_to_session(name):
         require_auth()
         require_csrf()
+        if (request.content_length or 0) > MAX_SEND_REQUEST_BYTES:
+            abort(413)
         body = request.get_json(silent=True) or {}
         text = body.get("text", "")
         if not isinstance(text, str):

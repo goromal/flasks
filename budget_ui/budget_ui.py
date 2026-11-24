@@ -43,7 +43,6 @@ process_store = RunStore(os.path.join(state_dir, "process"), "PROCESS")
 
 # Create blueprint with proper url_prefix
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 1 << 20
 bp = Blueprint('budget', __name__, url_prefix=args.subdomain)
 
 def load_config():
