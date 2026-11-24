@@ -544,11 +544,12 @@ def test_agent_composer_js_is_safe_for_jinja_include():
     # terminal.html does `{% include "agent_composer.js" %}` inside a <script>
     # tag, so Jinja parses the file as a template: it must never contain
     # Jinja delimiters or a literal "</script" that would break the include
-    # or let the composer's own content terminate the tag early.
+    # or let the composer's own content terminate the tag early. In the source
+    # tree this is a symlink to shared/agent_composer.js; packaged builds
+    # replace it with a copy, so only the content is checked.
     path = os.path.join(
         os.path.dirname(__file__), "..", "templates", "agent_composer.js"
     )
-    assert os.path.islink(path)
     with open(path, encoding="utf-8") as handle:
         content = handle.read()
     for forbidden in ("{{", "{%", "{#", "</script"):
