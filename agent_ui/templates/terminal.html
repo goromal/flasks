@@ -8,6 +8,7 @@
     html, body { width: 100%; height: 100%; margin: 0; background: #000; }
     body { display: flex; flex-direction: column; }
     iframe { flex: 1 1 auto; width: 100%; border: 0; background: #000; }
+    #composer { flex: 0 0 auto; }
     .agents-link {
       position: fixed;
       z-index: 10;
@@ -54,6 +55,7 @@
 <body>
   <a class="agents-link" href="{{ subdomain }}/">Agents</a>
   <iframe id="term" src="{{ subdomain }}/terminal/?arg={{ name|urlencode }}" title="Agent terminal"></iframe>
+  <div id="composer"></div>
   <nav class="keys" aria-label="Terminal keys">
     <button type="button" data-action="select" aria-pressed="false" title="Drag across terminal text to select it">Select</button>
     <button type="button" data-action="copy" title="Copy selected text, or the visible terminal">Copy</button>
@@ -70,6 +72,7 @@
     <button type="button" data-key="Enter" data-code="13">&crarr;</button>
     <button type="button" data-key="c" data-code="67" data-ctrl="1">^C</button>
   </nav>
+  <script>{% include "agent_composer.js" %}</script>
   <script>
     (function () {
       var iframe = document.getElementById("term");
@@ -524,6 +527,20 @@
           pressKey(el.dataset.key, Number(el.dataset.code), el.dataset.ctrl === "1");
         });
       }
+
+      // Composer (shared flasks/shared/agent_composer.js): typed text is posted to
+      // the backend, which pastes it into the tmux pane via agent-send.
+      AgentComposer.mount(document.getElementById("composer"), {
+        draftKey: "agent-ui-draft:" + {{ name|tojson }},
+        send: function (text) {
+          var body = new URLSearchParams({ _csrf: {{ csrf_token|tojson }}, text: text });
+          return fetch({{ (subdomain ~ "/sessions/" ~ name ~ "/send")|tojson }},
+                       { method: "POST", body: body, credentials: "same-origin" })
+            .then(function (response) {
+              if (response.status !== 204) throw new Error("send failed: " + response.status);
+            });
+        },
+      });
     })();
   </script>
 </body>

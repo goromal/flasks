@@ -20,6 +20,8 @@ class FakeSessions:
         self.interrupted = []
         self.terminated = []
         self.renamed = []
+        self.sent = []
+        self.send_error = None
 
     def list(self, configured_workspaces, allowed_agents):
         workspaces = {workspace["name"] for workspace in configured_workspaces}
@@ -56,6 +58,11 @@ class FakeSessions:
 
     def terminate(self, name):
         self.terminated.append(name)
+
+    def send(self, name, text):
+        if self.send_error:
+            raise self.send_error
+        self.sent.append((name, text))
 
 
 class FakeWorkspaces:
@@ -506,6 +513,7 @@ def test_terminal_page_has_agents_navigation_and_embeds_ttyd(configured_app):
     client = app.test_client()
     login(client)
     name = sessions.start("ui", "claude")
+    token = csrf(client)
 
     response = client.get(f"/agents/sessions/{name}/terminal")
 
@@ -524,6 +532,28 @@ def test_terminal_page_has_agents_navigation_and_embeds_ttyd(configured_app):
     assert b"term.paste(text)" in response.data
     assert b"handleScrollTouch" in response.data
     assert b"enterCopyMode" in response.data
+    assert b'id="composer"' in response.data
+    assert b"AgentComposer.mount(" in response.data
+    assert b"agent-composer__send" in response.data
+    assert f"/agents/sessions/{name}/send".encode() in response.data
+    assert b"agent-ui-draft:" in response.data
+    assert token.encode() in response.data
+
+
+def test_agent_composer_js_is_safe_for_jinja_include():
+    # terminal.html does `{% include "agent_composer.js" %}` inside a <script>
+    # tag, so Jinja parses the file as a template: it must never contain
+    # Jinja delimiters or a literal "</script" that would break the include
+    # or let the composer's own content terminate the tag early. In the source
+    # tree this is a symlink to shared/agent_composer.js; packaged builds
+    # replace it with a copy, so only the content is checked.
+    path = os.path.join(
+        os.path.dirname(__file__), "..", "templates", "agent_composer.js"
+    )
+    with open(path, encoding="utf-8") as handle:
+        content = handle.read()
+    for forbidden in ("{{", "{%", "{#", "</script"):
+        assert forbidden not in content, forbidden
 
 
 def test_session_name_accepts_any_configured_agent_shape():
@@ -752,3 +782,123 @@ def test_terminate_forgets_restore_record(monkeypatch, tmp_path):
     sessions.terminate(name)
     assert not record.exists()
     sessions.terminate(name)  # already gone: still fine
+
+
+SEND_NAME = "agent-ui-ui--claude--0123abcd"
+
+
+def _send_app(configured_app):
+    app, manager, _ = configured_app
+    manager.active = [
+        {"name": SEND_NAME, "workspace": "ui", "agent": "claude",
+         "created": 1, "attached": 0}
+    ]
+    client = app.test_client()
+    login(client)
+    return client, manager, csrf(client)
+
+
+def test_send_pastes_text_into_session(configured_app):
+    client, manager, token = _send_app(configured_app)
+    response = client.post(
+        f"/agents/sessions/{SEND_NAME}/send",
+        data={"_csrf": token, "text": "fix it\r\nplease"},
+    )
+    assert response.status_code == 204
+    assert manager.sent == [(SEND_NAME, "fix it\nplease")]
+
+
+def test_send_empty_text_just_presses_enter(configured_app):
+    client, manager, token = _send_app(configured_app)
+    response = client.post(
+        f"/agents/sessions/{SEND_NAME}/send", data={"_csrf": token, "text": ""}
+    )
+    assert response.status_code == 204
+    assert manager.sent == [(SEND_NAME, "")]
+
+
+def test_send_requires_csrf(configured_app):
+    client, manager, _ = _send_app(configured_app)
+    response = client.post(f"/agents/sessions/{SEND_NAME}/send", data={"text": "hi"})
+    assert response.status_code == 403
+    assert manager.sent == []
+
+
+def test_send_unknown_session_is_404(configured_app):
+    client, manager, token = _send_app(configured_app)
+    response = client.post(
+        "/agents/sessions/agent-ui-ui--claude--deadbeef/send",
+        data={"_csrf": token, "text": "hi"},
+    )
+    assert response.status_code == 404
+    assert manager.sent == []
+
+
+def test_send_rejects_oversized_text(configured_app):
+    client, manager, token = _send_app(configured_app)
+    response = client.post(
+        f"/agents/sessions/{SEND_NAME}/send",
+        data={"_csrf": token, "text": "é" * (32 * 1024 + 1)},
+    )
+    assert response.status_code == 413
+    assert manager.sent == []
+
+
+def test_send_rejects_request_over_max_content_length(configured_app):
+    client, manager, token = _send_app(configured_app)
+    response = client.post(
+        f"/agents/sessions/{SEND_NAME}/send",
+        data={"_csrf": token, "text": "x" * (2 * 1024 * 1024)},
+    )
+    assert response.status_code == 413
+    assert manager.sent == []
+
+
+def test_send_failure_is_500(configured_app):
+    client, manager, token = _send_app(configured_app)
+    manager.send_error = subprocess.CalledProcessError(1, ["agent-send"])
+    response = client.post(
+        f"/agents/sessions/{SEND_NAME}/send", data={"_csrf": token, "text": "hi"}
+    )
+    assert response.status_code == 500
+
+
+def test_send_timeout_is_500(configured_app):
+    client, manager, token = _send_app(configured_app)
+    manager.send_error = subprocess.TimeoutExpired(["agent-send"], 10)
+    response = client.post(
+        f"/agents/sessions/{SEND_NAME}/send", data={"_csrf": token, "text": "hi"}
+    )
+    assert response.status_code == 500
+
+
+def test_send_requires_login(configured_app):
+    app, manager, _ = configured_app
+    response = app.test_client().post(
+        f"/agents/sessions/{SEND_NAME}/send", data={"text": "hi"}
+    )
+    assert response.status_code == 302
+    assert manager.sent == []
+
+
+def test_tmux_send_pipes_text_to_send_command(monkeypatch):
+    from agent_ui import TmuxSessions
+
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((list(cmd), kwargs))
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    TmuxSessions(socket="agent-ui", send_command="/x/agent-send").send(SEND_NAME, "hi")
+    assert calls[-1] == (
+        ["/x/agent-send", "-L", "agent-ui", SEND_NAME],
+        {"input": "hi", "encoding": "utf-8", "check": True, "timeout": 10},
+    )
+
+    TmuxSessions(send_command="/x/agent-send").send(SEND_NAME, "")
+    assert calls[-1][0] == ["/x/agent-send", "-L", "default", SEND_NAME]
+
+    with pytest.raises(ValueError):
+        TmuxSessions().send("not-a-session", "hi")
+    assert len(calls) == 2

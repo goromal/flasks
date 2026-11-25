@@ -28,6 +28,9 @@ body.agent-open .anix-page-controls { display: none !important; }  /* theirs is 
 .agent-bar button { margin-top: 0; padding: 4px 10px; font-size: 14px; }
 .agent-frame { flex: 1; border: 0; width: 100%; background: #000; }
 #agent-body a { color: #9cf; }
+/* The composer sits in #agent-body's flex column; it must not shrink when the
+   phone keyboard opens and squeezes the iframe. */
+#agent-body .agent-composer-host { flex: 0 0 auto; }
 #agent-body .agent-keys {
     flex: 0 0 auto; display: flex; gap: 6px; padding: 6px;
     background: #10151d; border-top: 1px solid #2d3b4c;

@@ -25,6 +25,11 @@ TITLE_MAX = 80
 SESSION_RE = re.compile(
     r"^assistant-agent--(?P<agent>[A-Za-z0-9_][A-Za-z0-9_-]*)--(?P<id>[0-9a-f]{8})$"
 )
+MAX_SEND_BYTES = 64 * 1024
+# The send route's own request-size cap: scoped here (not a global Flask
+# MAX_CONTENT_LENGTH) so it doesn't also clamp unrelated routes like the CSV
+# upload.
+MAX_SEND_REQUEST_BYTES = 1 << 20
 
 
 def load_secrets(path):
@@ -50,12 +55,13 @@ class AgentAuth:
 
 class RepoSessions:
     def __init__(self, agents, repo_dir, tmux_bin="tmux", config=None,
-                 session_command="assistant-agent-session"):
+                 session_command="assistant-agent-session", send_command="agent-send"):
         self.agents = tuple(a for a in agents if SAFE_AGENT.fullmatch(a))
         self.repo_dir = os.path.abspath(os.path.expanduser(repo_dir))
         self.tmux_bin = tmux_bin
         self.config = config
         self.session_command = session_command
+        self.send_command = send_command
 
     def _base(self):
         return [self.tmux_bin, "-L", SOCKET]
@@ -114,6 +120,15 @@ class RepoSessions:
         command += ["@title", title] if title else ["-u", "@title"]
         subprocess.run(command, check=True, timeout=10)
         return title
+
+    def send(self, name, text):
+        """Type text into the session as one bracketed paste, then Enter (via
+        anixpkgs' agent-send, shared with Agent UI)."""
+        self._check_name(name)
+        subprocess.run(
+            [self.send_command, "-L", SOCKET, name],
+            input=text, encoding="utf-8", check=True, timeout=10,
+        )
 
     def kill(self, name):
         self._check_name(name)
@@ -251,6 +266,32 @@ def create_agent_blueprint(auth, sessions, url_prefix, cookie_path, status,
             sessions.kill(name)
         except ValueError:
             abort(400)
+        return Response(status=204)
+
+    @bp.post("/sessions/<name>/send")
+    def send_to_session(name):
+        require_auth()
+        require_csrf()
+        if (request.content_length or 0) > MAX_SEND_REQUEST_BYTES:
+            abort(413)
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            body = {}
+        text = body.get("text", "")
+        if not isinstance(text, str):
+            text = ""
+        text = text.replace("\r\n", "\n")
+        match = SESSION_RE.fullmatch(name)
+        if not match or match.group("agent") not in sessions.agents:
+            abort(400)
+        if not any(row["name"] == name for row in sessions.list()):
+            abort(404)
+        if len(text.encode("utf-8")) > MAX_SEND_BYTES:
+            abort(413)
+        try:
+            sessions.send(name, text)
+        except (ValueError, OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            abort(500)
         return Response(status=204)
 
     return bp

@@ -29,6 +29,7 @@ parser.add_argument("--agent-spool", type=str, default="/tmp/budget-agent")
 parser.add_argument("--agent-tmux", type=str, default="tmux")
 parser.add_argument("--agent-tmux-config", type=str, default="")
 parser.add_argument("--agent-session-cmd", type=str, default="budget-agent-session")
+parser.add_argument("--agent-send-cmd", type=str, default="agent-send")
 args = parser.parse_args()
 
 # Expand paths
@@ -162,6 +163,7 @@ if AGENT_ENABLED:
             spool_dir=args.agent_spool, tmux_bin=args.agent_tmux,
             config=args.agent_tmux_config or None,
             session_command=args.agent_session_cmd,
+            send_command=args.agent_send_cmd,
         ),
         url_prefix=f"{args.subdomain}/agent",
         cookie_path=f"{args.subdomain}/" if args.subdomain else "/",

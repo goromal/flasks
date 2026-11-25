@@ -149,6 +149,24 @@ class RepoSessionsTest(unittest.TestCase):
                 mgr.kill(bad)
         self.assertEqual(self.calls, [])
 
+    def test_send_pipes_text_to_send_command(self):
+        subprocess.run = self._fake_run()
+        mgr = RepoSessions(
+            agents=("claude", "codex"), repo_dir=self.repo, tmux_bin="tmux",
+            config=None, session_command="assistant-agent-session",
+            send_command="/x/agent-send",
+        )
+        name = "assistant-agent--claude--0123abcd"
+        mgr.send(name, "hi")
+        self.assertEqual(self.calls[-1], ["/x/agent-send", "-L", "assistant-agent", name])
+
+    def test_send_rejects_bad_name_before_running(self):
+        subprocess.run = self._fake_run()
+        mgr = self._mgr()
+        with self.assertRaises(ValueError):
+            mgr.send("../../etc/passwd", "hi")
+        self.assertEqual(self.calls, [])
+
 
 def _git(cwd, *args):
     _real_run(["git", "-C", cwd, *args], check=True, capture_output=True,
@@ -209,6 +227,8 @@ class FakeSessions:
         self.active = []
         self.killed = []
         self.titles = {}
+        self.sent = []
+        self.send_error = None
 
     def list(self):
         return list(self.active)
@@ -230,6 +250,11 @@ class FakeSessions:
         if not SESSION_RE.fullmatch(name):
             raise ValueError("bad name")
         self.killed.append(name)
+
+    def send(self, name, text):
+        if self.send_error:
+            raise self.send_error
+        self.sent.append((name, text))
 
 
 def _client(status=None):
@@ -295,6 +320,114 @@ class AgentApiTest(unittest.TestCase):
         self.assertEqual(sessions.killed, [name])
         self.assertEqual(
             client.delete("/assistant/agent/sessions/nope", headers=hdr).status_code, 400)
+
+
+SEND_NAME = "assistant-agent--claude--0123abcd"
+
+
+def _send_client():
+    client, sessions = _client()
+    csrf = client.post("/assistant/agent/login", json={"password": "pw"}).get_json()["csrf"]
+    sessions.active = [{"name": SEND_NAME, "agent": "claude", "created": 1, "attached": 0}]
+    return client, sessions, csrf
+
+
+class AgentSendRouteTest(unittest.TestCase):
+    def test_send_pastes_text_into_session(self):
+        client, sessions, csrf = _send_client()
+        r = client.post(f"/assistant/agent/sessions/{SEND_NAME}/send",
+                         json={"text": "a\r\nb"}, headers={"X-CSRF-Token": csrf})
+        self.assertEqual(r.status_code, 204)
+        self.assertEqual(sessions.sent, [(SEND_NAME, "a\nb")])
+
+    def test_send_empty_text_just_presses_enter(self):
+        client, sessions, csrf = _send_client()
+        r = client.post(f"/assistant/agent/sessions/{SEND_NAME}/send",
+                         json={}, headers={"X-CSRF-Token": csrf})
+        self.assertEqual(r.status_code, 204)
+        self.assertEqual(sessions.sent, [(SEND_NAME, "")])
+
+    def test_send_non_object_json_is_empty_text(self):
+        client, sessions, csrf = _send_client()
+        r = client.post(f"/assistant/agent/sessions/{SEND_NAME}/send",
+                         json=["not", "an", "object"], headers={"X-CSRF-Token": csrf})
+        self.assertEqual(r.status_code, 204)
+        self.assertEqual(sessions.sent, [(SEND_NAME, "")])
+
+    def test_send_requires_auth(self):
+        client, sessions = _client()
+        sessions.active = [{"name": SEND_NAME, "agent": "claude", "created": 1, "attached": 0}]
+        r = client.post(f"/assistant/agent/sessions/{SEND_NAME}/send", json={"text": "hi"})
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(sessions.sent, [])
+
+    def test_send_requires_csrf(self):
+        client, sessions, _csrf = _send_client()
+        r = client.post(f"/assistant/agent/sessions/{SEND_NAME}/send", json={"text": "hi"})
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(sessions.sent, [])
+
+    def test_send_rejects_invalid_name(self):
+        client, sessions, csrf = _send_client()
+        r = client.post("/assistant/agent/sessions/not-a-session/send",
+                         json={"text": "hi"}, headers={"X-CSRF-Token": csrf})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(sessions.sent, [])
+
+    def test_send_unknown_session_is_404(self):
+        client, sessions, csrf = _send_client()
+        r = client.post("/assistant/agent/sessions/assistant-agent--claude--deadbeef/send",
+                         json={"text": "hi"}, headers={"X-CSRF-Token": csrf})
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(sessions.sent, [])
+
+    def test_send_rejects_oversized_text(self):
+        client, sessions, csrf = _send_client()
+        r = client.post(f"/assistant/agent/sessions/{SEND_NAME}/send",
+                         json={"text": "é" * (32 * 1024 + 1)}, headers={"X-CSRF-Token": csrf})
+        self.assertEqual(r.status_code, 413)
+        self.assertEqual(sessions.sent, [])
+
+    def test_send_rejects_request_over_1mib_with_no_app_max_content_length(self):
+        # The test app (built by _client()) sets no Flask MAX_CONTENT_LENGTH:
+        # the cap below comes solely from the route's own content_length check.
+        client, sessions, csrf = _send_client()
+        r = client.post(f"/assistant/agent/sessions/{SEND_NAME}/send",
+                         json={"text": "x" * (1024 * 1024 + 100)}, headers={"X-CSRF-Token": csrf})
+        self.assertEqual(r.status_code, 413)
+        self.assertEqual(sessions.sent, [])
+
+    def test_send_failure_is_500(self):
+        client, sessions, csrf = _send_client()
+        sessions.send_error = subprocess.CalledProcessError(1, ["agent-send"])
+        r = client.post(f"/assistant/agent/sessions/{SEND_NAME}/send",
+                         json={"text": "hi"}, headers={"X-CSRF-Token": csrf})
+        self.assertEqual(r.status_code, 500)
+
+    def test_send_timeout_is_500(self):
+        client, sessions, csrf = _send_client()
+        sessions.send_error = subprocess.TimeoutExpired(["agent-send"], 10)
+        r = client.post(f"/assistant/agent/sessions/{SEND_NAME}/send",
+                         json={"text": "hi"}, headers={"X-CSRF-Token": csrf})
+        self.assertEqual(r.status_code, 500)
+
+
+class AgentComposerStaticTest(unittest.TestCase):
+    def test_served_with_js_content(self):
+        # Mirrors assistant_ui.py's custom_static route: the shared composer is
+        # installed (symlinked, for now) at assistant_ui/static/agent_composer.js,
+        # which is the default Flask static_folder next to assistant_ui.py.
+        static_dir = os.path.join(os.path.dirname(__file__), "..", "static")
+        app = Flask(__name__, static_folder=static_dir)
+
+        @app.route("/assistant/static/<path:filename>")
+        def custom_static(filename):
+            return app.send_static_file(filename)
+
+        client = app.test_client()
+        r = client.get("/assistant/static/agent_composer.js")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn(b"AgentComposer", r.data)
 
 
 if __name__ == "__main__":
