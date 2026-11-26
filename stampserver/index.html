@@ -295,6 +295,40 @@
             display: none;
         }
 
+        .jobs-panel {
+            margin: 0 0 20px;
+            padding: 12px 16px;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            background: #f8f9fa;
+            font-size: 0.9rem;
+            color: #495057;
+        }
+
+        .jobs-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: 600;
+        }
+
+        .jobs-header button {
+            padding: 3px 8px;
+            border: 1px solid #adb5bd;
+            border-radius: 5px;
+            background: #fff;
+            cursor: pointer;
+            font-size: 0.8rem;
+        }
+
+        .jobs-list { list-style: none; margin: 8px 0 0; padding: 0; }
+        .jobs-list li { padding: 5px 0; border-top: 1px solid #e9ecef; overflow-wrap: anywhere; }
+        .jobs-list .job-status { font-weight: 600; margin-right: 6px; }
+        .job-queued .job-status, .job-running .job-status, .job-committing .job-status { color: #4e73df; }
+        .job-done .job-status { color: #1cc88a; }
+        .job-failed .job-status { color: #e74a3b; }
+        .job-error { color: #721c24; }
+
         .queued-edits {
             margin: 0 0 14px;
             color: #495057;
@@ -836,6 +870,14 @@
         {% endif %}
         {% endwith %}
 
+        <div id="jobsPanel" class="jobs-panel" style="display:none;">
+            <div class="jobs-header">
+                <span id="jobsTitle">Edit jobs</span>
+                <button type="button" onclick="clearFinishedJobs()">Clear finished</button>
+            </div>
+            <ul id="jobsList" class="jobs-list"></ul>
+        </div>
+
         {% if root == "" %}
         <div class="upload-section">
             <h2>Upload Media</h2>
@@ -1045,7 +1087,7 @@
             <div id="stagedEditsSummary" class="queued-edits" style="display:none;"></div>
             {% if ftype in ('PNG', 'JPG', 'WEBP', 'HEIC', 'MP4') %}
             <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
-                <input type="checkbox" id="preserve_originals" name="preserve_originals" style="width:auto; margin:0; cursor:pointer;">
+                <input type="checkbox" id="preserve_originals" name="preserve_originals" style="width:auto; margin:0; cursor:pointer;"{% if g.keep_original %} checked{% endif %}>
                 <label for="preserve_originals" style="margin:0; font-weight:500; color:#495057; cursor:pointer;">Keep original (save a separate copy)</label>
             </div>
             {% endif %}
@@ -1287,6 +1329,72 @@
             document.getElementById('loadingOverlay').classList.remove('active');
         }
 
+        // ===== EDIT JOBS =====
+        // Edits render on the server in the background and survive leaving
+        // the page; this panel polls their progress while any are unfinished.
+
+        const JOB_LABELS = { queued: 'Queued', running: 'Running', committing: 'Saving', done: 'Done', failed: 'Failed' };
+        let _jobsTimer = null;
+        let _jobStates = null;
+
+        function renderJobs(jobs) {
+            const panel = document.getElementById('jobsPanel');
+            const list = document.getElementById('jobsList');
+            panel.style.display = jobs.length ? 'block' : 'none';
+            const active = jobs.filter(j => !['done', 'failed'].includes(j.status)).length;
+            document.getElementById('jobsTitle').textContent = active ? `Edit jobs (${active} in progress)` : 'Edit jobs';
+            list.replaceChildren(...jobs.map(job => {
+                const li = document.createElement('li');
+                li.className = 'job-' + job.status;
+                const status = document.createElement('span');
+                status.className = 'job-status';
+                status.textContent = JOB_LABELS[job.status] || job.status;
+                li.append(status, `${job.edits.join(', ')}: ${job.filename}`);
+                if (job.target) li.append(` \u2192 ${job.target}`);
+                if (!job.copy && job.status !== 'done' && job.status !== 'failed') li.append(' (replacing original)');
+                if (job.error) {
+                    const error = document.createElement('div');
+                    error.className = 'job-error';
+                    error.textContent = job.error;
+                    li.append(error);
+                }
+                return li;
+            }));
+            return active;
+        }
+
+        function announceFinished(jobs) {
+            const previous = _jobStates;
+            _jobStates = Object.fromEntries(jobs.map(j => [j.id, j.status]));
+            if (!previous) return;
+            for (const job of jobs) {
+                const was = previous[job.id];
+                if (!was || was === job.status) continue;
+                if (job.status === 'done') showStatus(`Finished: ${job.target}`);
+                else if (job.status === 'failed') showStatus(`Edit of ${job.filename} failed: ${job.error}`, true);
+            }
+        }
+
+        function pollJobs() {
+            if (_jobsTimer) { clearTimeout(_jobsTimer); _jobsTimer = null; }
+            fetch('{{ urlroot }}api/jobs')
+                .then(r => r.json())
+                .then(data => {
+                    announceFinished(data.jobs);
+                    if (renderJobs(data.jobs)) _jobsTimer = setTimeout(pollJobs, 2000);
+                })
+                .catch(() => { _jobsTimer = setTimeout(pollJobs, 10000); });
+        }
+
+        function clearFinishedJobs() {
+            fetch('{{ urlroot }}api/jobs/clear', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => renderJobs(data.jobs))
+                .catch(err => showStatus('Error: ' + err.message, true));
+        }
+
+        pollJobs();
+
         // ===== UPLOAD =====
 
         function uploadFiles() {
@@ -1387,7 +1495,7 @@
                     return;
                 }
                 document.getElementById('editsInput').value = JSON.stringify(edits);
-                if (edits.length) showLoading('Applying edits...');
+                if (edits.length) showLoading('Queueing edits...');
             });
         })();
 

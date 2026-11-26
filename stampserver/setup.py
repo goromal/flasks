@@ -2,7 +2,7 @@ from setuptools import setup
 setup(
     name='stampserver',
     version='0.0.0',
-    py_modules=['stampserver', 'imageops', 'fileops', 'mediaops'],
+    py_modules=['stampserver', 'imageops', 'fileops', 'mediaops', 'jobs'],
     entry_points={
         'console_scripts': ['stampserver = stampserver:run']
     },

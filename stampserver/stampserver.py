@@ -3,9 +3,8 @@ import os
 import json
 import sys
 import re
-import shutil
-import subprocess
 import argparse
+import threading
 import flask
 import flask_login
 import flask_wtf
@@ -41,6 +40,7 @@ from fileops import (
     validate_stamp_name,
 )
 from mediaops import edit_and_stamp
+from jobs import EditJobs
 
 STAMP_RE = re.compile(r"stamped\.(.*?)\.")
 
@@ -79,6 +79,7 @@ parser.add_argument("--port", action="store", type=int, default=5000, help="Port
 parser.add_argument("--subdomain", action="store", type=str, default="/", help="Subdomain for a reverse proxy")
 parser.add_argument("--data-dir", action="store", type=str, default="", help="Directory containing the stampable elements")
 parser.add_argument("--secrets-file", action="store", type=str, required=True, help="Path to JSON file with username, secret_key and password_hash")
+parser.add_argument("--state-dir", action="store", type=str, default=os.path.join(os.path.expanduser("~"), ".local", "state", "stampserver"), help="Directory for the persistent edit job queue")
 args = parser.parse_args()
 
 
@@ -150,6 +151,11 @@ else:
     RES_DIR = os.path.join(PWD, args.data_dir)
 # Remember where the symlink pointed at startup so the UI can reset back to it.
 DEFAULT_TARGET = os.path.realpath(RES_DIR)
+
+# Edits render in the background; every rename in RES_DIR holds FS_LOCK so a
+# finishing job never races a request for a file name.
+FS_LOCK = threading.RLock()
+edit_jobs = EditJobs(os.path.join(args.state_dir, "jobs.json"), FS_LOCK)
 
 
 def current_datadir():
@@ -291,6 +297,15 @@ class StampServer:
 
     def edit_current(self, path, target_path, operations, copy=False, advance=False):
         self._require_current_at(path)
+        if operations:
+            # A kept original stays on screen; a replaced one is set aside
+            # until its edit lands, so it leaves the deck now.
+            edit_jobs.submit(RES_DIR, self.filedeck, target_path, operations, copy)
+            if copy:
+                flask.g.keep_original = True
+            else:
+                self._drop_current()
+            return
         edit_and_stamp(RES_DIR, self.filedeck, target_path, operations, copy)
         if advance and not copy:
             self._drop_current()
@@ -381,36 +396,40 @@ def index():
     global stampserver
     global urlroot
     if flask.request.method == "POST":
-        text = flask.request.form["text"]
-        try:
-            edits = _form_edits(flask.request.form)
-            result = None
-            valid = True
-            if text.strip():
-                ok, result = validate_stamp_name(text)
-                if not ok:
-                    flask.flash(result)
-                    valid = False
-            copy = flask.request.form.get('preserve_originals') == 'on'
-            if valid and (result or edits or copy):
-                if edits:
-                    stampserver.edit_current([], [result] if result else [], edits, copy=copy, advance=bool(result))
-                elif result:
-                    stampserver.stamp(result, copy=copy)
-                elif copy:
-                    stampserver.edit_current([], [], [], copy=True)
-        except IdentityConflictError as e:
-            flask.flash(_identity_conflict_message(e))
-        except FileExistsError as e:
-            flask.flash(f"{e.args[0]} already exists; nothing was renamed.")
-        except (ValueError, OSError, RuntimeError, KeyError, TypeError) as e:
-            flask.flash(str(e))
+        with FS_LOCK:
+            _handle_stamp_post()
     res, msg = stampserver.load()
     stamps = stampserver.getstamps()
     if not res:
         return flask.render_template("index.html", urlroot=urlroot, err=True, msg=msg, file="", ftype="", root="", nleft="?", datadir=current_datadir(), stamps=stamps)
     file, ftype, numleft = stampserver.getfile()
     return flask.render_template("index.html", urlroot=urlroot, err=False, msg="", file=file_url(file, ftype), filepath=file_path(file), ftype=ftype, root="", nleft=str(numleft), datadir=current_datadir(), stamps=stamps)
+
+def _handle_stamp_post():
+    text = flask.request.form["text"]
+    try:
+        edits = _form_edits(flask.request.form)
+        result = None
+        valid = True
+        if text.strip():
+            ok, result = validate_stamp_name(text)
+            if not ok:
+                flask.flash(result)
+                valid = False
+        copy = flask.request.form.get('preserve_originals') == 'on'
+        if valid and (result or edits or copy):
+            if edits:
+                stampserver.edit_current([], [result] if result else [], edits, copy=copy, advance=bool(result))
+            elif result:
+                stampserver.stamp(result, copy=copy)
+            elif copy:
+                stampserver.edit_current([], [], [], copy=True)
+    except IdentityConflictError as e:
+        flask.flash(_identity_conflict_message(e))
+    except FileExistsError as e:
+        flask.flash(f"{e.args[0]} already exists; nothing was renamed.")
+    except (ValueError, OSError, RuntimeError, KeyError, TypeError) as e:
+        flask.flash(str(e))
 
 def _quoted_path(path):
     return "/".join(quote(segment, safe="") for segment in path)
@@ -518,7 +537,8 @@ def stamped(stamp=""):
     if any("." in segment for segment in path) or ("" in path and path != [""]):
         flask.abort(404)
     if flask.request.method == "POST":
-        _handle_restamp_post(path)
+        with FS_LOCK:
+            _handle_restamp_post(path)
     res, msg = stampserver.load_stamped(path)
     root = restamp_url(path)[len(urlroot):]
     listing = os.listdir(RES_DIR) if os.path.isdir(RES_DIR) else []
@@ -560,7 +580,8 @@ def delete_stamp(stamp=""):
         flask.flash(f"Type \u201c{delete_confirm_phrase(path)}\u201d exactly to confirm deletion; nothing was deleted.")
         return flask.redirect(restamp_url(path))
     try:
-        deleted, failed = stampserver.delete_all(path)
+        with FS_LOCK:
+            deleted, failed = stampserver.delete_all(path)
     except (ValueError, OSError) as e:
         flask.flash(str(e))
         return flask.redirect(restamp_url(path))
@@ -1005,228 +1026,16 @@ def save_screenshot_api():
     except Exception as e:
         return flask.jsonify({'success': False, 'error': str(e)}), 500
 
-@bp.route("/api/duplicate-video", methods=["POST"])
+@bp.route("/api/jobs", methods=["GET"])
 @flask_login.login_required
-def duplicate_video_api():
-    try:
-        data = flask.request.get_json()
-        filename = data.get('filename')
+def list_jobs():
+    return flask.jsonify({'jobs': edit_jobs.snapshot()})
 
-        if not filename:
-            return flask.jsonify({'success': False, 'error': 'Missing filename parameter'}), 400
-
-        file_path = os.path.join(RES_DIR, filename)
-
-        if not os.path.exists(file_path):
-            return flask.jsonify({'success': False, 'error': f'File not found: {filename}'}), 404
-
-        if not is_video(filename):
-            return flask.jsonify({'success': False, 'error': 'Only MP4 and MOV files can be duplicated'}), 400
-
-        # Preserves the full stamp prefix, sub-stamps included.
-        new_filename = unique_suffixed_name(RES_DIR, filename, "_copy")
-        new_file_path = os.path.join(RES_DIR, new_filename)
-
-        shutil.copy2(file_path, new_file_path)
-        return flask.jsonify({'success': True, 'new_filename': new_filename})
-
-    except Exception as e:
-        return flask.jsonify({'success': False, 'error': str(e)}), 500
-
-@bp.route("/api/rotate-video", methods=["POST"])
+@bp.route("/api/jobs/clear", methods=["POST"])
 @flask_login.login_required
-def rotate_video_api():
-    try:
-        data = flask.request.get_json()
-        filename = data.get('filename')
-        degrees = data.get('degrees')
-
-        if not filename or degrees is None:
-            return flask.jsonify({'success': False, 'error': 'Missing filename or degrees parameter'}), 400
-
-        file_path = os.path.join(RES_DIR, filename)
-
-        if not os.path.exists(file_path):
-            return flask.jsonify({'success': False, 'error': f'File not found: {filename}'}), 404
-
-        if not is_video(filename):
-            return flask.jsonify({'success': False, 'error': 'Only MP4 and MOV files can be rotated'}), 400
-
-        normalized = ((int(degrees) % 360) + 360) % 360
-        if normalized == 90:
-            vf = 'transpose=1'
-        elif normalized == 270:
-            vf = 'transpose=2'
-        elif normalized == 180:
-            vf = 'vflip,hflip'
-        else:
-            return flask.jsonify({'success': False, 'error': f'Unsupported rotation: {degrees}°'}), 400
-
-        # Keep the source container (.mp4 or .mov): ffmpeg picks the muxer from
-        # the temp file's extension, so a .mov must not be re-wrapped as .mp4.
-        temp_path = file_path + '.tmp' + os.path.splitext(file_path)[1]
-        result = subprocess.run(
-            ['ffmpeg', '-i', file_path, '-vf', vf, '-c:a', 'copy', temp_path, '-y'],
-            capture_output=True, text=True
-        )
-
-        if result.returncode != 0:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            return flask.jsonify({'success': False, 'error': f'ffmpeg error: {result.stderr[-500:]}'}), 500
-
-        os.replace(temp_path, file_path)
-        return flask.jsonify({'success': True})
-
-    except Exception as e:
-        return flask.jsonify({'success': False, 'error': str(e)}), 500
-
-@bp.route("/api/crop-video", methods=["POST"])
-@flask_login.login_required
-def crop_video_api():
-    try:
-        data = flask.request.get_json()
-        filename = data.get('filename')
-        x = data.get('x')
-        y = data.get('y')
-        width = data.get('width')
-        height = data.get('height')
-
-        if not filename or x is None or y is None or width is None or height is None:
-            return flask.jsonify({'success': False, 'error': 'Missing required parameters'}), 400
-
-        file_path = os.path.join(RES_DIR, filename)
-
-        if not os.path.exists(file_path):
-            return flask.jsonify({'success': False, 'error': f'File not found: {filename}'}), 404
-
-        if not is_video(filename):
-            return flask.jsonify({'success': False, 'error': 'Only MP4 and MOV files can be cropped'}), 400
-
-        if width <= 0 or height <= 0:
-            return flask.jsonify({'success': False, 'error': 'Width and height must be positive'}), 400
-
-        temp_path = file_path + '.tmp' + os.path.splitext(file_path)[1]
-        result = subprocess.run(
-            ['ffmpeg', '-i', file_path, '-vf', f'crop={width}:{height}:{x}:{y}',
-             '-c:a', 'copy', temp_path, '-y'],
-            capture_output=True, text=True
-        )
-
-        if result.returncode != 0:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            return flask.jsonify({'success': False, 'error': f'ffmpeg error: {result.stderr[-500:]}'}), 500
-
-        os.replace(temp_path, file_path)
-        return flask.jsonify({'success': True})
-
-    except Exception as e:
-        return flask.jsonify({'success': False, 'error': str(e)}), 500
-
-@bp.route("/api/trim-video", methods=["POST"])
-@flask_login.login_required
-def trim_video_api():
-    try:
-        data = flask.request.get_json()
-        filename = data.get('filename')
-        edit_points = data.get('edit_points', [])
-        preserve_original = data.get('preserve_original', True)
-
-        if not filename:
-            return flask.jsonify({'success': False, 'error': 'Missing filename parameter'}), 400
-
-        if not edit_points:
-            return flask.jsonify({'success': False, 'error': 'No edit points provided'}), 400
-
-        file_path = os.path.join(RES_DIR, filename)
-
-        if not os.path.exists(file_path):
-            return flask.jsonify({'success': False, 'error': f'File not found: {filename}'}), 404
-
-        if not is_video(filename):
-            return flask.jsonify({'success': False, 'error': 'Only MP4 and MOV files can be trimmed'}), 400
-
-        cap = cv2.VideoCapture(file_path)
-        if not cap.isOpened():
-            return flask.jsonify({'success': False, 'error': 'Could not open video file'}), 500
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        duration = total_frames / fps if fps > 0 else 0
-        cap.release()
-
-        pts = sorted(edit_points, key=lambda p: p['time'])
-
-        if pts[0]['type'] == 'end':
-            pts.insert(0, {'type': 'start', 'time': 0.0})
-        if pts[-1]['type'] == 'start':
-            pts.append({'type': 'end', 'time': duration})
-
-        segments = []
-        i = 0
-        while i < len(pts) - 1:
-            if pts[i]['type'] == 'start' and pts[i + 1]['type'] == 'end':
-                segments.append((pts[i]['time'], pts[i + 1]['time']))
-                i += 2
-            else:
-                return flask.jsonify({'success': False, 'error': f'Invalid edit point sequence at index {i}: expected alternating start/end pairs'}), 400
-
-        if not segments:
-            return flask.jsonify({'success': False, 'error': 'No valid segments formed from edit points'}), 400
-
-        temp_path = file_path + '.tmp' + os.path.splitext(file_path)[1]
-
-        # Detect whether the video has an audio stream
-        probe = subprocess.run(
-            ['ffprobe', '-v', 'quiet', '-select_streams', 'a',
-             '-show_entries', 'stream=codec_type',
-             '-of', 'default=noprint_wrappers=1', file_path],
-            capture_output=True, text=True
-        )
-        has_audio = 'codec_type=audio' in probe.stdout
-
-        # Build a single-pass filter_complex trim+concat (avoids intermediate files
-        # and the stream-detection issues of the concat demuxer with stream copy).
-        n = len(segments)
-        filter_parts = []
-        for i, (start, end) in enumerate(segments):
-            filter_parts.append(f"[0:v]trim=start={start}:end={end},setpts=PTS-STARTPTS[v{i}]")
-            if has_audio:
-                filter_parts.append(f"[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS[a{i}]")
-
-        if has_audio:
-            stream_inputs = ''.join(f'[v{i}][a{i}]' for i in range(n))
-            filter_parts.append(f"{stream_inputs}concat=n={n}:v=1:a=1[vout][aout]")
-            filter_complex = ';'.join(filter_parts)
-            cmd = ['ffmpeg', '-i', file_path,
-                   '-filter_complex', filter_complex,
-                   '-map', '[vout]', '-map', '[aout]',
-                   temp_path, '-y']
-        else:
-            stream_inputs = ''.join(f'[v{i}]' for i in range(n))
-            filter_parts.append(f"{stream_inputs}concat=n={n}:v=1:a=0[vout]")
-            filter_complex = ';'.join(filter_parts)
-            cmd = ['ffmpeg', '-i', file_path,
-                   '-filter_complex', filter_complex,
-                   '-map', '[vout]',
-                   temp_path, '-y']
-
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            return flask.jsonify({'success': False, 'error': f'ffmpeg error: {result.stderr[-500:]}'}), 500
-
-        if preserve_original:
-            new_filename = unique_suffixed_name(RES_DIR, filename, "_trimmed")
-            os.replace(temp_path, os.path.join(RES_DIR, new_filename))
-            return flask.jsonify({'success': True, 'new_filename': new_filename})
-
-        os.replace(temp_path, file_path)
-        return flask.jsonify({'success': True})
-
-    except Exception as e:
-        return flask.jsonify({'success': False, 'error': str(e)}), 500
+def clear_jobs():
+    edit_jobs.clear_finished()
+    return flask.jsonify({'jobs': edit_jobs.snapshot()})
 
 @app.before_request
 def refresh_session():
@@ -1239,6 +1048,7 @@ def run():
     app.register_blueprint(bp)
     login_manager.init_app(app)
     login_manager.login_view = url_for_prefix + "login"
+    edit_jobs.start()
     app.run(host="0.0.0.0", port=args.port)
 
 if __name__ == "__main__":
