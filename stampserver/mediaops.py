@@ -170,22 +170,47 @@ def _render_video(source, output, operations):
     _run_ffmpeg(command + [output, '-y'])
 
 
-def edit_and_stamp(directory, filename, new_path, operations, copy):
-    source = os.path.join(directory, filename)
-    if not os.path.isfile(source):
-        raise FileNotFoundError(filename)
+def resolve_target(directory, filename, new_path, operations, copy):
+    """Name `filename` takes in `directory` once restamped to `new_path` (and
+    edited, if `operations`). A copy always gets a free name; a move raises
+    FileExistsError or IdentityConflictError when its name is taken.
+
+    `filename` may already be set aside by a queued edit; its name then counts
+    as free only if nothing has taken it since.
+    """
     _, base = parse_stamped(filename)
     target_name = build_stamped(new_path, base)
     identities = identity_index(os.listdir(directory))
     if copy:
         if operations or target_name == filename or os.path.lexists(os.path.join(directory, target_name)) or identity_key(target_name) in identities:
             target_name = unique_suffixed_name(directory, target_name, '_edited' if operations else '_copy')
-    elif target_name != filename:
+    elif target_name != filename or not os.path.lexists(os.path.join(directory, filename)):
         if os.path.lexists(os.path.join(directory, target_name)):
             raise FileExistsError(target_name)
         holders = identities.get(identity_key(target_name), set()) - {filename}
         if holders:
             raise IdentityConflictError(target_name, sorted(holders)[0])
+    return target_name
+
+
+def render_edit(source, output, filename, operations):
+    """Write `source` with `operations` applied to `output`. `filename` names
+    the media type and image format, since `source` may be a stashed copy."""
+    if not isinstance(operations, list):
+        raise ValueError('Invalid edit list')
+    if is_image(filename):
+        _render_image(source, output, filename, operations)
+    elif filename.lower().endswith(('.mp4', '.mov')):
+        _render_video(source, output, operations)
+    else:
+        raise ValueError('This file cannot be edited')
+
+
+def edit_and_stamp(directory, filename, new_path, operations, copy):
+    source = os.path.join(directory, filename)
+    if not os.path.isfile(source):
+        raise FileNotFoundError(filename)
+    target_name = resolve_target(directory, filename, new_path, operations, copy)
     target = os.path.join(directory, target_name)
     if not operations:
         if target_name != filename:
@@ -194,17 +219,10 @@ def edit_and_stamp(directory, filename, new_path, operations, copy):
             else:
                 os.rename(source, target)
         return target_name
-    if not isinstance(operations, list):
-        raise ValueError('Invalid edit list')
     fd, temporary = tempfile.mkstemp(dir=directory, suffix=os.path.splitext(filename)[1])
     os.close(fd)
     try:
-        if is_image(filename):
-            _render_image(source, temporary, filename, operations)
-        elif filename.lower().endswith(('.mp4', '.mov')):
-            _render_video(source, temporary, operations)
-        else:
-            raise ValueError('This file cannot be edited')
+        render_edit(source, temporary, filename, operations)
         os.replace(temporary, target)
         if not copy and target_name != filename:
             os.remove(source)

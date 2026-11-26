@@ -15,6 +15,7 @@ def _server(monkeypatch, tmp_path):
     }))
     monkeypatch.setattr(sys, 'argv', [
         'stampserver', '--secrets-file', str(secrets), '--data-dir', str(tmp_path),
+        '--state-dir', str(tmp_path / '.state'),
     ])
     path = os.path.join(os.path.dirname(__file__), '..', 'stampserver.py')
     spec = importlib.util.spec_from_file_location('stampserver_form_test', path)
@@ -102,3 +103,42 @@ def test_delete_substamp_redirects_to_parent(monkeypatch, tmp_path):
     assert not (tmp_path / 'stamped.foo.stamped.bar.b.png').exists()
     assert (tmp_path / 'stamped.foo.a.png').exists()
     assert response.location.endswith('/restamp/foo')
+
+
+CROP_EDITS = json.dumps([{'type': 'crop', 'x': 0, 'y': 0, 'width': 5, 'height': 5}])
+
+
+def test_edit_with_keep_original_queues_and_stays_on_file(monkeypatch, tmp_path):
+    module = _server(monkeypatch, tmp_path)
+    source = tmp_path / 'stamped.foo.photo.png'
+    Image.new('RGB', (10, 10), 'red').save(source)
+    module.stampserver.filedeck = source.name
+    module.stampserver.filelist = [(source.name, 'PNG')]
+
+    with module.app.test_request_context('/restamp/foo', method='POST', data={
+        'action': 'restamp', 'text': '', 'preserve_originals': 'on', 'edits': CROP_EDITS,
+    }):
+        module._handle_restamp_post(['foo'])
+        assert module.flask.g.keep_original
+
+    assert module.stampserver.filelist == [(source.name, 'PNG')]
+    assert [job['status'] for job in module.edit_jobs.snapshot()] == ['queued']
+    module.edit_jobs.run_pending()
+    assert Image.open(tmp_path / 'stamped.foo.photo_edited.png').size == (5, 5)
+    assert Image.open(source).size == (10, 10)
+
+
+def test_edit_replacing_original_queues_and_leaves_deck(monkeypatch, tmp_path):
+    module = _server(monkeypatch, tmp_path)
+    source = tmp_path / 'photo.png'
+    Image.new('RGB', (10, 10), 'red').save(source)
+    module.stampserver.filedeck = source.name
+    module.stampserver.filelist = [(source.name, 'PNG')]
+
+    with module.app.test_request_context('/', method='POST', data={'text': '', 'edits': CROP_EDITS}):
+        module._handle_stamp_post()
+
+    assert module.stampserver.filelist == []
+    assert not source.exists()
+    module.edit_jobs.run_pending()
+    assert Image.open(source).size == (5, 5)
