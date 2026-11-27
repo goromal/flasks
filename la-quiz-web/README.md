@@ -7,8 +7,8 @@ A mobile-friendly web-based version of the LA Geography Quiz game.
 - **Mobile-Responsive**: Touch-friendly interface optimized for mobile devices
 - **SQLite Database**: Stores city locations in a database instead of JSON files
 - **Multiple Regions**: Support for North, Central, East, and South LA
-- **Score Tracking**: Session-based score tracking with accuracy feedback
-- **Real-time Feedback**: Visual markers showing correct location and distance
+- **Progress Tracking**: Per-place mastery that persists across visits
+- **Learning rounds**: Study, practice and a no-miss final check, with spaced review of missed places
 
 ## Installation
 
@@ -59,13 +59,21 @@ Navigate to `http://localhost:5050/la-quiz/` (or your configured subdomain).
 
 ## Usage
 
-### Normal Quiz Mode
+### How the game teaches
 
-1. Select a region (North, Central, East, or South LA)
-2. A city name will be displayed
-3. Tap/click the location on the map where you think the city is located
-4. The app will show if you were correct (within 20 pixels)
-5. Your score is tracked throughout the session
+The quiz is built to teach, not just test. Each region is learned a few places at a time in **rounds**:
+
+1. **Study**: the round's places (8, or fewer near the end) are shown labeled on a zoomed-in map. New places are picked as a geographic cluster that continues from the previous round, so each round builds on neighbors you already know. Places due for review are mixed in and shown in orange.
+2. **Practice**: you are asked each place until you get it right. A miss shows the correct spot (with the direction and a nearby known landmark), puts the place back in the queue two questions later, and requires two correct answers in a row to clear it.
+3. **Final check**: every place in the round is asked once more. Any miss sends those places back to practice, then the final check repeats. The round is complete only after a final check with no misses.
+
+While you answer, place-name text on the map is blurred so you can't just read the answer; roads, coastline and terrain stay visible as cues. The **Labels** button turns this off.
+
+Progress is kept per browser (an anonymous long-lived cookie) in the database, using Leitner boxes: a place cleared without a miss moves up a box, a missed place drops to box 0, and a place in box *b* comes back for review 2^*b* rounds after it was last practiced. A place in box 3 or higher counts as **mastered**; the region cards show mastered/total.
+
+A tap counts as correct within 25 px of the place, or within 75 px if the target is also the nearest place to the tap.
+
+Feedback is shown above the map, never on top of it, so the correct location is always visible.
 
 ### Debug Mode
 
@@ -110,9 +118,14 @@ Debug mode is session-based, so it persists only for your current browser sessio
 - `x`: X coordinate on the map
 - `y`: Y coordinate on the map
 
+**progress table** (per player and place): `box`, `attempts`, `misses`, `last_round`.
+
+**round_state table** (per player and region): the round in progress, as JSON.
+
 ### Files
 
-- `la_quiz_web.py`: Flask application with all routes and game logic
+- `la_quiz_web.py`: Flask application, routes and persistence
+- `la_quiz_learn.py`: round, drill and spaced-review logic (no Flask or database)
 - `templates/index.html`: Region selection page
 - `templates/quiz.html`: Quiz interface with interactive map
 - `migrate_json_to_db.py`: Migration utility to import JSON data
@@ -152,7 +165,7 @@ The web version differs from the original Tkinter application in several ways:
 - **Database vs JSON**: Uses SQLite instead of JSON files for better scalability
 - **Web-based**: Accessible from any device with a browser
 - **Mobile-first**: Touch-optimized interface
-- **Session-based**: Tracks scores per browser session
+- **Learning rounds**: Spaced, round-based practice instead of a plain score
 - **Enhanced Debug Mode**: Toggle-able debug mode with in-browser coordinate editing and city addition (vs. command-line only in original)
 
 ## Future Enhancements

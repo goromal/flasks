@@ -67,6 +67,29 @@
             box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
         }
 
+        .region-progress {
+            display: block;
+            font-size: 0.7em;
+            font-weight: 500;
+            margin-top: 8px;
+            opacity: 0.95;
+        }
+
+        .region-bar {
+            display: block;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.35);
+            border-radius: 3px;
+            margin-top: 6px;
+            overflow: hidden;
+        }
+
+        .region-bar span {
+            display: block;
+            height: 100%;
+            background: white;
+        }
+
         .region-card:hover, .region-card:active {
             transform: translateY(-5px);
             box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
@@ -150,7 +173,7 @@
 <body>
     <div class="container">
         <h1>🗺️ LA Geography Quiz</h1>
-        <p class="subtitle">Test your knowledge of Los Angeles geography</p>
+        <p class="subtitle">Learn Los Angeles geography a neighborhood at a time</p>
 
         {% with messages = get_flashed_messages() %}
             {% if messages %}
@@ -167,6 +190,8 @@
                 {% for region in regions %}
                     <a href="{{ urlroot }}quiz/{{ region.id }}" class="region-card">
                         {{ region.name }}
+                        <span class="region-progress">{{ region.mastered }}/{{ region.total }} places mastered</span>
+                        <span class="region-bar"><span style="width: {{ (100 * region.mastered / region.total) if region.total else 0 }}%"></span></span>
                     </a>
                 {% endfor %}
             </div>

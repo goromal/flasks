@@ -1,11 +1,12 @@
 import os
 import argparse
+import datetime
+import json
 import random
 import sqlite3
-import math
-from pathlib import Path
+import uuid
 import flask
-from werkzeug.security import generate_password_hash, check_password_hash
+import la_quiz_learn as learn
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--port", action="store", type=int, default=5000, help="Port to run the server on")
@@ -36,6 +37,7 @@ else:
 
 app = flask.Flask(__name__, static_url_path=args.subdomain + "/static", static_folder=MAPS_DIR)
 app.secret_key = b"la_quiz_secret_key_change_in_production"
+app.permanent_session_lifetime = datetime.timedelta(days=3650)
 
 def get_db():
     """Get database connection."""
@@ -65,6 +67,27 @@ def init_db():
             FOREIGN KEY (region_id) REFERENCES regions (id)
         )
     ''')
+    # Per-player learning progress for each place (Leitner box and counts).
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS progress (
+            player TEXT NOT NULL,
+            city_id INTEGER NOT NULL,
+            box INTEGER NOT NULL DEFAULT 0,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            misses INTEGER NOT NULL DEFAULT 0,
+            last_round INTEGER NOT NULL DEFAULT -1,
+            PRIMARY KEY (player, city_id)
+        )
+    ''')
+    # Per-player state of the round in progress for each region (JSON).
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS round_state (
+            player TEXT NOT NULL,
+            region_id INTEGER NOT NULL,
+            state TEXT NOT NULL,
+            PRIMARY KEY (player, region_id)
+        )
+    ''')
     db.commit()
     db.close()
 
@@ -81,7 +104,7 @@ def get_regions():
 def get_cities_by_region(region_id):
     """Get all cities for a region."""
     db = get_db()
-    cities = db.execute('SELECT * FROM cities WHERE region_id = ?', (region_id,)).fetchall()
+    cities = db.execute('SELECT * FROM cities WHERE region_id = ? ORDER BY id', (region_id,)).fetchall()
     db.close()
     return [dict(c) for c in cities]
 
@@ -92,6 +115,86 @@ def get_region_by_id(region_id):
     db.close()
     return dict(region) if region else None
 
+def player_id():
+    """Stable anonymous id for this browser, kept in a long-lived session cookie."""
+    flask.session.permanent = True
+    if 'player' not in flask.session:
+        flask.session['player'] = uuid.uuid4().hex
+    return flask.session['player']
+
+def load_progress(player, cities):
+    db = get_db()
+    rows = db.execute(
+        'SELECT city_id, box, attempts, misses, last_round FROM progress WHERE player = ?', (player,)
+    ).fetchall()
+    db.close()
+    ids = {c['id'] for c in cities}
+    return {r['city_id']: dict(r) for r in rows if r['city_id'] in ids}
+
+def save_progress(player, progress, city_ids):
+    db = get_db()
+    for cid in city_ids:
+        p = progress[cid]
+        db.execute(
+            'INSERT OR REPLACE INTO progress (player, city_id, box, attempts, misses, last_round) VALUES (?, ?, ?, ?, ?, ?)',
+            (player, cid, p['box'], p['attempts'], p['misses'], p['last_round'])
+        )
+    db.commit()
+    db.close()
+
+def load_state(player, region_id, cities, progress):
+    """Load the round in progress, starting a new one if needed."""
+    db = get_db()
+    row = db.execute(
+        'SELECT state FROM round_state WHERE player = ? AND region_id = ?', (player, region_id)
+    ).fetchone()
+    db.close()
+    ids = {c['id'] for c in cities}
+    state = json.loads(row['state']) if row else None
+    if state is not None and not set(state['cities']) <= ids:
+        # A place in this round was deleted; restart the round.
+        state = learn.new_round(cities, progress, state['round'])
+        save_state(player, region_id, state)
+    if state is None:
+        state = learn.new_round(cities, progress, 0)
+        save_state(player, region_id, state)
+    return state
+
+def save_state(player, region_id, state):
+    db = get_db()
+    db.execute(
+        'INSERT OR REPLACE INTO round_state (player, region_id, state) VALUES (?, ?, ?)',
+        (player, region_id, json.dumps(state))
+    )
+    db.commit()
+    db.close()
+
+def view(state, cities, progress):
+    """The client-facing summary of the round and overall progress."""
+    by_id = {c['id']: c for c in cities}
+    cid = learn.current(state)
+    return {
+        'phase': state['phase'],
+        'round': state['round'] + 1,
+        'round_cities': state['cities'],
+        'review_ids': [i for i in state['cities'] if learn.is_seen(progress.get(i))],
+        'round_size': len(state['cities']),
+        'cleared': learn.cleared(state),
+        'final_left': len(state['final']),
+        'final_passes': state['final_passes'],
+        'prompt': by_id[cid] if cid is not None else None,
+        'mastered': sum(1 for c in cities if learn.is_mastered(progress.get(c['id']))),
+        'seen': sum(1 for c in cities if learn.is_seen(progress.get(c['id']))),
+        'total': len(cities),
+    }
+
+def region_context(region_id):
+    cities = get_cities_by_region(region_id)
+    player = player_id()
+    progress = load_progress(player, cities)
+    state = load_state(player, region_id, cities, progress) if cities else None
+    return player, cities, progress, state
+
 @bp.route("/")
 def index():
     """Main page - region selection."""
@@ -99,7 +202,13 @@ def index():
     if 'debug_mode' not in flask.session:
         flask.session['debug_mode'] = False
 
+    player = player_id()
     regions = get_regions()
+    for region in regions:
+        cities = get_cities_by_region(region['id'])
+        progress = load_progress(player, cities)
+        region['total'] = len(cities)
+        region['mastered'] = sum(1 for c in cities if learn.is_mastered(progress.get(c['id'])))
     return flask.render_template(
         "index.html",
         urlroot=urlroot,
@@ -115,11 +224,11 @@ def quiz(region_id):
         flask.flash("Region not found")
         return flask.redirect(flask.url_for(url_for_prefix + 'index'))
 
-    cities = get_cities_by_region(region_id)
-
     # Initialize debug mode if not set
     if 'debug_mode' not in flask.session:
         flask.session['debug_mode'] = False
+
+    player, cities, progress, state = region_context(region_id)
 
     # If no cities and not in debug mode, redirect with message
     if not cities and not flask.session.get('debug_mode', False):
@@ -135,88 +244,94 @@ def quiz(region_id):
             debug_mode=True
         )
 
-    # Initialize session if needed
-    if 'region_id' not in flask.session or flask.session['region_id'] != region_id:
-        flask.session['region_id'] = region_id
-        flask.session['city_indices'] = list(range(len(cities)))
-        random.shuffle(flask.session['city_indices'])
-        flask.session['current_index'] = 0
-        flask.session['score'] = 0
-        flask.session['total_guesses'] = 0
-        flask.session['awaiting_feedback'] = False
-        flask.session['last_result'] = None
-
-    current_idx = flask.session['city_indices'][flask.session['current_index']]
-    current_city = cities[current_idx]
-
     return flask.render_template(
         "quiz.html",
         urlroot=urlroot,
         region=region,
-        city=current_city,
-        score=flask.session.get('score', 0),
-        total=flask.session.get('total_guesses', 0),
-        awaiting_feedback=flask.session.get('awaiting_feedback', False),
-        last_result=flask.session.get('last_result'),
+        cities=cities,
+        initial_view=view(state, cities, progress),
         debug_mode=flask.session.get('debug_mode', False)
     )
 
+@bp.route("/start/<int:region_id>", methods=["POST"])
+def start_round(region_id):
+    """Finish studying and start answering questions for the round."""
+    player, cities, progress, state = region_context(region_id)
+    if state is None:
+        return flask.jsonify({"error": "No cities in this region"}), 400
+    learn.start(state)
+    save_state(player, region_id, state)
+    return flask.jsonify({"view": view(state, cities, progress)})
+
 @bp.route("/check/<int:region_id>", methods=["POST"])
 def check_guess(region_id):
-    """Check user's guess."""
-    data = flask.request.json
+    """Grade a tap on the map for the current question."""
+    data = flask.request.json or {}
     click_x = data.get('x')
     click_y = data.get('y')
-
     if click_x is None or click_y is None:
         return flask.jsonify({"error": "Invalid coordinates"}), 400
 
-    cities = get_cities_by_region(region_id)
-    current_idx = flask.session['city_indices'][flask.session['current_index']]
-    current_city = cities[current_idx]
+    player, cities, progress, state = region_context(region_id)
+    cid = learn.current(state) if state else None
+    if cid is None:
+        return flask.jsonify({"error": "No question is waiting for an answer"}), 409
+    target = next(c for c in cities if c['id'] == cid)
 
-    # Calculate distance
-    distance = math.sqrt((current_city['x'] - click_x) ** 2 + (current_city['y'] - click_y) ** 2)
-    is_correct = distance < 75
+    is_correct, distance = learn.grade(cities, target, click_x, click_y)
+    hint = learn.landmark_hint(cities, target, progress)
+    p = progress.setdefault(cid, {'box': 0, 'attempts': 0, 'misses': 0, 'last_round': -1})
+    p['attempts'] += 1
+    p['misses'] += 0 if is_correct else 1
 
-    # Update session
-    flask.session['total_guesses'] += 1
-    if is_correct:
-        flask.session['score'] += 1
-
-    # Prepare for next city
-    flask.session['current_index'] += 1
-    if flask.session['current_index'] >= len(cities):
-        flask.session['current_index'] = 0
-        flask.session['city_indices'] = list(range(len(cities)))
-        random.shuffle(flask.session['city_indices'])
-
-    next_idx = flask.session['city_indices'][flask.session['current_index']]
-    next_city = cities[next_idx]
+    phase = state['phase']
+    learn.answer(state, is_correct)
+    summary = None
+    if state['phase'] == 'complete':
+        summary = learn.finish_round(state, progress)
+        by_id = {c['id']: c['name'] for c in cities}
+        summary['missed'] = [by_id[i] for i in summary['missed']]
+        summary['newly_mastered'] = [by_id[i] for i in summary['newly_mastered']]
+        save_progress(player, progress, set(state['cities']) | {cid})
+        state = learn.new_round(cities, progress, state['round'] + 1, state['cities'])
+    else:
+        save_progress(player, progress, [cid])
+    save_state(player, region_id, state)
 
     return flask.jsonify({
         "correct": is_correct,
+        "phase": phase,
         "distance": round(distance, 1),
-        "correct_x": current_city['x'],
-        "correct_y": current_city['y'],
-        "next_city": next_city['name'],
-        "score": flask.session['score'],
-        "total": flask.session['total_guesses']
+        "city": target,
+        "direction": learn.miss_direction(target, click_x, click_y),
+        "hint": hint,
+        "summary": summary,
+        "view": view(state, cities, progress),
     })
 
 @bp.route("/reset/<int:region_id>", methods=["POST"])
 def reset_quiz(region_id):
-    """Reset the quiz for a region."""
-    cities = get_cities_by_region(region_id)
-    flask.session['region_id'] = region_id
-    flask.session['city_indices'] = list(range(len(cities)))
-    random.shuffle(flask.session['city_indices'])
-    flask.session['current_index'] = 0
-    flask.session['score'] = 0
-    flask.session['total_guesses'] = 0
-    flask.session['awaiting_feedback'] = False
-    flask.session['last_result'] = None
+    """Forget all learning progress for a region."""
+    player = player_id()
+    ids = [c['id'] for c in get_cities_by_region(region_id)]
+    db = get_db()
+    db.executemany('DELETE FROM progress WHERE player = ? AND city_id = ?', [(player, i) for i in ids])
+    db.execute('DELETE FROM round_state WHERE player = ? AND region_id = ?', (player, region_id))
+    db.commit()
+    db.close()
     return flask.jsonify({"status": "reset"})
+
+@bp.route("/skip/<int:region_id>", methods=["POST"])
+def skip_city(region_id):
+    """Move the current question to the back of the queue (debug mode only)."""
+    if not flask.session.get('debug_mode', False):
+        return flask.jsonify({"error": "Debug mode not enabled"}), 403
+    player, cities, progress, state = region_context(region_id)
+    queue = state['queue'] if state['phase'] == 'drill' else state['final'] if state['phase'] == 'final' else []
+    if len(queue) > 1:
+        queue.append(queue.pop(0))
+        save_state(player, region_id, state)
+    return flask.jsonify({"view": view(state, cities, progress)})
 
 @bp.route("/toggle-debug", methods=["POST"])
 def toggle_debug():
