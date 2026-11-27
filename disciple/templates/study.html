@@ -13,7 +13,14 @@
 
 {% else %}
   <div class="card">
-    <div class="ref">{{ group.ref_range }}</div>
+    <div class="ref">
+      {{ group.ref_range }}
+      {% if group.processed %}
+        <span class="draft-badge" style="background:#e7f4e8; color:#245c2a;">Processed</span>
+      {% elif group.note or group.tags %}
+        <span class="draft-badge">Draft &mdash; not yet submitted</span>
+      {% endif %}
+    </div>
     {% for m in group.members %}
       <div class="verse {{ 'christ-ref' if m.role == 'christ_ref' else 'context' }}">
         <span class="verse-num">
@@ -26,7 +33,8 @@
 
   <div class="card">
     <form method="POST" action="{{ url_for('disciple.process_group', group_id=group.id) }}">
-      <input type="hidden" name="next" value="{{ request.full_path }}">
+      {# Save Note comes back to this same passage rather than a random one. #}
+      <input type="hidden" name="next" value="{{ url_for('disciple.study', group=group.id) }}">
       <div class="field">
         <label for="note">Notes</label>
         <textarea name="note" id="note" rows="4">{{ group.note }}</textarea>
@@ -59,12 +67,16 @@
         {% endif %}
       </div>
       <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-        <button type="submit" class="btn btn-primary">Mark as Processed</button>
+        <button type="submit" class="btn btn-primary">
+          {{ 'Update' if group.processed else 'Mark as Processed' }}
+        </button>
         <button type="submit" class="btn btn-secondary"
                 formaction="{{ url_for('disciple.save_note', group_id=group.id) }}">
-          Save Note
+          Save Draft
         </button>
-        <a href="{{ url_for('disciple.study') }}" class="btn btn-secondary">Skip</a>
+        <a href="{{ url_for('disciple.study') }}" class="btn btn-secondary">
+          {{ 'Random Passage' if request.args.get('group') else 'Skip' }}
+        </a>
       </div>
     </form>
     <div style="margin-top:14px; padding-top:14px; border-top:1px solid #eee;">
