@@ -24,7 +24,7 @@
         .header {
             background: white;
             border-radius: 15px;
-            padding: 15px 20px;
+            padding: 12px 18px;
             margin-bottom: 10px;
             box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
         }
@@ -33,7 +33,8 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 10px;
+            gap: 10px;
+            margin-bottom: 8px;
         }
 
         .back-link {
@@ -41,26 +42,167 @@
             text-decoration: none;
             font-weight: 600;
             font-size: 1em;
+            white-space: nowrap;
         }
 
-        .score {
-            color: #333;
+        .mastery {
+            flex: 1;
+            max-width: 320px;
+            font-size: 0.85em;
+            color: #555;
+            text-align: right;
+        }
+
+        .bar {
+            height: 8px;
+            background: #e6e6e6;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 3px;
+        }
+
+        .bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #11998e, #38ef7d);
+            width: 0;
+            transition: width 0.4s;
+        }
+
+        .round-status {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 6px 10px;
+            font-size: 0.9em;
+            color: #555;
+        }
+
+        .phase-tag {
+            background: #11998e;
+            color: white;
+            border-radius: 10px;
+            padding: 2px 10px;
             font-weight: 600;
-            font-size: 1em;
+            font-size: 0.85em;
+        }
+
+        .phase-tag.done {
+            background: #2e9e4f;
+        }
+
+        .phase-tag.final {
+            background: #e67e22;
+        }
+
+        .round-pips {
+            display: inline-flex;
+            gap: 4px;
+        }
+
+        .pip {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #ddd;
+        }
+
+        .pip.done {
+            background: #38ef7d;
+        }
+
+        /* Panels shown in the header so they never cover the map. */
+        .panel {
+            display: none;
+            text-align: center;
+            margin-top: 8px;
+        }
+
+        .panel.show {
+            display: block;
         }
 
         .city-prompt {
-            text-align: center;
             font-size: 1.8em;
             font-weight: bold;
             color: #333;
-            margin: 10px 0;
         }
 
         .instruction {
-            text-align: center;
             color: #666;
             font-size: 0.9em;
+        }
+
+        .feedback-line {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .feedback-title {
+            font-size: 1.3em;
+            font-weight: bold;
+        }
+
+        .feedback-title.good {
+            color: #2e9e4f;
+        }
+
+        .feedback-title.bad {
+            color: #d9372b;
+        }
+
+        .feedback-detail {
+            color: #555;
+            margin: 4px 0 8px;
+            font-size: 0.95em;
+        }
+
+        .study-list {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 6px;
+            margin: 8px 0;
+        }
+
+        .chip {
+            background: #eef8f6;
+            border: 1px solid #bfe5df;
+            color: #11665e;
+            border-radius: 12px;
+            padding: 3px 10px;
+            font-size: 0.9em;
+        }
+
+        .chip.review {
+            background: #fff4e5;
+            border-color: #f5cf9b;
+            color: #8a4f00;
+        }
+
+        .chip.missed {
+            background: #fdecea;
+            border-color: #f5b5ae;
+            color: #a12a1f;
+        }
+
+        .action {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            color: white;
+            border: none;
+            padding: 10px 26px;
+            border-radius: 10px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        .action:active {
+            transform: scale(0.95);
         }
 
         .map-container {
@@ -91,58 +233,6 @@
             display: block;
             max-width: 100%;
             height: auto;
-        }
-
-        .feedback {
-            position: absolute;
-            top: 10px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: white;
-            padding: 20px 30px;
-            border-radius: 15px;
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
-            text-align: center;
-            max-width: 90%;
-            z-index: 1000;
-            display: none;
-        }
-
-        .feedback.show {
-            display: block;
-        }
-
-        .feedback-icon {
-            font-size: 2.5em;
-            margin-bottom: 5px;
-        }
-
-        .feedback-text {
-            font-size: 1.2em;
-            font-weight: bold;
-            margin-bottom: 5px;
-        }
-
-        .feedback-distance {
-            color: #666;
-            margin-bottom: 10px;
-            font-size: 0.95em;
-        }
-
-        .feedback-next {
-            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
-            color: white;
-            border: none;
-            padding: 10px 25px;
-            border-radius: 10px;
-            font-size: 1em;
-            font-weight: 600;
-            cursor: pointer;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
-        }
-
-        .feedback-next:active {
-            transform: scale(0.95);
         }
 
         .controls {
@@ -264,11 +354,16 @@
             }
 
             .header {
-                padding: 12px 15px;
+                padding: 10px 12px;
             }
 
             .controls {
                 padding: 10px;
+            }
+
+            .btn {
+                padding: 12px 6px;
+                font-size: 0.9em;
             }
         }
     </style>
@@ -276,35 +371,63 @@
 <body>
     <div class="header">
         <div class="header-top">
-            <a href="{{ urlroot }}" class="back-link">← Back</a>
-            <div class="score">Score: <span id="score">{{ score }}</span>/<span id="total">{{ total }}</span></div>
+            <a href="{{ urlroot }}" class="back-link">← {{ region.name }}</a>
+            <div class="mastery">
+                <span id="masteryText"></span>
+                <div class="bar"><div class="bar-fill" id="masteryBar"></div></div>
+            </div>
         </div>
-        <div class="city-prompt" id="cityPrompt">{{ city.name }}</div>
-        <div class="instruction">Tap the location on the map</div>
+        <div class="round-status">
+            <span id="roundLabel"></span>
+            <span class="phase-tag" id="phaseTag"></span>
+            <span class="round-pips" id="roundPips"></span>
+            <span id="phaseDetail"></span>
+        </div>
+
+        <div class="panel" id="studyPanel">
+            <div class="instruction" id="studyIntro"></div>
+            <div class="study-list" id="studyList"></div>
+            <button class="action" id="startButton" onclick="startRound()">Start round</button>
+        </div>
+
+        <div class="panel" id="questionPanel">
+            <div class="city-prompt" id="cityPrompt"></div>
+            <div class="instruction" id="instruction">Tap the location on the map</div>
+        </div>
+
+        <div class="panel" id="feedbackPanel">
+            <div class="feedback-line">
+                <span class="feedback-title" id="feedbackTitle"></span>
+                <button class="action" id="continueButton" onclick="continueAfterFeedback()">Continue</button>
+            </div>
+            <div class="feedback-detail" id="feedbackDetail"></div>
+        </div>
+
+        <div class="panel" id="completePanel">
+            <div class="feedback-title good" id="completeTitle"></div>
+            <div class="feedback-detail" id="completeDetail"></div>
+            <div class="study-list" id="completeList"></div>
+            <button class="action" onclick="continueAfterSummary()">Next round</button>
+        </div>
     </div>
 
     <div class="map-container">
         <div class="canvas-wrapper">
             <canvas id="mapCanvas"></canvas>
         </div>
-        <div class="feedback" id="feedback">
-            <div class="feedback-icon" id="feedbackIcon"></div>
-            <div class="feedback-text" id="feedbackText"></div>
-            <div class="feedback-distance" id="feedbackDistance"></div>
-            <button class="feedback-next" onclick="nextCity()">Continue</button>
-        </div>
     </div>
 
     <div class="controls">
-        <button class="btn btn-secondary" onclick="resetQuiz()">Reset Score</button>
+        <button class="btn btn-secondary" onclick="resetQuiz()">Reset Progress</button>
+        <button class="btn" id="labelsToggle" onclick="toggleLabels()">Map Labels</button>
         <button class="btn btn-debug" id="debugToggle" onclick="toggleDebug()">Debug Mode</button>
     </div>
 
     <div class="debug-panel" id="debugPanel">
         <h3 style="margin-bottom: 15px; color: #333;">Debug Mode</h3>
         <div class="debug-info">
-            <p><strong>Current City:</strong> <span id="debugCityName">{{ city.name }}</span> (ID: <span id="debugCityId">{{ city.id }}</span>)</p>
-            <p><strong>Programmed Location:</strong> (<span id="debugCityX">{{ city.x }}</span>, <span id="debugCityY">{{ city.y }}</span>)</p>
+            <p><strong>Current City:</strong> <span id="debugCityName">-</span> (ID: <span id="debugCityId">-</span>)</p>
+            <p><strong>Programmed Location:</strong> (<span id="debugCityX">-</span>, <span id="debugCityY">-</span>)</p>
             <p><strong>Last Click:</strong> <span id="debugLastClick">None</span></p>
         </div>
         <div class="debug-buttons">
@@ -337,59 +460,320 @@
         const ctx = canvas.getContext('2d');
         const regionId = {{ region.id }};
         const urlroot = "{{ urlroot }}";
+        const cities = {{ cities | tojson }};
+        const citiesById = Object.fromEntries(cities.map(c => [c.id, c]));
+
+        let quizView = {{ initial_view | tojson }};
+        let pendingView = null;     // view to show after the player dismisses feedback
+        let pendingSummary = null;  // round summary to show after feedback
+        let uiMode = 'question';    // 'study' | 'question' | 'feedback' | 'complete'
+        let feedback = null;        // { guess, city, correct } drawn on the map
+        let busy = false;
 
         let mapImage = new Image();
-        let currentCity = { name: "{{ city.name }}", x: {{ city.x }}, y: {{ city.y }}, id: {{ city.id }} };
-        let markers = [];
-        let acceptanceCircle = null; // { x, y, radius } for showing acceptance zone
+        let blurredMap = null;      // low-resolution copy used to hide label text
         let scaleFactor = 1;
+        let hideLabels = readHideLabels();
         let debugMode = {{ 'true' if debug_mode else 'false' }};
         let debugAction = null; // 'set-coords' or 'add-city'
         let newCityCoords = { x: null, y: null };
+        let debugMarker = null;
 
-        mapImage.onload = function() {
-            // Scale to fit screen width while maintaining aspect ratio
+        const NEAR_RADIUS = 75;
+
+        function readHideLabels() {
+            try {
+                return localStorage.getItem('laQuizShowLabels') !== '1';
+            } catch (e) {
+                return true;
+            }
+        }
+
+        function fitCanvas() {
             const maxWidth = Math.min(1000, window.innerWidth - 40);
             scaleFactor = maxWidth / mapImage.width;
-
             canvas.width = mapImage.width * scaleFactor;
             canvas.height = mapImage.height * scaleFactor;
+        }
 
-            drawMap();
+        mapImage.onload = function() {
+            // Blur by downsampling; works in every browser, unlike ctx.filter.
+            const small = document.createElement('canvas');
+            small.width = Math.max(1, Math.round(mapImage.width / 6));
+            small.height = Math.max(1, Math.round(mapImage.height / 6));
+            small.getContext('2d').drawImage(mapImage, 0, 0, small.width, small.height);
+            blurredMap = small;
+            fitCanvas();
+            render();
         };
 
         mapImage.src = "{{ urlroot }}static/" + "{{ region.map_image }}";
 
-        function drawMap() {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.drawImage(mapImage, 0, 0, canvas.width, canvas.height);
+        // Approximate box covering a place's printed label, in native pixels.
+        function labelBox(city) {
+            const w = Math.min(100, Math.max(30, city.name.length * 5.5 + 10));
+            const h = city.name.length > 12 ? 30 : 20;
+            return { x: city.x - w / 2, y: city.y - h / 2, w: w, h: h };
+        }
 
-            // Draw acceptance circle if present (outline only)
-            if (acceptanceCircle) {
+        function drawMaskedLabels() {
+            if (!blurredMap) return;
+            const sx = blurredMap.width / mapImage.width;
+            cities.forEach(city => {
+                const b = labelBox(city);
+                ctx.save();
                 ctx.beginPath();
-                ctx.arc(
-                    acceptanceCircle.x * scaleFactor,
-                    acceptanceCircle.y * scaleFactor,
-                    acceptanceCircle.radius * scaleFactor,
-                    0,
-                    2 * Math.PI
-                );
-                ctx.strokeStyle = 'rgba(17, 153, 142, 0.8)';
-                ctx.lineWidth = 2;
-                ctx.stroke();
+                ctx.rect(b.x * scaleFactor, b.y * scaleFactor, b.w * scaleFactor, b.h * scaleFactor);
+                ctx.clip();
+                ctx.drawImage(blurredMap, 0, 0, blurredMap.width, blurredMap.height,
+                              0, 0, canvas.width, canvas.height);
+                ctx.restore();
+            });
+        }
+
+        function drawDot(x, y, color, radius) {
+            ctx.beginPath();
+            ctx.arc(x * scaleFactor, y * scaleFactor, radius, 0, 2 * Math.PI);
+            ctx.fillStyle = color;
+            ctx.fill();
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+
+        function drawTag(text, x, y, color) {
+            const px = x * scaleFactor;
+            const py = y * scaleFactor;
+            ctx.font = 'bold 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+            const w = ctx.measureText(text).width + 10;
+            // Keep the tag on the canvas, above the dot unless that would clip.
+            let tx = Math.min(Math.max(px - w / 2, 2), canvas.width - w - 2);
+            let ty = py - 30 < 2 ? py + 10 : py - 30;
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            if (ctx.roundRect) {
+                ctx.roundRect(tx, ty, w, 20, 6);
+            } else {
+                ctx.rect(tx, ty, w, 20);
             }
+            ctx.fill();
+            ctx.stroke();
+            ctx.fillStyle = '#222';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, tx + 5, ty + 10);
+        }
 
-            // Draw markers
-            markers.forEach(marker => {
+        // Native-pixel rectangle around a set of places, matching the canvas aspect ratio.
+        function focusRect(list) {
+            const pad = 50;
+            let x0 = Math.min(...list.map(c => c.x)) - pad, x1 = Math.max(...list.map(c => c.x)) + pad;
+            let y0 = Math.min(...list.map(c => c.y)) - pad, y1 = Math.max(...list.map(c => c.y)) + pad;
+            const aspect = canvas.width / canvas.height;
+            let w = Math.max(x1 - x0, 260), h = Math.max(y1 - y0, 260 / aspect);
+            if (w / h > aspect) h = w / aspect; else w = h * aspect;
+            w = Math.min(w, mapImage.width);
+            h = Math.min(h, mapImage.height);
+            const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+            const x = Math.min(Math.max(cx - w / 2, 0), mapImage.width - w);
+            const y = Math.min(Math.max(cy - h / 2, 0), mapImage.height - h);
+            return { x: x, y: y, w: w, h: h };
+        }
+
+        // Zoom to the round's places and tag each with its name. Tags are placed
+        // greedily around their dot so they don't cover each other.
+        function drawFocused(ids, highlightIds) {
+            const list = ids.map(id => citiesById[id]).filter(Boolean);
+            if (!list.length) return false;
+            const r = focusRect(list);
+            const s = canvas.width / r.w;
+            ctx.drawImage(mapImage, r.x, r.y, r.w, r.h, 0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.font = 'bold 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+            const pts = list.map(c => ({ c: c, x: (c.x - r.x) * s, y: (c.y - r.y) * s }));
+            const placed = pts.map(p => ({ x: p.x - 6, y: p.y - 6, w: 12, h: 12 }));  // dots block tags too
+            const overlaps = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+            const tags = pts.map(p => {
+                const w = ctx.measureText(p.c.name).width + 8, h = 16;
+                const options = [
+                    [-w / 2, -h - 7], [-w / 2, 7], [8, -h / 2], [-w - 8, -h / 2],
+                    [8, -h - 4], [-w - 8, -h - 4], [8, 4], [-w - 8, 4],
+                    [-w / 2, -2 * h - 9], [-w / 2, h + 9],
+                ];
+                let best = null;
+                for (const [dx, dy] of options) {
+                    const box = { x: p.x + dx, y: p.y + dy, w: w, h: h };
+                    const inside = box.x >= 0 && box.y >= 0 && box.x + w <= canvas.width && box.y + h <= canvas.height;
+                    if (!inside) continue;
+                    if (!placed.some(o => overlaps(o, box))) { best = box; break; }
+                    if (!best) best = box;
+                }
+                best = best || { x: Math.min(Math.max(p.x - w / 2, 0), canvas.width - w), y: Math.max(p.y - h - 7, 0), w: w, h: h };
+                placed.push(best);
+                return best;
+            });
+
+            pts.forEach((p, i) => {
+                const t = tags[i];
+                const color = highlightIds.includes(p.c.id) ? '#f39c12' : '#11998e';
                 ctx.beginPath();
-                const radius = marker.radius || 5;
-                ctx.arc(marker.x * scaleFactor, marker.y * scaleFactor, radius, 0, 2 * Math.PI);
-                ctx.fillStyle = marker.color;
+                ctx.moveTo(p.x, p.y);
+                ctx.lineTo(Math.min(Math.max(p.x, t.x), t.x + t.w), Math.min(Math.max(p.y, t.y), t.y + t.h));
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 5, 0, 2 * Math.PI);
+                ctx.fillStyle = color;
                 ctx.fill();
                 ctx.strokeStyle = 'white';
                 ctx.lineWidth = 2;
                 ctx.stroke();
             });
+            pts.forEach((p, i) => {
+                const t = tags[i];
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
+                ctx.strokeStyle = highlightIds.includes(p.c.id) ? '#f39c12' : '#11998e';
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                if (ctx.roundRect) ctx.roundRect(t.x, t.y, t.w, t.h, 4); else ctx.rect(t.x, t.y, t.w, t.h);
+                ctx.fill();
+                ctx.stroke();
+                ctx.fillStyle = '#222';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(p.c.name, t.x + 4, t.y + t.h / 2 + 1);
+            });
+            return true;
+        }
+
+        function render() {
+            if (!mapImage.complete || !mapImage.width) return;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (uiMode === 'study' && drawFocused(quizView.round_cities, quizView.review_ids)) {
+                return;
+            }
+            if (uiMode === 'complete' && pendingSummary && drawFocused(pendingSummary.round_ids, pendingSummary.missed_ids)) {
+                return;
+            }
+
+            ctx.drawImage(mapImage, 0, 0, canvas.width, canvas.height);
+
+            if (uiMode === 'question' && hideLabels && !debugMode) {
+                drawMaskedLabels();
+            }
+
+            if (uiMode === 'feedback' && feedback) {
+                const c = feedback.city;
+                ctx.beginPath();
+                ctx.setLineDash([6, 4]);
+                ctx.arc(c.x * scaleFactor, c.y * scaleFactor, NEAR_RADIUS * scaleFactor, 0, 2 * Math.PI);
+                ctx.strokeStyle = 'rgba(17, 153, 142, 0.8)';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                ctx.setLineDash([]);
+                if (!feedback.correct) {
+                    ctx.beginPath();
+                    ctx.moveTo(feedback.guess.x * scaleFactor, feedback.guess.y * scaleFactor);
+                    ctx.lineTo(c.x * scaleFactor, c.y * scaleFactor);
+                    ctx.strokeStyle = 'rgba(217, 55, 43, 0.85)';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                    drawDot(feedback.guess.x, feedback.guess.y, '#d9372b', 5);
+                }
+                drawDot(c.x, c.y, '#2e9e4f', 7);
+                drawTag(c.name, c.x, c.y, feedback.correct ? '#2e9e4f' : '#d9372b');
+            }
+
+            if (debugMarker) {
+                drawDot(debugMarker.x, debugMarker.y, 'blue', 10);
+            }
+        }
+
+        function setText(id, text) {
+            document.getElementById(id).textContent = text;
+        }
+
+        function showPanel(id) {
+            ['studyPanel', 'questionPanel', 'feedbackPanel', 'completePanel'].forEach(p => {
+                document.getElementById(p).classList.toggle('show', p === id);
+            });
+        }
+
+        function renderStatus(v) {
+            setText('masteryText', `Mastered ${v.mastered}/${v.total} · seen ${v.seen}`);
+            document.getElementById('masteryBar').style.width = (v.total ? 100 * v.mastered / v.total : 0) + '%';
+            setText('roundLabel', `Round ${v.round}`);
+            const tag = document.getElementById('phaseTag');
+            tag.className = 'phase-tag' + (v.phase === 'final' ? ' final' : '');
+            const pips = document.getElementById('roundPips');
+            pips.innerHTML = '';
+            if (v.phase === 'study') {
+                tag.textContent = 'Study';
+                setText('phaseDetail', '');
+            } else if (v.phase === 'drill') {
+                tag.textContent = v.final_passes ? 'Re-practice' : 'Practice';
+                for (let i = 0; i < v.round_size; i++) {
+                    const pip = document.createElement('span');
+                    pip.className = 'pip' + (i < v.cleared ? ' done' : '');
+                    pips.appendChild(pip);
+                }
+                setText('phaseDetail', `${v.cleared}/${v.round_size} cleared`);
+            } else if (v.phase === 'final') {
+                tag.textContent = 'Final check';
+                setText('phaseDetail', `${v.final_left} left · no misses allowed`);
+            }
+        }
+
+        function applyView(v) {
+            quizView = v;
+            feedback = null;
+            renderStatus(v);
+            if (v.phase === 'study') {
+                uiMode = 'study';
+                setText('studyIntro', 'Study where these places are, then start the round. ' +
+                        'You finish the round only after a final check with no misses.' +
+                        (v.review_ids.length ? ' Orange places are reviews of ones you learned before.' : ''));
+                const list = document.getElementById('studyList');
+                list.innerHTML = '';
+                v.round_cities.forEach(id => {
+                    const chip = document.createElement('span');
+                    chip.className = 'chip' + (v.review_ids.includes(id) ? ' review' : '');
+                    chip.textContent = citiesById[id] ? citiesById[id].name : id;
+                    list.appendChild(chip);
+                });
+                showPanel('studyPanel');
+            } else if (v.prompt) {
+                uiMode = 'question';
+                setText('cityPrompt', v.prompt.name);
+                resetInstructionText();
+                showPanel('questionPanel');
+                updateDebugInfo();
+            }
+            render();
+        }
+
+        function postJson(path, body) {
+            return fetch(urlroot + path, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body || {})
+            }).then(r => r.json().then(data => {
+                if (!r.ok) throw new Error(data.error || r.statusText);
+                return data;
+            }));
+        }
+
+        function startRound() {
+            if (busy) return;
+            busy = true;
+            postJson('start/' + regionId)
+                .then(data => applyView(data.view))
+                .catch(err => alert('Error starting round: ' + err.message))
+                .finally(() => { busy = false; });
         }
 
         function getCanvasCoordinates(event) {
@@ -404,8 +788,9 @@
                 clientY = event.clientY;
             }
 
-            const x = (clientX - rect.left) / scaleFactor;
-            const y = (clientY - rect.top) / scaleFactor;
+            // The canvas may be shrunk by CSS (max-width), so map through the rendered size.
+            const x = (clientX - rect.left) * (canvas.width / rect.width) / scaleFactor;
+            const y = (clientY - rect.top) * (canvas.height / rect.height) / scaleFactor;
             return { x, y };
         }
 
@@ -415,127 +800,147 @@
             const roundedX = Math.round(coords.x);
             const roundedY = Math.round(coords.y);
 
-            // Update debug info
             if (debugMode) {
-                document.getElementById('debugLastClick').textContent = `(${roundedX}, ${roundedY})`;
+                setText('debugLastClick', `(${roundedX}, ${roundedY})`);
             }
 
-            // Handle debug actions
             if (debugAction === 'set-coords') {
                 updateCoordinates(roundedX, roundedY);
                 return;
             } else if (debugAction === 'add-city') {
                 newCityCoords.x = roundedX;
                 newCityCoords.y = roundedY;
-                document.getElementById('newCityX').textContent = roundedX;
-                document.getElementById('newCityY').textContent = roundedY;
+                setText('newCityX', roundedX);
+                setText('newCityY', roundedY);
                 return;
             }
 
-            // Normal quiz mode
-            fetch(urlroot + 'check/' + regionId, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ x: roundedX, y: roundedY })
-            })
-            .then(response => response.json())
-            .then(data => {
-                // Add marker for user's guess (red when wrong)
-                if (!data.correct) {
-                    markers.push({
-                        x: coords.x,
-                        y: coords.y,
-                        color: 'red',
-                        radius: 5
-                    });
-                }
+            if (uiMode !== 'question' || busy) return;
+            busy = true;
+            postJson('check/' + regionId, { x: roundedX, y: roundedY })
+                .then(data => showFeedback(data, coords))
+                .catch(err => alert('Error checking guess: ' + err.message))
+                .finally(() => { busy = false; });
+        }
 
-                // Add marker for correct location (always small, 5px)
-                markers.push({
-                    x: data.correct_x,
-                    y: data.correct_y,
-                    color: 'green',
-                    radius: 5
-                });
+        function showFeedback(data, guess) {
+            uiMode = 'feedback';
+            feedback = { guess: guess, city: data.city, correct: data.correct };
+            pendingView = data.view;
+            pendingSummary = data.summary;
 
-                // Show acceptance circle (75 pixel radius)
-                acceptanceCircle = {
-                    x: data.correct_x,
-                    y: data.correct_y,
-                    radius: 75
-                };
-
-                drawMap();
-
-                // Show feedback
-                const feedback = document.getElementById('feedback');
-                const icon = document.getElementById('feedbackIcon');
-                const text = document.getElementById('feedbackText');
-                const distance = document.getElementById('feedbackDistance');
-
-                if (data.correct) {
-                    icon.textContent = '✅';
-                    text.textContent = 'Correct!';
-                    text.style.color = '#4CAF50';
+            const title = document.getElementById('feedbackTitle');
+            const detail = [];
+            if (data.correct) {
+                title.textContent = `✅ ${data.city.name}`;
+                title.className = 'feedback-title good';
+                if (data.hint) detail.push(`It's ${data.hint}.`);
+            } else {
+                title.textContent = `❌ That's not ${data.city.name}`;
+                title.className = 'feedback-title bad';
+                detail.push(`It's ${data.direction} of where you tapped` + (data.hint ? `, ${data.hint}.` : '.'));
+                if (data.phase === 'final') {
+                    detail.push("You'll practice it again before another final check.");
                 } else {
-                    icon.textContent = '❌';
-                    text.textContent = 'Not quite!';
-                    text.style.color = '#f44336';
+                    detail.push("It'll come back soon; answer it twice in a row to clear it.");
                 }
+            }
+            setText('feedbackDetail', detail.join(' '));
+            showPanel('feedbackPanel');
+            renderStatus(pendingView);
+            render();
+            document.getElementById('continueButton').focus({ preventScroll: true });
+        }
 
-                distance.textContent = `Distance: ${data.distance} pixels`;
-                feedback.classList.add('show');
+        function continueAfterFeedback() {
+            if (uiMode !== 'feedback') return;
+            if (pendingSummary) {
+                showSummary(pendingSummary);
+                return;
+            }
+            const v = pendingView;
+            pendingView = null;
+            applyView(v);
+        }
 
-                // Update score
-                document.getElementById('score').textContent = data.score;
-                document.getElementById('total').textContent = data.total;
-
-                // Store next city
-                currentCity.name = data.next_city;
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                alert('Error checking guess. Please try again.');
+        function showSummary(s) {
+            uiMode = 'complete';
+            feedback = null;
+            s.round_ids = quizView.round_cities;
+            s.missed_ids = s.round_ids.filter(id => citiesById[id] && s.missed.includes(citiesById[id].name));
+            setText('completeTitle', `🎉 Round ${s.round + 1} complete`);
+            const parts = [`${s.correct}/${s.answered} answers correct.`];
+            if (s.final_passes) parts.push(`Took ${s.final_passes + 1} final checks.`);
+            if (s.newly_mastered.length) parts.push(`Newly mastered: ${s.newly_mastered.join(', ')}.`);
+            if (s.missed.length) parts.push('Missed this round (these come back next round):');
+            setText('completeDetail', parts.join(' '));
+            const list = document.getElementById('completeList');
+            list.innerHTML = '';
+            s.missed.forEach(name => {
+                const chip = document.createElement('span');
+                chip.className = 'chip missed';
+                chip.textContent = name;
+                list.appendChild(chip);
             });
+            showPanel('completePanel');
+            renderStatus(pendingView);
+            setText('roundLabel', `Round ${s.round + 1}`);
+            setText('phaseTag', 'Complete');
+            document.getElementById('phaseTag').className = 'phase-tag done';
+            setText('phaseDetail', '');
+            render();
         }
 
-        function nextCity() {
-            // Hide feedback
-            document.getElementById('feedback').classList.remove('show');
-
-            // Update city name
-            document.getElementById('cityPrompt').textContent = currentCity.name;
-
-            // Clear markers and acceptance circle
-            markers = [];
-            acceptanceCircle = null;
-            drawMap();
+        function continueAfterSummary() {
+            const v = pendingView;
+            pendingView = null;
+            pendingSummary = null;
+            applyView(v);
         }
+
+        document.addEventListener('keydown', function(e) {
+            if (e.target.tagName === 'INPUT') return;
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            if (uiMode === 'feedback') {
+                e.preventDefault();
+                continueAfterFeedback();
+            } else if (uiMode === 'complete') {
+                e.preventDefault();
+                continueAfterSummary();
+            } else if (uiMode === 'study') {
+                e.preventDefault();
+                startRound();
+            }
+        });
 
         function resetQuiz() {
-            if (confirm('Are you sure you want to reset your score?')) {
-                fetch(urlroot + 'reset/' + regionId, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    }
-                })
-                .then(response => response.json())
-                .then(data => {
-                    location.reload();
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    alert('Error resetting quiz. Please try again.');
-                });
+            if (confirm('Forget all your progress in this region and start over?')) {
+                postJson('reset/' + regionId)
+                    .then(() => location.reload())
+                    .catch(err => alert('Error resetting progress: ' + err.message));
             }
+        }
+
+        function updateLabelsButton() {
+            setText('labelsToggle', hideLabels ? 'Labels: Hidden' : 'Labels: Shown');
+        }
+
+        function toggleLabels() {
+            hideLabels = !hideLabels;
+            try {
+                localStorage.setItem('laQuizShowLabels', hideLabels ? '0' : '1');
+            } catch (e) {
+                // Preference just won't persist.
+            }
+            updateLabelsButton();
+            render();
         }
 
         // Handle both click and touch events
         canvas.addEventListener('click', handleClick);
-        canvas.addEventListener('touchstart', handleClick);
+        canvas.addEventListener('touchstart', function(e) {
+            handleClick(e);
+        }, { passive: false });
 
         // Prevent scrolling when touching the canvas
         canvas.addEventListener('touchmove', function(e) {
@@ -544,113 +949,91 @@
 
         // Redraw on window resize
         window.addEventListener('resize', function() {
-            if (mapImage.complete) {
-                const maxWidth = Math.min(1000, window.innerWidth - 40);
-                const newScaleFactor = maxWidth / mapImage.width;
-
-                if (Math.abs(newScaleFactor - scaleFactor) > 0.01) {
-                    scaleFactor = newScaleFactor;
-                    canvas.width = mapImage.width * scaleFactor;
-                    canvas.height = mapImage.height * scaleFactor;
-                    drawMap();
-                }
+            if (mapImage.complete && mapImage.width) {
+                fitCanvas();
+                render();
             }
         });
 
         // Debug mode functions
         function toggleDebug() {
-            fetch(urlroot + 'toggle-debug', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                }
-            })
-            .then(response => response.json())
-            .then(data => {
-                debugMode = data.debug_mode;
-                const debugBtn = document.getElementById('debugToggle');
-                const debugPanel = document.getElementById('debugPanel');
-
-                if (debugMode) {
-                    debugBtn.classList.add('active');
-                    debugBtn.textContent = 'Debug Mode: ON';
-                    debugPanel.classList.add('show');
-                    updateDebugInfo();
-                } else {
-                    debugBtn.classList.remove('active');
-                    debugBtn.textContent = 'Debug Mode: OFF';
-                    debugPanel.classList.remove('show');
-                    debugAction = null;
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                alert('Error toggling debug mode.');
-            });
+            postJson('toggle-debug')
+                .then(data => {
+                    debugMode = data.debug_mode;
+                    applyDebugUi();
+                    render();
+                })
+                .catch(err => alert('Error toggling debug mode: ' + err.message));
         }
 
-        function updateDebugInfo() {
-            document.getElementById('debugCityName').textContent = currentCity.name;
-            document.getElementById('debugCityId').textContent = currentCity.id;
-            document.getElementById('debugCityX').textContent = currentCity.x;
-            document.getElementById('debugCityY').textContent = currentCity.y;
-        }
-
-        function showProgrammedLocation() {
-            // Clear existing markers
-            markers = [];
-
-            // Add marker for programmed location
-            markers.push({
-                x: currentCity.x,
-                y: currentCity.y,
-                color: 'blue',
-                radius: 10
-            });
-
-            drawMap();
-        }
-
-        function skipCity() {
-            if (confirm(`Skip "${currentCity.name}" and move to the next city?`)) {
-                location.reload();
+        function applyDebugUi() {
+            const debugBtn = document.getElementById('debugToggle');
+            const debugPanel = document.getElementById('debugPanel');
+            debugBtn.classList.toggle('active', debugMode);
+            debugBtn.textContent = debugMode ? 'Debug Mode: ON' : 'Debug Mode: OFF';
+            debugPanel.classList.toggle('show', debugMode);
+            if (debugMode) {
+                updateDebugInfo();
+            } else {
+                debugAction = null;
+                debugMarker = null;
             }
         }
 
+        function currentCity() {
+            return quizView.prompt || null;
+        }
+
+        function updateDebugInfo() {
+            const c = currentCity();
+            setText('debugCityName', c ? c.name : '-');
+            setText('debugCityId', c ? c.id : '-');
+            setText('debugCityX', c ? c.x : '-');
+            setText('debugCityY', c ? c.y : '-');
+        }
+
+        function showProgrammedLocation() {
+            const c = currentCity();
+            if (!c) return;
+            debugMarker = { x: c.x, y: c.y };
+            render();
+        }
+
+        function skipCity() {
+            postJson('skip/' + regionId)
+                .then(data => applyView(data.view))
+                .catch(err => alert('Error skipping: ' + err.message));
+        }
+
         function setCoordinatesMode() {
+            const c = currentCity();
+            if (!c) {
+                alert('Start the round first; there is no current question.');
+                return;
+            }
             debugAction = 'set-coords';
-            const instruction = document.querySelector('.instruction');
-            instruction.textContent = 'Click on the map to set the correct coordinates for ' + currentCity.name;
+            const instruction = document.getElementById('instruction');
+            instruction.textContent = 'Click on the map to set the correct coordinates for ' + c.name;
             instruction.style.color = '#ff9a56';
             instruction.style.fontWeight = '600';
         }
 
         function updateCoordinates(x, y) {
-            if (confirm(`Set coordinates for "${currentCity.name}" to (${x}, ${y})?`)) {
-                fetch(urlroot + 'update-coordinates/' + currentCity.id, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ x: x, y: y })
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'updated') {
-                        alert(`Coordinates updated successfully for ${currentCity.name}!`);
-                        currentCity.x = x;
-                        currentCity.y = y;
+            const c = currentCity();
+            if (c && confirm(`Set coordinates for "${c.name}" to (${x}, ${y})?`)) {
+                postJson('update-coordinates/' + c.id, { x: x, y: y })
+                    .then(data => {
+                        alert(`Coordinates updated successfully for ${c.name}!`);
+                        c.x = x;
+                        c.y = y;
+                        citiesById[c.id].x = x;
+                        citiesById[c.id].y = y;
                         updateDebugInfo();
                         resetInstructionText();
                         debugAction = null;
-                    } else {
-                        alert('Error updating coordinates: ' + (data.error || 'Unknown error'));
-                    }
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    alert('Error updating coordinates.');
-                });
+                        render();
+                    })
+                    .catch(err => alert('Error updating coordinates: ' + err.message));
             } else {
                 resetInstructionText();
                 debugAction = null;
@@ -658,21 +1041,19 @@
         }
 
         function showAddCityForm() {
-            const form = document.getElementById('addCityForm');
-            form.classList.add('show');
+            document.getElementById('addCityForm').classList.add('show');
             debugAction = 'add-city';
-            const instruction = document.querySelector('.instruction');
+            const instruction = document.getElementById('instruction');
             instruction.textContent = 'Click on the map to set coordinates for the new city';
             instruction.style.color = '#ff9a56';
             instruction.style.fontWeight = '600';
         }
 
         function cancelAddCity() {
-            const form = document.getElementById('addCityForm');
-            form.classList.remove('show');
+            document.getElementById('addCityForm').classList.remove('show');
             document.getElementById('newCityName').value = '';
-            document.getElementById('newCityX').textContent = '-';
-            document.getElementById('newCityY').textContent = '-';
+            setText('newCityX', '-');
+            setText('newCityY', '-');
             newCityCoords = { x: null, y: null };
             debugAction = null;
             resetInstructionText();
@@ -689,49 +1070,25 @@
                 return;
             }
 
-            fetch(urlroot + 'add-city/' + regionId, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    name: name,
-                    x: newCityCoords.x,
-                    y: newCityCoords.y
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'added') {
+            postJson('add-city/' + regionId, { name: name, x: newCityCoords.x, y: newCityCoords.y })
+                .then(data => {
                     alert(`City "${data.name}" added successfully!`);
                     cancelAddCity();
-                    location.reload(); // Reload to update city list
-                } else {
-                    alert('Error adding city: ' + (data.error || 'Unknown error'));
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                alert('Error adding city.');
-            });
+                    location.reload();
+                })
+                .catch(err => alert('Error adding city: ' + err.message));
         }
 
         function resetInstructionText() {
-            const instruction = document.querySelector('.instruction');
+            const instruction = document.getElementById('instruction');
             instruction.textContent = 'Tap the location on the map';
             instruction.style.color = '#666';
             instruction.style.fontWeight = 'normal';
         }
 
-        // Initialize debug mode UI if enabled
-        if (debugMode) {
-            const debugBtn = document.getElementById('debugToggle');
-            const debugPanel = document.getElementById('debugPanel');
-            debugBtn.classList.add('active');
-            debugBtn.textContent = 'Debug Mode: ON';
-            debugPanel.classList.add('show');
-            updateDebugInfo();
-        }
+        updateLabelsButton();
+        applyDebugUi();
+        applyView(quizView);
     </script>
 </body>
 </html>
