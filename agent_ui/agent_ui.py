@@ -482,6 +482,24 @@ def create_app(
                 )
         return redirect(url_for("agent_ui.workspace_index"))
 
+    def sync_saved_branches(workspace):
+        """Run "sync" on every present repo with a saved branch, the same set
+        the workspace page's "Sync all saved" button covers; return failures."""
+        try:
+            repositories = workspaces.status(workspace)["repositories"]
+        except (WorkspaceCommandError, KeyError, TypeError) as error:
+            return [f"{workspace}: cannot read workspace status: {error}"]
+        failures = []
+        for repo in repositories:
+            if not (repo.get("present") and repo.get("saved_branch")):
+                continue
+            try:
+                workspaces.run("sync", workspace, repo["name"])
+            except WorkspaceCommandError as error:
+                message = str(error)
+                failures.append(message if repo["name"] in message else f"{repo['name']}: {message}")
+        return failures
+
     @bp.route("/sessions", methods=["POST"])
     def start_session():
         require_csrf()
@@ -491,6 +509,15 @@ def create_app(
         if workspace not in known_workspaces or agent not in allowed_agents:
             abort(400)
         label = clean_label(request.form.get("label", ""))
+        if request.form.get("sync"):
+            failures = sync_saved_branches(workspace)
+            # An agent started on stale branches does its work in the wrong
+            # place, so a failed sync stops the launch instead of being ignored.
+            if failures:
+                for failure in failures:
+                    flash(failure, "error")
+                flash(f"{agent} was not started; sync {workspace} and try again", "error")
+                return redirect(url_for("agent_ui.index"))
         try:
             name = sessions.start(workspace, agent, label)
         except subprocess.CalledProcessError:

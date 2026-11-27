@@ -229,6 +229,72 @@ def test_start_session_redirects_to_terminal(configured_app):
     assert manager.renamed == [""]
 
 
+def test_launch_form_syncs_saved_branches_by_default(configured_app):
+    app, _, _ = configured_app
+    client = app.test_client()
+    login(client)
+    page = client.get("/agents/").data
+    assert b'<input type="checkbox" name="sync" value="1" checked>' in page
+
+
+def test_start_session_syncs_saved_branches_first(configured_app):
+    app, manager, workspace_manager = configured_app
+    status = workspace_manager.status
+    workspace_manager.status = lambda workspace: dict(
+        status(workspace),
+        repositories=status(workspace)["repositories"] + [
+            {"name": "flasks", "present": True, "saved_branch": ""},
+            {"name": "gone", "present": False, "saved_branch": "dev/x"},
+        ],
+    )
+    started_at_sync = []
+    run = workspace_manager.run
+    workspace_manager.run = lambda *args: (started_at_sync.append(list(manager.started)), run(*args))[1]
+    client = app.test_client()
+    login(client)
+    response = client.post(
+        "/agents/sessions",
+        data={"_csrf": csrf(client), "workspace": "ui", "agent": "claude", "sync": "1"},
+    )
+    assert response.headers["Location"].endswith("/terminal")
+    assert workspace_manager.actions == [("sync", "ui", "anixpkgs")]
+    assert started_at_sync == [[]]
+    assert manager.started == [("ui", "claude")]
+
+
+def test_start_session_without_sync_skips_it(configured_app):
+    app, manager, workspace_manager = configured_app
+    client = app.test_client()
+    login(client)
+    client.post(
+        "/agents/sessions",
+        data={"_csrf": csrf(client), "workspace": "ui", "agent": "claude"},
+    )
+    assert workspace_manager.actions == []
+    assert manager.started == [("ui", "claude")]
+
+
+def test_failed_sync_does_not_start_session(configured_app):
+    app, manager, workspace_manager = configured_app
+
+    def failing_run(action, *args):
+        raise WorkspaceCommandError("merge conflict")
+
+    workspace_manager.run = failing_run
+    client = app.test_client()
+    login(client)
+    response = client.post(
+        "/agents/sessions",
+        data={"_csrf": csrf(client), "workspace": "ui", "agent": "claude", "sync": "1"},
+    )
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/agents/")
+    assert manager.started == []
+    page = client.get("/agents/").data
+    assert b"anixpkgs: merge conflict" in page
+    assert b"claude was not started" in page
+
+
 def test_start_session_with_name_shows_it(configured_app):
     app, manager, _ = configured_app
     client = app.test_client()

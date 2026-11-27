@@ -31,6 +31,8 @@
     .actions form { margin: 0; }
     .empty { border: 1px dashed #405064; border-radius: 10px; padding: 18px; color: #91a2b3; }
     .error { color: #ff9a9a; }
+    label.check { display: flex; align-items: center; gap: 8px; grid-column: 1 / -1; cursor: pointer; }
+    label.check input { width: auto; margin: 0; }
     .login { max-width: 480px; margin: 80px auto; }
     .login .login-form { display: grid; gap: 14px; }
     nav { display: flex; gap: 8px; margin-bottom: 14px; }
@@ -62,6 +64,9 @@
     <section class="panel">
       <h1>Agent Terminal</h1>
       <p>Start a real Claude or Codex terminal inside one of this machine's configured devshell workspaces.</p>
+      {% for category, message in get_flashed_messages(with_categories=true) %}
+        <p class="{{ category }}">{{ message }}</p>
+      {% endfor %}
       <form class="launch" method="post" action="{{ subdomain }}/sessions">
         <input type="hidden" name="_csrf" value="{{ csrf_token }}">
         <label>Workspace
@@ -80,6 +85,9 @@
           <input name="label" maxlength="80" placeholder="what is this session for?">
         </label>
         <button type="submit" {% if not workspaces or not agents %}disabled{% endif %}>New session</button>
+        <label class="check" title="Run Sync saved on every repository in the workspace that has a saved branch; the session is not started if a sync fails">
+          <input type="checkbox" name="sync" value="1" checked> Sync all saved branches before starting
+        </label>
       </form>
 
       <h2>Active sessions</h2>
@@ -132,6 +140,21 @@
         secrets.set(input, real);
         input.value = "\u2022".repeat(real.length);
         input.setSelectionRange(caret, caret);
+      });
+    });
+    // Syncing can take a while (fetches per repo); show it rather than
+    // leaving the button looking idle, and block a double launch.
+    document.querySelectorAll("form.launch").forEach(function (form) {
+      form.addEventListener("submit", function () {
+        var button = form.querySelector("button[type=submit]");
+        button.disabled = true;
+        if (form.elements.sync.checked) button.textContent = "Syncing\u2026";
+      });
+      // Going back from the terminal can restore the page from bfcache.
+      window.addEventListener("pageshow", function () {
+        var button = form.querySelector("button[type=submit]");
+        button.disabled = !form.elements.workspace.options.length || !form.elements.agent.options.length;
+        button.textContent = "New session";
       });
     });
     document.querySelectorAll(".login-form").forEach(function (box) {
