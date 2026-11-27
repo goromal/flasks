@@ -5,7 +5,7 @@
   {% set next_direction = 'desc' if sort == key and direction == 'asc' else 'asc' %}
   <th{% if width %} style="width:{{ width }};"{% endif %}>
     <a class="sort-link"
-       href="{{ url_for('disciple.browse', sort=key, direction=next_direction) }}">
+       href="{{ url_for('disciple.browse', sort=key, direction=next_direction, show=show) }}">
       {{ label }}
       {% if sort == key %}
         <span class="sort-indicator" aria-label="sorted {{ direction }}ending">
@@ -16,8 +16,19 @@
   </th>
 {% endmacro %}
 <h1>Browse Passages</h1>
+<p class="filter-links">
+  <a href="{{ url_for('disciple.browse', sort=sort, direction=direction) }}"
+     class="{{ 'active' if show == 'all' }}">All</a>
+  <a href="{{ url_for('disciple.browse', sort=sort, direction=direction, show='in-progress') }}"
+     class="{{ 'active' if show == 'in-progress' }}">In progress ({{ in_progress_groups }})</a>
+</p>
 <p style="color:#888; margin-bottom:16px;">
-  {{ groups|length }} Christ-reference group{{ 's' if groups|length != 1 else '' }}
+  {% if show == 'in-progress' %}
+    {{ groups|length }} passage{{ 's' if groups|length != 1 else '' }} with a saved draft,
+    not yet marked processed
+  {% else %}
+    {{ groups|length }} Christ-reference group{{ 's' if groups|length != 1 else '' }}
+  {% endif %}
 </p>
 
 {% if groups %}
@@ -58,7 +69,11 @@
               </div>
             {% endfor %}
             {% include "_note_form.html" %}
-            <div style="margin-top:10px;">
+            <div style="margin-top:10px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+              <a href="{{ url_for('disciple.study', group=g.id) }}"
+                 class="btn btn-sm {{ 'btn-secondary' if g.processed else 'btn-primary' }}">
+                {{ 'Edit in Study' if g.processed else 'Continue in Study →' }}
+              </a>
               <form method="POST"
                     action="{{ url_for('disciple.toggle_christ', group_id=g.id) }}"
                     style="display:inline;">
@@ -75,6 +90,8 @@
   {% endfor %}
   </tbody>
 </table>
+{% elif show == 'in-progress' %}
+  <p style="color:#888;">No drafts waiting &mdash; every saved note has been submitted.</p>
 {% else %}
   <p style="color:#888;">No passages found. Run <code>disciple-ingest</code> first.</p>
 {% endif %}

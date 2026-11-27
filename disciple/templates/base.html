@@ -74,6 +74,13 @@
     }
     details > summary { list-style: none; }
     details > summary::-webkit-details-marker { display: none; }
+    .draft-badge {
+      display: inline-block; background: #fff3cd; color: #7a5a00;
+      border-radius: 12px; padding: 2px 10px; font-size: 0.78em; font-weight: 600;
+      margin-left: 8px; vertical-align: middle;
+    }
+    .filter-links a { color: #1a3a5c; margin-right: 12px; }
+    .filter-links a.active { font-weight: 700; text-decoration: none; color: #2c2c2c; }
     .detail-body { margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee; }
   </style>
 </head>
@@ -83,6 +90,9 @@
       <span class="nav-brand">&#128214; Disciple</span>
       <a href="{{ url_for('disciple.study') }}">Study</a>
       <a href="{{ url_for('disciple.browse') }}">Browse</a>
+      {% if in_progress_groups %}
+        <a href="{{ url_for('disciple.browse', show='in-progress') }}">In Progress ({{ in_progress_groups }})</a>
+      {% endif %}
       <a href="{{ url_for('disciple.tags_list') }}">Tags</a>
       <a href="{{ url_for('disciple.manage_tags') }}">Manage Tags</a>
     </div>

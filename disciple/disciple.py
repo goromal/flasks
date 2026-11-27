@@ -215,6 +215,27 @@ def _save_group_note(db, group_id, note):
         )
 
 
+def _set_group_tags(db, group_id, tags_raw):
+    now = _now()
+    db.execute("DELETE FROM group_tags WHERE group_id=?", (group_id,))
+    for name in [t.strip() for t in tags_raw.split(",") if t.strip()]:
+        db.execute("INSERT OR IGNORE INTO tags (name, created_at) VALUES (?,?)", (name, now))
+        tag_id = db.execute("SELECT id FROM tags WHERE name=?", (name,)).fetchone()["id"]
+        db.execute(
+            "INSERT OR IGNORE INTO group_tags (group_id, tag_id) VALUES (?,?)",
+            (group_id, tag_id),
+        )
+
+
+# Started but not submitted: a saved note or tags, but not yet marked processed.
+IN_PROGRESS_SQL = """
+    vg.is_christ_group = 1
+    AND vg.id NOT IN (SELECT group_id FROM group_processed)
+    AND (vg.id IN (SELECT group_id FROM group_notes WHERE note != '')
+         OR vg.id IN (SELECT group_id FROM group_tags))
+"""
+
+
 def _redirect_after_form(default_endpoint):
     next_url = flask.request.form.get("next", "")
     if next_url.startswith("/") and not next_url.startswith("//"):
@@ -279,7 +300,7 @@ def _snippet(db, group_id):
 @app.context_processor
 def _inject_stats():
     if DB_PATH is None:
-        return {"total_groups": 0, "processed_groups": 0}
+        return {"total_groups": 0, "processed_groups": 0, "in_progress_groups": 0}
     db = get_db()
     try:
         total = db.execute(
@@ -290,22 +311,40 @@ def _inject_stats():
             JOIN verse_groups vg ON vg.id = gp.group_id
             WHERE vg.is_christ_group = 1
         """).fetchone()[0]
-        return {"total_groups": total, "processed_groups": done}
+        in_progress = db.execute(
+            f"SELECT COUNT(*) FROM verse_groups vg WHERE {IN_PROGRESS_SQL}"
+        ).fetchone()[0]
+        return {
+            "total_groups": total,
+            "processed_groups": done,
+            "in_progress_groups": in_progress,
+        }
     except Exception:
-        return {"total_groups": 0, "processed_groups": 0}
+        return {"total_groups": 0, "processed_groups": 0, "in_progress_groups": 0}
     finally:
         db.close()
 
 
 @bp.route("/")
 def study():
+    # ?group=<id> opens a specific passage (e.g. one with a saved draft);
+    # otherwise draw a random unprocessed one.
+    requested = flask.request.args.get("group", type=int)
     db = get_db()
-    row = db.execute("""
-        SELECT id FROM verse_groups
-        WHERE is_christ_group=1
-          AND id NOT IN (SELECT group_id FROM group_processed)
-        ORDER BY RANDOM() LIMIT 1
-    """).fetchone()
+    if requested is not None:
+        row = db.execute(
+            "SELECT id FROM verse_groups WHERE id=? AND is_christ_group=1", (requested,)
+        ).fetchone()
+        if not row:
+            db.close()
+            flask.abort(404)
+    else:
+        row = db.execute("""
+            SELECT id FROM verse_groups
+            WHERE is_christ_group=1
+              AND id NOT IN (SELECT group_id FROM group_processed)
+            ORDER BY RANDOM() LIMIT 1
+        """).fetchone()
     # Name + usage count, so the tag picker can show how established each tag is
     # (same shape as manage_tags). Rows stay usable after db.close().
     all_tags = db.execute("""
@@ -329,19 +368,11 @@ def process_group(group_id):
     note = flask.request.form.get("note", "").strip()
     tags_raw = flask.request.form.get("tags", "").strip()
     db = get_db()
-    now = _now()
     _save_group_note(db, group_id, note)
-    db.execute("DELETE FROM group_tags WHERE group_id=?", (group_id,))
-    for name in [t.strip() for t in tags_raw.split(",") if t.strip()]:
-        db.execute("INSERT OR IGNORE INTO tags (name, created_at) VALUES (?,?)", (name, now))
-        tag_id = db.execute("SELECT id FROM tags WHERE name=?", (name,)).fetchone()["id"]
-        db.execute(
-            "INSERT OR IGNORE INTO group_tags (group_id, tag_id) VALUES (?,?)",
-            (group_id, tag_id),
-        )
+    _set_group_tags(db, group_id, tags_raw)
     db.execute(
         "INSERT OR IGNORE INTO group_processed (group_id, processed_at) VALUES (?,?)",
-        (group_id, now),
+        (group_id, _now()),
     )
     db.commit()
     db.close()
@@ -357,6 +388,10 @@ def save_note(group_id):
         db.close()
         flask.abort(404)
     _save_group_note(db, group_id, note)
+    # The Study form sends its tags too, so a draft keeps them; the plain
+    # note forms (Browse, tag pages) omit the field and leave tags alone.
+    if "tags" in flask.request.form:
+        _set_group_tags(db, group_id, flask.request.form["tags"].strip())
     db.commit()
     db.close()
     flask.flash("Note saved.")
@@ -367,12 +402,15 @@ def save_note(group_id):
 def browse():
     sort = flask.request.args.get("sort", "reference")
     direction = flask.request.args.get("direction", "asc")
+    show = flask.request.args.get("show", "all")
+    if show not in {"all", "in-progress"}:
+        show = "all"
     if sort not in {"reference", "preview", "done", "tags"}:
         sort = "reference"
     if direction not in {"asc", "desc"}:
         direction = "asc"
     db = get_db()
-    rows = db.execute("""
+    rows = db.execute(f"""
         SELECT vg.id,
                b.name as book_name, b.order_index,
                MIN(v.chapter) as chapter,
@@ -383,7 +421,7 @@ def browse():
         JOIN verse_group_members vgm ON vgm.group_id = vg.id
         JOIN verses v ON v.id = vgm.verse_id
         JOIN books b ON b.id = v.book_id
-        WHERE vg.is_christ_group = 1
+        WHERE {IN_PROGRESS_SQL if show == "in-progress" else "vg.is_christ_group = 1"}
         GROUP BY vg.id
         ORDER BY b.order_index, chapter, first_ref_verse
     """).fetchall()
@@ -413,7 +451,7 @@ def browse():
         groups.sort(key=reference_key)
     groups.sort(key=sort_keys[sort], reverse=direction == "desc")
     return flask.render_template(
-        "browse.html", groups=groups, sort=sort, direction=direction
+        "browse.html", groups=groups, sort=sort, direction=direction, show=show
     )
 
 
