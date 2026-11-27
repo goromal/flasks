@@ -49,6 +49,20 @@ def stage_remote_image(input_dir, host, rpath, max_bytes=MAX_REMOTE_IMAGE_BYTES)
     return rel
 
 
+def queue_state(data):
+    """One word for what the queue is doing, so a client need not re-derive it:
+    running / pausing (finishing the current job) / paused (pending jobs kept,
+    resumable) / cancelled / idle."""
+    halt = data.get("halt")
+    if data.get("active"):
+        return "pausing" if halt == "pause" else "running"
+    if halt == "cancel":
+        return "cancelled"
+    if halt == "pause" and data.get("jobs"):
+        return "paused"
+    return "idle"
+
+
 class QueueStore:
     def __init__(self, state_dir):
         self.state_dir = state_dir
@@ -60,8 +74,11 @@ class QueueStore:
     # -- persistence ---------------------------------------------------------
 
     def _default(self):
+        # halt records why the queue last stopped on request: "pause" keeps the
+        # pending jobs for a resume, "cancel" moved them to the results. None
+        # means it was never stopped, or drained on its own.
         return {"active": False, "gap_until": None, "current": None,
-                "jobs": [], "results": []}
+                "jobs": [], "results": [], "halt": None}
 
     def _read(self):
         try:
@@ -121,13 +138,55 @@ class QueueStore:
     def has_pending(self):
         return bool(self.read()["jobs"])
 
+    def job_definition(self, job_id):
+        """The spec a pending, running or finished job was queued with, in the
+        shape /api/queue/add accepts, or None for an unknown id."""
+        data = self.read()
+        found = [j for j in data["jobs"] + [data.get("current")] + data["results"]
+                 if j and j.get("id") == job_id]
+        if not found:
+            return None
+        j = found[0]
+        return {k: j.get(k) for k in ("workflow", "kind", "prompt", "width",
+                                      "height", "basename", "image",
+                                      "remote_image", "rect")}
+
     # -- scheduler mutators --------------------------------------------------
 
     def set_active(self, active):
         with self._lock:
             data = self._read()
             data["active"] = bool(active)
+            if active:
+                data["halt"] = None
             self._write(data)
+
+    def set_halt(self, halt):
+        with self._lock:
+            data = self._read()
+            data["halt"] = halt
+            self._write(data)
+
+    def cancel_all(self):
+        """Cancel the whole queue: every pending job becomes a cancelled
+        result (so its definition can still be loaded back), and the running
+        one is flagged like cancel_job. Returns the running job's ComfyUI
+        prompt id, "" when one is running but not yet submitted, or None when
+        nothing is running."""
+        with self._lock:
+            data = self._read()
+            now = eta.now_iso()
+            for job in data["jobs"]:
+                job.update(status="cancelled", error="cancelled",
+                           finished_at=now, duration=None)
+                data["results"].append(job)
+            data["jobs"] = []
+            data["halt"] = "cancel"
+            current = data.get("current")
+            if current:
+                current["cancel_requested"] = True
+            self._write(data)
+            return (current.get("prompt_id") or "") if current else None
 
     def set_gap_until(self, iso):
         with self._lock:
@@ -253,7 +312,8 @@ class QueueStore:
                     "has_crop": os.path.exists(self.crop_image_path(j["id"]))}
                    for j in data["results"]]
         return {"active": data["active"], "gap_until": data["gap_until"],
-                "jobs": jobs, "current": current, "results": results}
+                "state": queue_state(data), "jobs": jobs, "current": current,
+                "results": results}
 
 
 class Scheduler:
@@ -294,7 +354,13 @@ class Scheduler:
 
     def resume(self):
         """After a restart, resume a queue whose persisted active flag is set."""
-        if not self.store.read().get("active"):
+        data = self.store.read()
+        if not data.get("active"):
+            return False
+        if data.get("halt"):
+            # It was told to stop before the restart; stay stopped.
+            self.store.fail_leftover_current("interrupted")
+            self.store.set_active(False)
             return False
         if not self.run_lock.try_acquire():
             return False
@@ -302,7 +368,16 @@ class Scheduler:
         return True
 
     def stop(self):
+        """Pause: finish the running job, keep the pending ones for a resume."""
+        self.store.set_halt("pause")
         self._stop.set()
+
+    def cancel_all(self):
+        """Stop now: interrupt the running job and cancel every pending one."""
+        prompt_id = self.store.cancel_all()
+        self._stop.set()
+        if prompt_id is not None:
+            self._interrupt_current(prompt_id)
 
     def cancel(self, job_id):
         """Cancel job_id: drop it if pending; if running, interrupt it in
@@ -310,12 +385,15 @@ class Scheduler:
         Returns the QueueStore.cancel_job state."""
         state, prompt_id = self.store.cancel_job(job_id)
         if state == "cancelling":
-            if prompt_id:
-                self.client.interrupt(prompt_id)
-            with self._events_lock:
-                if self._events is not None:
-                    self._events.abort()
+            self._interrupt_current(prompt_id)
         return state
+
+    def _interrupt_current(self, prompt_id):
+        if prompt_id:
+            self.client.interrupt(prompt_id)
+        with self._events_lock:
+            if self._events is not None:
+                self._events.abort()
 
     def _on_events(self, events):
         with self._events_lock:

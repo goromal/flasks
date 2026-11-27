@@ -749,14 +749,38 @@ def create_app(store, workflows, workflow_dir, username, subdomain="/cozy",
             return flask.jsonify({"error": "busy"}), 409
         return flask.jsonify({"ok": True})
 
+    # /stop is the original name for pause, kept for cozyctl and scripts.
     @bp.route("/api/queue/stop", methods=["POST"])
+    @bp.route("/api/queue/pause", methods=["POST"])
     @flask_login.login_required
-    def queue_stop():
+    def queue_pause():
         err = _queue_or_503()
         if err:
             return err
         scheduler.stop()
         return flask.jsonify({"ok": True})
+
+    @bp.route("/api/queue/cancel-all", methods=["POST"])
+    @flask_login.login_required
+    def queue_cancel_all():
+        err = _queue_or_503()
+        if err:
+            return err
+        scheduler.cancel_all()
+        return flask.jsonify({"ok": True})
+
+    @bp.route("/api/queue/job", methods=["GET"])
+    @flask_login.login_required
+    def queue_job():
+        # The definition a pending, running or finished job was queued with,
+        # for loading it back into the Single tab.
+        err = _queue_or_503()
+        if err:
+            return err
+        spec = queue_store.job_definition(flask.request.args.get("id", ""))
+        if spec is None:
+            return flask.jsonify({"error": "no such job"}), 404
+        return flask.jsonify(spec)
 
     @bp.route("/api/queue/clear", methods=["POST"])
     @flask_login.login_required

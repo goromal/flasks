@@ -112,9 +112,11 @@ normally fine to ignore.
 | Endpoint | Method | |
 | --- | --- | --- |
 | `/cozy/api/queue/add` | POST | returns `{id, eta}` |
-| `/cozy/api/queue/status` | GET | current job, pending list, results, `total_eta` |
+| `/cozy/api/queue/status` | GET | `state` (`running`, `pausing`, `paused`, `cancelled`, `idle`), current job, pending list, results, `total_eta` |
 | `/cozy/api/queue/start` | POST | begin draining; 409 if busy |
-| `/cozy/api/queue/stop` | POST | stop after the current job |
+| `/cozy/api/queue/pause` | POST | stop after the current job, keeping the pending jobs; `start` resumes. `/stop` is an alias |
+| `/cozy/api/queue/cancel-all` | POST | interrupt the running job and move every pending job to the results as `cancelled` |
+| `/cozy/api/queue/job?id=<id>` | GET | the definition a pending, running or finished job was queued with (the `/add` payload shape); 404 if unknown |
 | `/cozy/api/queue/remove` | POST | `{"id": ...}` |
 | `/cozy/api/queue/cancel` | POST | `{"id": ...}`; removes a pending job or interrupts the running one (result status `cancelled`); 404 if neither |
 | `/cozy/api/queue/clear` | POST | drop finished results |
