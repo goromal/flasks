@@ -19,6 +19,7 @@ from fileops import (
     rename_to_path,
     replace_segment,
     split_stamp_path,
+    stamp_tree,
     substamp_counts,
 )
 
@@ -358,3 +359,33 @@ def test_delete_subtree_rejects_empty_path(tmp_path):
     with pytest.raises(ValueError):
         delete_subtree(str(tmp_path), ["plain.png"], [])
     assert (tmp_path / "plain.png").exists()
+
+
+def test_stamp_tree_nests_with_descendant_counts():
+    listing = [
+        "photo.png",
+        "stamped.a.x.png",
+        "stamped.a.stamped.d.y.png",
+        "stamped.a.stamped.d.stamped.p.z.png",
+        "stamped.a.stamped.c.w.png",
+        "stamped.b.v.png",
+        "stamped..legacy.png",
+        "stamped..stamped.q.legacy2.png",
+        "stamped.e.stamped..u.png",
+    ]
+    tree = stamp_tree(listing)
+    assert [(n["segment"], n["count"]) for n in tree] == [("a", 4), ("", 2), ("b", 1), ("e", 1)]
+    a = tree[0]
+    assert a["path"] == ["a"]
+    assert [(n["segment"], n["count"], n["path"]) for n in a["children"]] == [
+        ("d", 2, ["a", "d"]),
+        ("c", 1, ["a", "c"]),
+    ]
+    assert a["children"][0]["children"] == [
+        dict(segment="p", path=["a", "d", "p"], count=1, children=[]),
+    ]
+    # Empty segments aren't navigable: the legacy root stamp is a leaf and a
+    # deeper empty segment counts toward its parent.
+    assert tree[1]["children"] == []
+    assert tree[3]["children"] == []
+    assert stamp_tree(["photo.png"]) == []

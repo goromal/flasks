@@ -2,7 +2,6 @@ import io
 import os
 import json
 import sys
-import re
 import argparse
 import threading
 import flask
@@ -35,14 +34,13 @@ from fileops import (
     rename_to_path,
     replace_segment,
     split_stamp_path,
+    stamp_tree,
     substamp_counts,
     unique_suffixed_name,
     validate_stamp_name,
 )
 from mediaops import edit_and_stamp
 from jobs import EditJobs
-
-STAMP_RE = re.compile(r"stamped\.(.*?)\.")
 
 # Video containers the server can surface and edit. MOV (QuickTime) is treated
 # like MP4 -- ffmpeg/OpenCV handle either container, and it plays natively in
@@ -234,13 +232,14 @@ class StampServer:
             return file, ftype, len(self.filelist)
     
     def getstamps(self):
-        stamps = {}
-        for file in os.listdir(RES_DIR):
-            m = STAMP_RE.search(file)
-            if m:
-                key = m.group(1)
-                stamps[key] = stamps.get(key, 0) + 1
-        return dict(sorted(stamps.items(), key=lambda x: x[1], reverse=True))
+        """The stamp index tree, each node carrying its restamp `url`."""
+        def with_urls(nodes):
+            for node in nodes:
+                node["url"] = restamp_url(node["path"])
+                with_urls(node["children"])
+            return nodes
+        listing = os.listdir(RES_DIR) if os.path.isdir(RES_DIR) else []
+        return with_urls(stamp_tree(listing))
 
     def stamp(self, stamp, copy=False):
         if not self.filedeck:
@@ -378,7 +377,7 @@ def login():
             root="zzz",
             nleft="?",
             datadir=current_datadir(),
-            stamps={}
+            stamps=[]
         )
     return flask.render_template("login.html", title="Sign In", form=form)
       
@@ -557,12 +556,12 @@ def stamped(stamp=""):
         substamps=substamps,
     )
     if not res:
-        return flask.render_template("index.html", urlroot=urlroot, err=True, msg=msg, file="", ftype="", root=root, nleft="?", datadir=current_datadir(), stamps={}, **tree)
+        return flask.render_template("index.html", urlroot=urlroot, err=True, msg=msg, file="", ftype="", root=root, nleft="?", datadir=current_datadir(), stamps=[], **tree)
     got = stampserver.getfile()
     if got is None:
-        return flask.render_template("index.html", urlroot=urlroot, err=True, msg="The deck was reloaded; please try again.", file="", ftype="", root=root, nleft="?", datadir=current_datadir(), stamps={}, **tree)
+        return flask.render_template("index.html", urlroot=urlroot, err=True, msg="The deck was reloaded; please try again.", file="", ftype="", root=root, nleft="?", datadir=current_datadir(), stamps=[], **tree)
     file, ftype, numleft = got
-    return flask.render_template("index.html", urlroot=urlroot, err=False, msg="", file=file_url(file, ftype), filepath=file_path(file), ftype=ftype, root=root, nleft=str(numleft), datadir=current_datadir(), stamps={}, **tree)
+    return flask.render_template("index.html", urlroot=urlroot, err=False, msg="", file=file_url(file, ftype), filepath=file_path(file), ftype=ftype, root=root, nleft=str(numleft), datadir=current_datadir(), stamps=[], **tree)
 
 @bp.route("/delete-stamp/", methods=["POST"])
 @bp.route("/delete-stamp/<path:stamp>", methods=["POST"])
@@ -607,7 +606,7 @@ def zzz():
         root="zzz",
         nleft="?",
         datadir=current_datadir(),
-        stamps={}
+        stamps=[]
     )
 
 @bp.route("/preview/<path:filename>", methods=["GET"])

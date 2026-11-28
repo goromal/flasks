@@ -581,6 +581,44 @@
 
         .stamp-list li:last-child { border-bottom: none; }
 
+        .stamp-row { display: flex; align-items: center; gap: 4px; }
+        .stamp-row a { flex: 1; min-width: 0; }
+        .stamp-toggle, .stamp-toggle-spacer { flex: none; width: 32px; height: 32px; }
+        .stamp-toggle {
+            border: none;
+            background: none;
+            padding: 0;
+            border-radius: 6px;
+            color: #6c757d;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: transform 0.15s, background-color 0.2s;
+        }
+        .stamp-toggle:hover { background-color: #f8f9fa; color: #4e73df; }
+        .stamp-toggle[aria-expanded="true"] { transform: rotate(90deg); }
+        .stamp-list ul.stamp-children {
+            margin-left: 16px;
+            padding-left: 8px;
+            border-left: 2px solid #e9ecef;
+        }
+        .stamp-list ul.stamp-children li:last-child { border-bottom: none; }
+        .stamp-children a { padding: 10px 12px; font-size: 0.95rem; }
+        .stamp-tools { display: flex; gap: 8px; align-items: stretch; margin-bottom: 16px; }
+        .stamp-tools .stamp-search { flex: 1; min-width: 0; margin-bottom: 0; }
+        .stamp-expand-all {
+            flex: none;
+            border: 2px solid #ced4da;
+            background: #fff;
+            color: #495057;
+            border-radius: 8px;
+            padding: 0 12px;
+            font-family: inherit;
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+        }
+        .stamp-expand-all:hover { border-color: #4e73df; color: #4e73df; }
+
         .delete-stamp { border: 2px solid #f5c6cb; }
         .delete-stamp summary { cursor: pointer; color: #c0392b; font-weight: 600; }
         .delete-stamp form { box-shadow: none; padding: 0; margin: 16px 0 0; }
@@ -1143,30 +1181,53 @@
         {% endif %}
         {% endif %}
 
+        {% macro stamp_node(node) %}
+                <li{% if node.path | length == 1 %} data-stamp="{{ node.segment }}"{% endif %}>
+                    <div class="stamp-row">
+                        {% if node.children %}
+                        <button type="button" class="stamp-toggle" aria-expanded="false"
+                                aria-label="Show sub-stamps of {{ node.segment }}" onclick="toggleSubstamps(this)">&#9656;</button>
+                        {% else %}
+                        <span class="stamp-toggle-spacer"></span>
+                        {% endif %}
+                        <a href="{{ node.url }}">
+                            <span>{% if node.segment %}{{ node.segment }}{% else %}<em style="color:#adb5bd;">(empty)</em>{% endif %}</span>
+                            <span class="stamp-count">{{ node.count }}</span>
+                        </a>
+                    </div>
+                    {% if node.children %}
+                    <ul class="stamp-children" hidden>
+                        {% for child in node.children %}{{ stamp_node(child) }}{% endfor %}
+                    </ul>
+                    {% endif %}
+                </li>
+        {% endmacro %}
+
         <div class="stamp-list">
             <h2>Stamp Categories</h2>
             {% if stamps %}
-            <input type="search" id="stampSearch" class="stamp-search"
-                   placeholder="Filter labels…" autocomplete="off" spellcheck="false"
-                   oninput="filterStamps(this.value)">
+            <div class="stamp-tools">
+                <input type="search" id="stampSearch" class="stamp-search"
+                       placeholder="Filter labels…" autocomplete="off" spellcheck="false"
+                       oninput="filterStamps(this.value)">
+                {% if stamps | selectattr('children') | list %}
+                <button type="button" id="stampExpandAll" class="stamp-expand-all" onclick="toggleAllSubstamps(this)">Expand all</button>
+                {% endif %}
+            </div>
             {% endif %}
             <ul id="stampListUl">
-                {% for stamp, nstamps in stamps.items() %}
-                <li data-stamp="{{ stamp }}">
-                    <a href="{{ urlroot }}restamp/{{ stamp | urlencode }}">
-                        <span>{% if stamp %}{{ stamp }}{% else %}<em style="color:#adb5bd;">(empty)</em>{% endif %}</span>
-                        <span class="stamp-count">{{ nstamps }}</span>
-                    </a>
-                </li>
-                {% endfor %}
+                {% for node in stamps %}{{ stamp_node(node) }}{% endfor %}
                 <li>
-                    <a href="{{ urlroot }}">
-                        <span>ROOT</span>
-                    </a>
+                    <div class="stamp-row">
+                        <span class="stamp-toggle-spacer"></span>
+                        <a href="{{ urlroot }}">
+                            <span>ROOT</span>
+                        </a>
+                    </div>
                 </li>
             </ul>
             {% if stamps %}
-            <p style="margin: 15px 12px 0; color: #495057; font-size: 0.95rem; font-weight: 600; border-top: 2px solid #e9ecef; padding-top: 12px;">Total stamped: {{ stamps.values() | sum }}</p>
+            <p style="margin: 15px 12px 0; color: #495057; font-size: 0.95rem; font-weight: 600; border-top: 2px solid #e9ecef; padding-top: 12px;">Total stamped: {{ stamps | sum(attribute='count') }}</p>
             {% endif %}
         </div>
 
@@ -1707,7 +1768,7 @@
         function getStampEntries() {
             if (!stampEntries) {
                 const ul = document.getElementById('stampListUl');
-                stampEntries = Array.from(ul.querySelectorAll('li[data-stamp]'), (li, i) => ({
+                stampEntries = Array.from(ul.querySelectorAll(':scope > li[data-stamp]'), (li, i) => ({
                     li, i, label: li.dataset.stamp, lower: li.dataset.stamp.toLowerCase(),
                 }));
             }
@@ -1729,6 +1790,22 @@
                 j = found + 1;
             }
             return score - s.length * 0.01;
+        }
+
+        function setSubstampsExpanded(btn, expanded) {
+            btn.setAttribute('aria-expanded', String(expanded));
+            btn.closest('li').querySelector(':scope > .stamp-children').hidden = !expanded;
+        }
+
+        function toggleSubstamps(btn) {
+            setSubstampsExpanded(btn, btn.getAttribute('aria-expanded') !== 'true');
+        }
+
+        function toggleAllSubstamps(btn) {
+            const expand = btn.dataset.expanded !== 'true';
+            document.querySelectorAll('#stampListUl .stamp-toggle').forEach(t => setSubstampsExpanded(t, expand));
+            btn.dataset.expanded = String(expand);
+            btn.textContent = expand ? 'Collapse all' : 'Expand all';
         }
 
         let stampFilterFrame = 0;

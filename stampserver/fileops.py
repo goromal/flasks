@@ -184,6 +184,35 @@ def substamp_counts(listing, path):
     return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
 
 
+def stamp_tree(listing):
+    """Every stamp path in `listing` as a nested tree: a list of
+    ``{"segment", "path", "count", "children"}`` nodes, where `count` includes
+    sub-stamps. Siblings are ordered like `substamp_counts`. Empty segments
+    aren't navigable, so the legacy empty root stamp is a leaf and a deeper
+    empty segment counts toward its parent."""
+    root = {}
+    for name in listing:
+        path, _ = parse_stamped(name)
+        if path[:1] == [""]:
+            path = [""]
+        elif "" in path:
+            path = path[:path.index("")]
+        level = root
+        for segment in path:
+            entry = level.setdefault(segment, [0, {}])
+            entry[0] += 1
+            level = entry[1]
+
+    def build(level, prefix):
+        return [
+            dict(segment=segment, path=prefix + [segment], count=count,
+                 children=build(children, prefix + [segment]))
+            for segment, (count, children) in sorted(level.items(), key=lambda kv: (-kv[1][0], kv[0]))
+        ]
+
+    return build(root, [])
+
+
 def rename_to_path(res_dir, filename, new_path, copy=False, index=None):
     """Give `filename` the stamp path `new_path`, keeping its base name.
 
