@@ -413,3 +413,111 @@ def test_cancel_pending_job_removes_it(tmp_path):
     assert store.read()["jobs"] == []
     assert sched.cancel(jid) is None
     assert client.interrupted == []
+
+
+def _state(store):
+    return queue_store.queue_state(store.read())
+
+
+def test_pause_finishes_current_and_keeps_pending_for_resume(tmp_path):
+    holder = {}
+
+    def execute(client, graph, cid, on_progress=None, on_prompt_id=None,
+                on_events=None):
+        if not holder.get("paused"):
+            holder["paused"] = True
+            holder["sched"].stop()
+            assert _state(holder["store"]) == "pausing"
+        return b"IMG"
+
+    store, sched, client = _make_cancel(tmp_path, execute)
+    holder.update(sched=sched, store=store)
+    store.set_active(True)
+    first = store.add_job({"workflow": "imggen"})
+    second = store.add_job({"workflow": "imggen"})
+    _drain(sched)
+    data = store.read()
+    # The running job is allowed to finish; nothing is interrupted.
+    assert [(r["id"], r["status"]) for r in data["results"]] == [(first, "success")]
+    assert [j["id"] for j in data["jobs"]] == [second]
+    assert client.interrupted == []
+    assert _state(store) == "paused"
+    # Resuming clears the pause. (start() does both of these via _spawn.)
+    store.set_active(True)
+    assert _state(store) == "running"
+    sched._stop.clear()
+    _drain(sched)
+    assert store.read()["results"][-1]["id"] == second
+    assert _state(store) == "idle"
+
+
+def test_cancel_all_interrupts_current_and_cancels_pending(tmp_path):
+    events = _AbortableEvents()
+    holder = {}
+
+    def execute(client, graph, cid, on_progress=None, on_prompt_id=None,
+                on_events=None):
+        on_events(events)
+        on_prompt_id("pid-9")
+        holder["sched"].cancel_all()
+        assert events.aborted
+        raise RuntimeError("socket closed")
+
+    store, sched, client = _make_cancel(tmp_path, execute)
+    holder["sched"] = sched
+    store.set_active(True)
+    running = store.add_job({"workflow": "imggen", "prompt": "a"})
+    pending = store.add_job({"workflow": "imggen", "prompt": "b"})
+    _drain(sched)
+    data = store.read()
+    assert client.interrupted == ["pid-9"]
+    assert data["jobs"] == []
+    assert {r["id"]: r["status"] for r in data["results"]} == {
+        running: "cancelled", pending: "cancelled"}
+    assert _state(store) == "cancelled"
+    # A cancelled job's definition survives, so it can be loaded and requeued.
+    assert store.job_definition(pending)["prompt"] == "b"
+    # Clearing the results wipes it.
+    store.clear_results()
+    assert store.job_definition(pending) is None
+
+
+def test_cancel_all_on_a_stopped_queue_cancels_pending(tmp_path):
+    store, sched, client = _make_cancel(tmp_path, lambda *a, **k: b"IMG")
+    jid = store.add_job({"workflow": "imggen"})
+    sched.cancel_all()
+    assert store.read()["jobs"] == []
+    assert store.read()["results"][0]["id"] == jid
+    assert client.interrupted == []
+    assert _state(store) == "cancelled"
+
+
+def test_resume_after_restart_honours_a_requested_pause(tmp_path):
+    store, sched, client = _make_cancel(tmp_path, lambda *a, **k: b"IMG")
+    store.add_job({"workflow": "imggen"})
+    data = store.read()
+    data.update(active=True, halt="pause",
+                current={"id": "abc", "workflow": "imggen", "status": "running",
+                         "started_at": eta.now_iso()})
+    store._write(data)
+    assert sched.resume() is False
+    data = store.read()
+    assert data["active"] is False and len(data["jobs"]) == 1
+    assert data["results"][0]["status"] == "failed"
+    assert _state(store) == "paused"
+
+
+def test_job_definition_covers_pending_running_and_finished(tmp_path):
+    store = queue_store.QueueStore(str(tmp_path))
+    spec = {"workflow": "edit", "kind": "edit", "prompt": "p", "width": 1,
+            "height": 2, "basename": "n", "image": "",
+            "remote_image": {"host": "h", "path": "/x.png"},
+            "rect": {"x": 0, "y": 0, "w": 8, "h": 8}, "eta_pixels": 5}
+    jid = store.add_job(spec)
+    want = {k: v for k, v in spec.items() if k != "eta_pixels"}
+    assert store.job_definition(jid) == want
+    store.pop_next()
+    assert store.job_definition(jid) == want
+    store.finish_current("success")
+    assert store.job_definition(jid) == want
+    assert store.job_definition("nope") is None

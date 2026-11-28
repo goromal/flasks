@@ -105,6 +105,20 @@
         .q-results figure { margin:0; width:120px; text-align:center; font-size:0.8rem; }
         .q-results img { width:120px; border-radius:6px; cursor:pointer; }
         .q-results .failed { color:#721c24; }
+        .q-results figcaption button { margin:4px auto 0; display:block; }
+        button.q-load { margin-top:0; width:auto; padding:4px 10px; font-size:0.8rem; color:#4e73df; background:#fff; border:2px solid #4e73df; box-shadow:none; }
+        .q-list li button.q-load { background:#fff; }
+        #q-running-label { display:flex; align-items:center; gap:8px; }
+        #q-running-label span { flex:1; }
+        /* The queue's run state, coloured so a stopped queue is unmissable. */
+        .q-state { margin:0 0 12px; padding:12px 14px; border-radius:8px; font-weight:600; border:2px solid; }
+        .q-state small { display:block; font-weight:400; margin-top:2px; }
+        .q-state.running { color:#155724; background:#d4edda; border-color:#c3e6cb; }
+        .q-state.pausing, .q-state.paused { color:#856404; background:#fff3cd; border-color:#ffe08a; }
+        .q-state.cancelled { color:#721c24; background:#f8d7da; border-color:#f5c6cb; }
+        .q-state.idle { color:#495057; background:#f1f3f5; border-color:#dee2e6; }
+        button.secondary.danger { color:#c92a2a; border-color:#c92a2a; }
+        button.secondary.danger:hover { background:#fff5f5; }
         #q-bar { height:100%; width:0%; background:linear-gradient(135deg,#4e73df,#224abe); transition:width 0.3s; }
         #video-view video { width:100%; margin-top:12px; border-radius:8px; background:#000; }
         input#v-basename { width:100%; padding:12px 14px; font-size:1rem; border:2px solid #ced4da; border-radius:8px; font-family:inherit; }
@@ -247,6 +261,7 @@
         </div><!-- /single-view -->
         {% if has_queue %}
         <div id="queue-view" style="display:none;">
+            <div id="q-state" class="q-state idle" role="status"></div>
             <label>Pending</label>
             <ul id="q-pending" class="q-list"></ul>
             <button type="button" class="secondary" id="q-add">+ Add current settings as job</button>
@@ -261,8 +276,11 @@
 
             <div class="q-total" id="q-total"></div>
             <div class="prompt-actions">
-                <button type="button" class="secondary" id="q-start">Start queue</button>
-                <button type="button" class="secondary" id="q-stop">Stop</button>
+                <button type="button" class="secondary" id="q-start">&#9654; Start queue</button>
+                <button type="button" class="secondary" id="q-pause"
+                        title="Finish the running job, then stop; the pending jobs wait for Resume">&#10074;&#10074; Pause</button>
+                <button type="button" class="secondary danger" id="q-cancel-all"
+                        title="Interrupt the running job and cancel every pending one">&#9632; Cancel queue</button>
             </div>
 
             <label>Results</label>
@@ -1258,15 +1276,23 @@
                         body: JSON.stringify({ id: j.id }) });
                     refreshQueue();
                 });
-                li.append(meta, eta, rm);
+                li.append(meta, eta, loadButton(j.id), rm);
                 pend.appendChild(li);
             });
             const running = document.getElementById("q-running");
             const gap = document.getElementById("q-gap");
             if (s.current) {
                 running.style.display = "block";
-                document.getElementById("q-running-label").textContent =
-                    s.current.workflow + "  “" + (s.current.prompt || "").slice(0, 30) + "”";
+                // Rebuilt only when the job changes, so a poll cannot swap the
+                // Load button out from under a click.
+                const label = document.getElementById("q-running-label");
+                if (label.dataset.id !== s.current.id) {
+                    label.dataset.id = s.current.id;
+                    const text = document.createElement("span");
+                    text.textContent = s.current.workflow + "  “" +
+                        (s.current.prompt || "").slice(0, 30) + "”";
+                    label.replaceChildren(text, loadButton(s.current.id));
+                }
                 document.getElementById("q-bar").style.width = (s.current.progress || 0) + "%";
                 document.getElementById("q-running-eta").textContent =
                     s.current.eta == null ? "" : "~" + formatDuration(s.current.eta) + " remaining";
@@ -1281,7 +1307,100 @@
             }
             document.getElementById("q-total").textContent =
                 s.total_eta == null ? "" : "Total remaining: ~" + formatDuration(s.total_eta);
+            renderQueueState(s);
             renderResults(s.results);
+        }
+
+        // The banner, the button states and the tab badge all follow the
+        // server's one-word queue state, so paused (resumable) and cancelled
+        // can never be confused with each other or with an idle queue.
+        const TAB_BADGE = { running: " ▶", pausing: " ⏸", paused: " ⏸", cancelled: " ■" };
+        function renderQueueState(s) {
+            const n = s.jobs.length;
+            const jobs = n + (n === 1 ? " job" : " jobs");
+            let title, detail;
+            if (s.state === "running") {
+                title = s.gap_until && !s.current ? "▶ Running — resting before the next job" : "▶ Running";
+                detail = n ? jobs + " waiting." : "Running the last job.";
+            } else if (s.state === "pausing") {
+                title = "⏸ Pausing…";
+                detail = "Stops once the running job finishes; " + jobs + " will wait for Resume.";
+            } else if (s.state === "paused") {
+                title = "⏸ Paused";
+                detail = jobs + " waiting. Resume picks up with the next one.";
+            } else if (s.state === "cancelled") {
+                title = "■ Cancelled";
+                detail = n ? jobs + " added since; Start runs them."
+                           : "The queue was stopped and its pending jobs cancelled. Load one from the results to requeue it.";
+            } else {
+                title = "Idle";
+                detail = n ? jobs + " pending — Start to run them." : "The queue is empty.";
+            }
+            const el = document.getElementById("q-state");
+            el.className = "q-state " + (s.state || "idle");
+            el.innerHTML = escHtml(title) + "<small>" + escHtml(detail) + "</small>";
+            const startBtn = document.getElementById("q-start");
+            startBtn.innerHTML = s.state === "paused" ? "&#9654; Resume queue" : "&#9654; Start queue";
+            startBtn.disabled = s.active || !n;
+            document.getElementById("q-pause").disabled = s.state !== "running";
+            document.getElementById("q-cancel-all").disabled = !s.active && !n;
+            tabQueue.textContent = "Queue" + (TAB_BADGE[s.state] || "");
+        }
+
+        function loadButton(id) {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.className = "q-load";
+            b.textContent = "✎ Load";
+            b.title = "Load this job's settings into the Single tab";
+            b.addEventListener("click", (ev) => { ev.stopPropagation(); loadJobIntoSingle(id); });
+            return b;
+        }
+
+        // Fill the Single tab from a queued or finished job's definition, ready
+        // to be edited and generated or queued again. Nothing is saved until
+        // then, and Clear wipes it like anything typed by hand.
+        async function loadJobIntoSingle(id) {
+            let d;
+            try {
+                const r = await fetch(root + "api/queue/job?id=" + encodeURIComponent(id));
+                d = await r.json();
+                if (!r.ok) { showError(d.error || "load failed"); return; }
+            } catch (e) { showError("load failed: " + e.message); return; }
+            tabSingle.click();
+            showError("");
+            const problems = [];
+            if ([...workflowSel.options].some(o => o.value === d.workflow)) {
+                workflowSel.value = d.workflow;
+            } else {
+                problems.push("workflow " + d.workflow + " is no longer available");
+            }
+            document.getElementById("prompt").value = d.prompt || "";
+            basenameInput.value = d.basename || "";
+            if (d.width) document.getElementById("width").value = d.width;
+            if (d.height) document.getElementById("height").value = d.height;
+            setCropMode(false);
+            clearRemoteImage();
+            cropRect = null;
+            if (currentKind() === "edit") {
+                // Loaded up front so applyKind below does not start its own
+                // load, which would reset the picker after we set it.
+                await loadInputImages();
+                if (d.remote_image && d.remote_image.path) {
+                    setRemoteImage(d.remote_image.host || "", d.remote_image.path);
+                } else {
+                    imageSelect.value = d.image || "";
+                    if (d.image && imageSelect.value !== d.image) {
+                        problems.push("input image " + d.image + " is no longer available");
+                    }
+                    updatePreview();
+                }
+                // After setRemoteImage, which clears any region.
+                cropRect = d.rect || null;
+            }
+            applyKind();
+            if (problems.length) showError("Loaded, but " + problems.join("; ") + ".");
+            window.scrollTo(0, 0);
         }
 
         // Result images live at immutable, id-based paths, so their URLs are
@@ -1315,6 +1434,8 @@
                     }
                 }
                 const cap = document.createElement("figcaption");
+                // Appended after the status text below.
+                const load = loadButton(j.id);
                 if (j.status === "failed") {
                     cap.className = "failed";
                     cap.textContent = j.workflow + " FAILED: " + (j.error || "error");
@@ -1324,6 +1445,7 @@
                 } else {
                     cap.textContent = j.workflow + "  " + formatDuration(j.duration);
                 }
+                cap.appendChild(load);
                 fig.appendChild(cap);
                 res.appendChild(fig);
             });
@@ -1368,8 +1490,13 @@
                 if (r.status === 409) { showError("Busy — a single job is running."); return; }
                 refreshQueue();
             });
-            document.getElementById("q-stop").addEventListener("click", async () => {
-                await fetch(root + "api/queue/stop", { method: "POST" });
+            document.getElementById("q-pause").addEventListener("click", async () => {
+                await fetch(root + "api/queue/pause", { method: "POST" });
+                refreshQueue();
+            });
+            document.getElementById("q-cancel-all").addEventListener("click", async () => {
+                if (!confirm("Cancel the queue? The running job is interrupted and every pending job is cancelled.")) return;
+                await fetch(root + "api/queue/cancel-all", { method: "POST" });
                 refreshQueue();
             });
             document.getElementById("q-clear").addEventListener("click", async () => {
@@ -1399,6 +1526,9 @@
                 if (btn) btn.addEventListener("click", () => showTab(name));
             }
         }
+        // One fetch on load so the tab badge shows a paused or cancelled queue
+        // before the tab is ever opened.
+        if (tabQueue) refreshQueue();
     </script>
     {% if has_video %}<script src="{{ urlroot }}static/video.js"></script>{% endif %}
 </body>

@@ -793,9 +793,13 @@ def queue_ctx(tmp_path, monkeypatch):
 
         def stop(self):
             self.started = False
+            qs.set_halt("pause")
 
         def cancel(self, job_id):
             return qs.cancel_job(job_id)[0]
+
+        def cancel_all(self):
+            qs.cancel_all()
 
         def is_active(self):
             return qs.read().get("active", False)
@@ -884,6 +888,38 @@ def test_queue_cancel_removes_pending_and_404s_unknown(queue_ctx):
     assert c.post("/cozy/api/queue/cancel", json={"id": jid}).status_code == 404
 
 
+def test_queue_pause_and_cancel_all_report_distinct_states(queue_ctx):
+    c, qs, sched, run_lock = queue_ctx
+    _login(c)
+    add = {"workflow": "imggen", "prompt": "p", "width": 400, "height": 800}
+    c.post("/cozy/api/queue/add", json=add)
+    assert c.get("/cozy/api/queue/status").get_json()["state"] == "idle"
+    assert c.post("/cozy/api/queue/pause").status_code == 200
+    s = c.get("/cozy/api/queue/status").get_json()
+    assert s["state"] == "paused" and len(s["jobs"]) == 1
+    # /stop stays an alias for pause.
+    assert c.post("/cozy/api/queue/stop").status_code == 200
+    assert c.post("/cozy/api/queue/cancel-all").status_code == 200
+    s = c.get("/cozy/api/queue/status").get_json()
+    assert s["state"] == "cancelled" and s["jobs"] == []
+    assert [r["status"] for r in s["results"]] == ["cancelled"]
+
+
+def test_queue_job_returns_definition_until_cleared(queue_ctx):
+    c, qs, sched, run_lock = queue_ctx
+    _login(c)
+    jid = c.post("/cozy/api/queue/add", json={
+        "workflow": "imggen", "prompt": "a cat", "width": 512, "height": 768,
+        "basename": "cat"}).get_json()["id"]
+    d = c.get("/cozy/api/queue/job?id=" + jid).get_json()
+    assert (d["workflow"], d["prompt"], d["width"], d["height"], d["basename"]) == (
+        "imggen", "a cat", 512, 768, "cat")
+    c.post("/cozy/api/queue/cancel-all")
+    assert c.get("/cozy/api/queue/job?id=" + jid).status_code == 200
+    c.post("/cozy/api/queue/clear")
+    assert c.get("/cozy/api/queue/job?id=" + jid).status_code == 404
+
+
 def test_index_renders_with_queue_tabs(queue_ctx):
     c, qs, sched, run_lock = queue_ctx
     _login(c)
@@ -894,6 +930,8 @@ def test_index_renders_with_queue_tabs(queue_ctx):
     assert 'id="single-view"' in body
     assert 'id="q-add"' in body
     assert 'id="quick-queue"' in body
+    assert 'id="q-state"' in body
+    assert 'id="q-pause"' in body and 'id="q-cancel-all"' in body
 
 
 def test_queue_image_is_cacheable(queue_ctx):
